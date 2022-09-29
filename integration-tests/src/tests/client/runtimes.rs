@@ -153,16 +153,10 @@ fn test_process_partial_encoded_chunk_with_missing_block() {
         mock_chunk.parts().to_vec(),
     );
 
-    // process_partial_encoded_chunk should return Ok(NeedBlock) if the chunk is
+    // process_partial_encoded_chunk should return Ok(()) even if the chunk is
     // based on a missing block.
-    let result = client
-        .shards_mgr
-        .process_partial_encoded_chunk(MaybeValidated::from(mock_chunk.clone()), None);
-    assert_matches!(result, Ok(ProcessPartialEncodedChunkResult::NeedBlock));
-
-    // Client::process_partial_encoded_chunk should not return an error
-    // if the chunk is based on a missing block.
-    let result = client.process_partial_encoded_chunk(mock_chunk);
+    let result =
+        client.shards_mgr.process_partial_encoded_chunk(MaybeValidated::from(mock_chunk.clone()));
     match result {
         Ok(()) => {
             let accepted_blocks = client.finish_blocks_in_processing();
@@ -173,9 +167,6 @@ fn test_process_partial_encoded_chunk_with_missing_block() {
 
     // process_partial_encoded_chunk_forward should return UnknownChunk if it is based on a
     // a missing block.
-    let result = client.process_partial_encoded_chunk_forward(mock_forward);
-    assert_matches!(
-        result.unwrap_err(),
-        near_client_primitives::types::Error::Chunk(near_chunks::Error::UnknownChunk)
-    );
+    let result = client.shards_mgr.process_partial_encoded_chunk_forward(mock_forward);
+    assert_matches!(result.unwrap_err(), near_chunks::Error::UnknownChunk);
 }

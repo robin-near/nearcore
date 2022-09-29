@@ -9,7 +9,7 @@ use near_primitives::time::Clock;
 
 use near_chain::test_utils::{KeyValueRuntime, ValidatorSchedule};
 use near_chain::types::{EpochManagerAdapter, RuntimeAdapter, Tip};
-use near_chain::{Chain, ChainStore};
+use near_chain::{Chain, ChainStore, ChainStoreAccess};
 use near_crypto::KeyType;
 use near_network::test_utils::MockPeerManagerAdapter;
 use near_primitives::block::BlockHeader;
@@ -276,20 +276,14 @@ impl ChunkTestFixture {
             mock_runtime,
             mock_network,
             mock_client_adapter,
-            chain_store,
             mock_part_ords,
             mock_chunk_part_owner,
             mock_shard_tracker,
             mock_chunk_header: encoded_chunk.cloned_header(),
             mock_chunk_parts: encoded_chunk.parts().to_vec(),
-            mock_chain_head: Tip {
-                height: 0,
-                last_block_hash: CryptoHash::default(),
-                prev_block_hash: CryptoHash::default(),
-                epoch_id: EpochId::default(),
-                next_epoch_id: EpochId::default(),
-            },
+            mock_chain_head: chain_store.head().unwrap(),
             rs,
+            chain_store,
         }
     }
 
