@@ -5,7 +5,7 @@ use near_network::types::MsgRecipient;
 use near_pool::{PoolIteratorWrapper, TransactionPool};
 use near_primitives::{
     epoch_manager::RngSeed,
-    sharding::{EncodedShardChunk, PartialEncodedChunk, ShardChunk},
+    sharding::{EncodedShardChunk, PartialEncodedChunk, ShardChunk, ShardChunkHeader},
     transaction::SignedTransaction,
     types::ShardId,
 };
@@ -17,6 +17,7 @@ pub trait ClientAdapterForShardsManager {
         shard_chunk: Option<ShardChunk>,
     );
     fn saw_invalid_chunk(&self, chunk: EncodedShardChunk);
+    fn chunk_header_ready_for_inclusion(&self, chunk_header: ShardChunkHeader);
 }
 
 #[derive(Message)]
@@ -24,6 +25,7 @@ pub trait ClientAdapterForShardsManager {
 pub enum ShardsManagerResponse {
     ChunkCompleted { partial_chunk: PartialEncodedChunk, shard_chunk: Option<ShardChunk> },
     InvalidChunk(EncodedShardChunk),
+    ChunkHeaderReadyForInclusion(ShardChunkHeader),
 }
 
 impl<A: MsgRecipient<ShardsManagerResponse>> ClientAdapterForShardsManager for A {
@@ -36,6 +38,9 @@ impl<A: MsgRecipient<ShardsManagerResponse>> ClientAdapterForShardsManager for A
     }
     fn saw_invalid_chunk(&self, chunk: EncodedShardChunk) {
         self.do_send(ShardsManagerResponse::InvalidChunk(chunk));
+    }
+    fn chunk_header_ready_for_inclusion(&self, chunk_header: ShardChunkHeader) {
+        self.do_send(ShardsManagerResponse::ChunkHeaderReadyForInclusion(chunk_header));
     }
 }
 

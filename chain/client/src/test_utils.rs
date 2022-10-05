@@ -1480,6 +1480,9 @@ impl TestEnv {
                 ShardsManagerResponse::InvalidChunk(encoded_chunk) => {
                     self.clients[id].on_invalid_chunk(encoded_chunk);
                 }
+                ShardsManagerResponse::ChunkHeaderReadyForInclusion(header) => {
+                    self.clients[id].on_chunk_header_ready_for_inclusion(header);
+                }
             }
         }
     }
