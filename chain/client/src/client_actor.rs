@@ -1158,9 +1158,7 @@ impl ClientActor {
             self.chunk_request_retry_next_attempt,
             ctx,
             |act, _ctx| {
-                if let Ok(header_head) = act.client.chain.header_head() {
-                    act.client.shards_mgr.resend_chunk_requests(&header_head)
-                }
+                act.client.shards_mgr.resend_chunk_requests();
             },
             "resend_chunk_requests",
         );

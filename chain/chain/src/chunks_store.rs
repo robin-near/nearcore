@@ -3,8 +3,13 @@ use std::sync::Arc;
 use borsh::BorshDeserialize;
 use near_cache::CellLruCache;
 use near_chain_primitives::Error;
-use near_primitives::sharding::{ChunkHash, PartialEncodedChunk, ShardChunk};
-use near_store::{DBCol, Store};
+use near_primitives::{
+    block::Tip,
+    sharding::{ChunkHash, PartialEncodedChunk, ShardChunk},
+};
+use near_store::{DBCol, Store, HEADER_HEAD_KEY};
+
+use crate::store::option_to_not_found;
 
 #[cfg(not(feature = "no_cache"))]
 const CHUNK_CACHE_SIZE: usize = 1024;
@@ -56,5 +61,8 @@ impl ReadOnlyChunksStore {
             Ok(Some(shard_chunk)) => Ok(shard_chunk),
             _ => Err(Error::ChunkMissing(chunk_hash.clone())),
         }
+    }
+    pub fn get_header_head_uncached(&self) -> Result<Tip, Error> {
+        option_to_not_found(self.store.get_ser(DBCol::BlockMisc, HEADER_HEAD_KEY), "HEADER_HEAD")
     }
 }

@@ -361,7 +361,10 @@ pub struct ChainStore {
     save_trie_changes: bool,
 }
 
-fn option_to_not_found<T, F>(res: io::Result<Option<T>>, field_name: F) -> Result<T, Error>
+pub(crate) fn option_to_not_found<T, F>(
+    res: io::Result<Option<T>>,
+    field_name: F,
+) -> Result<T, Error>
 where
     F: std::string::ToString,
 {
