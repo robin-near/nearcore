@@ -907,7 +907,14 @@ impl ShardsManager {
     }
 
     /// Resends chunk requests if haven't received it within expected time.
-    pub fn resend_chunk_requests(&mut self, header_head: &Tip) {
+    pub fn resend_chunk_requests(&mut self) {
+        let header_head = match self.store.get_header_head_uncached() {
+            Ok(header_head) => header_head,
+            Err(e) => {
+                warn!(target: "chunks", "Not resending chunk requests: error getting header head: {}", e);
+                return;
+            }
+        };
         let _span = tracing::debug_span!(
             target: "client",
             "resend_chunk_requests",
@@ -2201,13 +2208,7 @@ mod test {
             },
         );
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        shards_manager.resend_chunk_requests(&Tip {
-            height: 0,
-            last_block_hash: CryptoHash::default(),
-            prev_block_hash: CryptoHash::default(),
-            epoch_id: EpochId::default(),
-            next_epoch_id: EpochId::default(),
-        });
+        shards_manager.resend_chunk_requests();
 
         // For the chunks that would otherwise be requested from self we expect a request to be
         // sent to any peer tracking shard
@@ -2446,14 +2447,14 @@ mod test {
 
         // resend request and check chunk part 0 and 1 are not requested again
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        shards_manager.resend_chunk_requests(&fixture.mock_chain_head);
+        shards_manager.resend_chunk_requests();
 
         let requested_parts = collect_request_parts(&mut fixture);
         assert_eq!(requested_parts, (2..fixture.mock_chunk_parts.len() as u64).collect());
 
         // immediately resend chunk requests
         // this should not send any new requests because it doesn't pass the time check
-        shards_manager.resend_chunk_requests(&fixture.mock_chain_head);
+        shards_manager.resend_chunk_requests();
         let requested_parts = collect_request_parts(&mut fixture);
         assert_eq!(requested_parts, HashSet::new());
     }
@@ -2529,14 +2530,7 @@ mod test {
         // After some time, we should send requests if we have not been forwarded the parts
         // we need.
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        let head = Tip {
-            height: 0,
-            last_block_hash: Default::default(),
-            prev_block_hash: Default::default(),
-            epoch_id: Default::default(),
-            next_epoch_id: Default::default(),
-        };
-        shards_manager.resend_chunk_requests(&head);
+        shards_manager.resend_chunk_requests();
         let (_, requests_count) = count_forwards_and_requests(&fixture);
         assert!(requests_count > 0);
     }
@@ -2641,7 +2635,7 @@ mod test {
             sent_request_message_immediately = true;
         }
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        shards_manager.resend_chunk_requests(&header_head);
+        shards_manager.resend_chunk_requests();
         let mut sent_request_message_after_timeout = false;
         while let Some(_) = fixture.mock_network.pop() {
             sent_request_message_after_timeout = true;
@@ -2829,7 +2823,7 @@ mod test {
             &fixture.mock_chain_head,
         );
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        shards_manager.resend_chunk_requests(&fixture.mock_chain_head);
+        shards_manager.resend_chunk_requests();
         assert!(fixture
             .mock_network
             .requests
@@ -2893,7 +2887,7 @@ mod test {
         );
 
         std::thread::sleep(Duration::from_millis(2 * CHUNK_REQUEST_RETRY_MS));
-        shards_manager.resend_chunk_requests(&fixture.mock_chain_head);
+        shards_manager.resend_chunk_requests();
         assert!(fixture
             .mock_network
             .requests

@@ -24,7 +24,7 @@ use near_primitives::types::{AccountId, EpochId, ShardId};
 use near_primitives::types::{BlockHeight, MerkleHash};
 use near_primitives::validator_signer::InMemoryValidatorSigner;
 use near_primitives::version::PROTOCOL_VERSION;
-use near_store::Store;
+use near_store::{DBCol, Store, HEADER_HEAD_KEY};
 
 use crate::client::ShardsManagerResponse;
 use crate::{
@@ -270,6 +270,16 @@ impl ChunkTestFixture {
         let encoded_chunk =
             mock_chunk.create_partial_encoded_chunk(all_part_ords, Vec::new(), &mock_merkles);
         let chain_store = ChainStore::new(mock_runtime.get_store(), 0, true);
+        let mut store_update = mock_runtime.get_store().store_update();
+        let mock_chain_head = Tip {
+            height: 0,
+            last_block_hash: CryptoHash::default(),
+            prev_block_hash: CryptoHash::default(),
+            epoch_id: EpochId::default(),
+            next_epoch_id: EpochId::default(),
+        };
+        store_update.set_ser(DBCol::BlockMisc, HEADER_HEAD_KEY, &mock_chain_head).unwrap();
+        store_update.commit().unwrap();
 
         ChunkTestFixture {
             mock_runtime,
@@ -281,13 +291,7 @@ impl ChunkTestFixture {
             mock_shard_tracker,
             mock_chunk_header: encoded_chunk.cloned_header(),
             mock_chunk_parts: encoded_chunk.parts().to_vec(),
-            mock_chain_head: Tip {
-                height: 0,
-                last_block_hash: CryptoHash::default(),
-                prev_block_hash: CryptoHash::default(),
-                epoch_id: EpochId::default(),
-                next_epoch_id: EpochId::default(),
-            },
+            mock_chain_head,
             rs,
         }
     }
