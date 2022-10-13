@@ -8,6 +8,8 @@ use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, Context};
 use chrono::DateTime;
 use futures::{future, FutureExt};
+use near_chunks::shards_manager_actor::start_shards_manager;
+use near_chunks::ShardsManager;
 use num_rational::Ratio;
 use once_cell::sync::OnceCell;
 use rand::{thread_rng, Rng};
@@ -22,7 +24,9 @@ use near_chain::{
     Chain, ChainGenesis, ChainStoreAccess, DoomslugThresholdMode, Provenance, RuntimeAdapter,
 };
 use near_chain_configs::ClientConfig;
-use near_chunks::client::{ClientAdapterForShardsManager, ShardsManagerResponse};
+use near_chunks::client::{
+    ClientAdapterForShardsManager, ShardsManagerAdapter, ShardsManagerResponse,
+};
 use near_chunks::test_utils::MockClientAdapterForShardsManager;
 use near_client_primitives::types::Error;
 use near_crypto::{InMemorySigner, KeyType, PublicKey};
@@ -239,6 +243,15 @@ pub fn setup(
         adv.clone(),
     );
 
+    let (shards_manager_addr, _) = start_shards_manager(
+        runtime.clone(),
+        network_adapter.clone(),
+        ctx.address(),
+        Some(account_id.clone()),
+        store.clone(),
+        config.chunk_request_retry_period,
+    );
+
     let client = ClientActor::new(
         ctx.address(),
         config,
@@ -246,6 +259,7 @@ pub fn setup(
         runtime,
         PeerId::new(PublicKey::empty(KeyType::ED25519)),
         network_adapter,
+        Arc::new(shards_manager_addr),
         Some(signer),
         telemetry,
         enable_doomslug,
@@ -1090,7 +1104,7 @@ pub fn setup_client_with_runtime(
     account_id: Option<AccountId>,
     enable_doomslug: bool,
     network_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    shards_manager_adapter: Arc<dyn ShardsManagerAdapter>,
     chain_genesis: ChainGenesis,
     runtime_adapter: Arc<dyn RuntimeAdapter>,
     rng_seed: RngSeed,
@@ -1106,7 +1120,7 @@ pub fn setup_client_with_runtime(
         chain_genesis,
         runtime_adapter,
         network_adapter,
-        client_adapter,
+        shards_manager_adapter,
         validator_signer,
         enable_doomslug,
         rng_seed,
@@ -1122,7 +1136,7 @@ pub fn setup_client(
     account_id: Option<AccountId>,
     enable_doomslug: bool,
     network_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    shards_manager_adapter: Arc<dyn ShardsManagerAdapter>,
     chain_genesis: ChainGenesis,
     rng_seed: RngSeed,
 ) -> Client {
@@ -1134,208 +1148,137 @@ pub fn setup_client(
         account_id,
         enable_doomslug,
         network_adapter,
-        client_adapter,
+        shards_manager_adapter,
         chain_genesis,
         runtime_adapter,
         rng_seed,
     )
 }
 
-/// An environment for writing integration tests with multiple clients.
+/// An environment for writing integration tests with multiple client instances.
 /// This environment can simulate near nodes without network and it can be configured to use different runtimes.
 pub struct TestEnv {
     pub chain_genesis: ChainGenesis,
     pub validators: Vec<AccountId>,
-    pub network_adapters: Vec<Arc<MockPeerManagerAdapter>>,
-    pub client_adapters: Vec<Arc<MockClientAdapterForShardsManager>>,
-    pub clients: Vec<Client>,
-    account_to_client_index: HashMap<AccountId, usize>,
+    pub instances: Vec<TestInstance>,
+    account_to_instance_index: HashMap<AccountId, usize>,
     paused_blocks: Arc<Mutex<HashMap<CryptoHash, Arc<OnceCell<()>>>>>,
-    // random seed to be inject in each client according to AccountId
-    // if not set, a default constant TEST_SEED will be injected
-    seeds: HashMap<AccountId, RngSeed>,
+}
+
+pub struct TestInstance {
+    pub account: AccountId,
+    pub client: Client,
+    pub shards_manager: ShardsManager,
+    pub network_adapter: Arc<MockPeerManagerAdapter>,
+    pub client_adapter: Arc<MockClientAdapterForShardsManager>,
+    pub shards_manager_adapter: Arc<MockShardsManagerAdapter>,
+    pub seed: RngSeed,
 }
 
 /// A builder for the TestEnv structure.
 pub struct TestEnvBuilder {
     chain_genesis: ChainGenesis,
-    clients: Vec<AccountId>,
-    validators: Vec<AccountId>,
-    runtime_adapters: Option<Vec<Arc<dyn RuntimeAdapter>>>,
-    network_adapters: Option<Vec<Arc<MockPeerManagerAdapter>>>,
-    // random seed to be inject in each client according to AccountId
+    instances: Vec<TestInstanceBuilder>,
+}
+
+pub struct TestInstanceBuilder {
+    account_id: AccountId,
+    is_validator: bool,
+    runtime_adapter: Option<Arc<dyn RuntimeAdapter>>,
+    network_adapter: Option<Arc<MockPeerManagerAdapter>>,
+    // random seed to be injected to the client;
     // if not set, a default constant TEST_SEED will be injected
-    seeds: HashMap<AccountId, RngSeed>,
+    seed: Option<RngSeed>,
+}
+
+impl TestInstanceBuilder {
+    pub fn build(self, chain_genesis: &ChainGenesis) -> TestInstance {
+        let account_id = self.account_id;
+        let seed = self.seed.unwrap_or(TEST_SEED);
+        let client = match self.runtime_adapter {
+            Some(runtime_adapter) => setup_client_with_runtime(
+                u64::try_from(num_validators).unwrap(),
+                Some(account_id.clone()),
+                false,
+                network_adapter.clone(),
+                client_adapter.clone(),
+                chain_genesis.clone(),
+                runtime_adapter,
+                seed.clone(),
+            ),
+            None => {
+                let vs =
+                    ValidatorSchedule::new().block_producers_per_epoch(vec![validators.clone()]);
+                setup_client(
+                    create_test_store(),
+                    vs,
+                    Some(account_id.clone()),
+                    false,
+                    network_adapter.clone(),
+                    client_adapter.clone(),
+                    chain_genesis.clone(),
+                    seed.clone(),
+                )
+            }
+        };
+        let network_adapter = self.network_adapter.unwrap_or_else(|| Arc::new(Default::default()));
+        let client_adapter = Arc::new(Default::default());
+        let shards_manager_adapter = Arc::new(Default::default());
+        let shards_manager = ShardsManager::new(
+            Some(account_id.clone()),
+            client.runtime_adapter.clone(),
+            network_adapter.clone(),
+            client_adapter.clone(),
+            client.runtime_adapter.get_store(),
+            client.chain.head().ok(),
+        );
+        TestInstance {
+            account: account_id.clone(),
+            client,
+            shards_manager,
+            network_adapter,
+            client_adapter,
+            shards_manager_adapter,
+            seed,
+        }
+    }
 }
 
 /// Builder for the [`TestEnv`] structure.
 impl TestEnvBuilder {
-    /// Constructs a new builder.
     fn new(chain_genesis: ChainGenesis) -> Self {
-        let clients = Self::make_accounts(1);
-        let validators = clients.clone();
-        let seeds: HashMap<AccountId, RngSeed> = HashMap::with_capacity(1);
-        Self {
-            chain_genesis,
-            clients,
-            validators,
-            runtime_adapters: None,
-            network_adapters: None,
-            seeds,
-        }
+        Self { chain_genesis, instances: vec![] }
     }
 
-    /// Sets list of client [`AccountId`]s to the one provided.  Panics if the
-    /// vector is empty.
-    pub fn clients(mut self, clients: Vec<AccountId>) -> Self {
-        assert!(!clients.is_empty());
-        self.clients = clients;
-        self
+    pub fn add_instance(&mut self) -> &mut TestInstanceBuilder {
+        self.instances.push(TestInstanceBuilder {
+            account_id: format!("test{}", self.instances.len()),
+            is_validator: false,
+            runtime_adapter: None,
+            network_adapter: None,
+            seed: None,
+        });
+        self.instances.last_mut().unwrap()
     }
 
-    /// Sets random seed for each client according to the provided HashMap.
-    pub fn clients_random_seeds(mut self, seeds: HashMap<AccountId, RngSeed>) -> Self {
-        self.seeds = seeds;
-        self
-    }
-
-    /// Sets number of clients to given one.  To get [`AccountId`] used by the
-    /// validator associated with the client the [`TestEnv::get_client_id`]
-    /// method can be used.  Tests should not rely on any particular format of
-    /// account identifiers used by the builder.  Panics if `num` is zero.
-    pub fn clients_count(self, num: usize) -> Self {
-        self.clients(Self::make_accounts(num))
-    }
-
-    /// Sets list of validator [`AccountId`]s to the one provided.  Panics if
-    /// the vector is empty.
-    pub fn validators(mut self, validators: Vec<AccountId>) -> Self {
-        assert!(!validators.is_empty());
-        self.validators = validators;
-        self
-    }
-
-    /// Sets number of validator seats to given one.  To get [`AccountId`] used
-    /// in the test environment the `validators` field of the built [`TestEnv`]
-    /// object can be used.  Tests should not rely on any particular format of
-    /// account identifiers used by the builder.  Panics if `num` is zero.
-    pub fn validator_seats(self, num: usize) -> Self {
-        self.validators(Self::make_accounts(num))
-    }
-
-    /// Specifies custom runtime adaptors for each client.  This allows us to
-    /// construct [`TestEnv`] with `NightshadeRuntime`.
-    ///
-    /// The vector must have the same number of elements as they are clients
-    /// (one by default).  If that does not hold, [`Self::build`] method will
-    /// panic.
-    pub fn runtime_adapters(mut self, adapters: Vec<Arc<dyn RuntimeAdapter>>) -> Self {
-        self.runtime_adapters = Some(adapters);
-        self
-    }
-
-    /// Specifies custom network adaptors for each client.
-    ///
-    /// The vector must have the same number of elements as they are clients
-    /// (one by default).  If that does not hold, [`Self::build`] method will
-    /// panic.
-    pub fn network_adapters(mut self, adapters: Vec<Arc<MockPeerManagerAdapter>>) -> Self {
-        self.network_adapters = Some(adapters);
-        self
-    }
-
-    /// Constructs new `TestEnv` structure.
-    ///
-    /// If no clients were configured (either through count or vector) one
-    /// client is created.  Similarly, if no validator seats were configured,
-    /// one seat is configured.
-    ///
-    /// Panics if `runtime_adapters` or `network_adapters` methods were used and
-    /// the length of the vectors passed to them did not equal number of
-    /// configured clients.
     pub fn build(self) -> TestEnv {
-        let chain_genesis = self.chain_genesis;
-        let clients = self.clients.clone();
-        let num_clients = clients.len();
-        let validators = self.validators;
-        let num_validators = validators.len();
-        let seeds = self.seeds;
-        let network_adapters = self
-            .network_adapters
-            .unwrap_or_else(|| (0..num_clients).map(|_| Arc::new(Default::default())).collect());
-        let client_adapters = (0..num_clients)
-            .map(|_| Arc::new(MockClientAdapterForShardsManager::default()))
-            .collect::<Vec<_>>();
-        assert_eq!(clients.len(), network_adapters.len());
-        let clients = match self.runtime_adapters {
-            None => clients
-                .into_iter()
-                .zip(network_adapters.iter())
-                .zip(client_adapters.iter())
-                .map(|((account_id, network_adapter), client_adapter)| {
-                    let rng_seed = match seeds.get(&account_id) {
-                        Some(seed) => *seed,
-                        None => TEST_SEED,
-                    };
-                    let vs = ValidatorSchedule::new()
-                        .block_producers_per_epoch(vec![validators.clone()]);
-                    setup_client(
-                        create_test_store(),
-                        vs,
-                        Some(account_id),
-                        false,
-                        network_adapter.clone(),
-                        client_adapter.clone(),
-                        chain_genesis.clone(),
-                        rng_seed,
-                    )
-                })
-                .collect(),
-            Some(runtime_adapters) => {
-                assert!(clients.len() == runtime_adapters.len());
-                clients
-                    .into_iter()
-                    .zip((&network_adapters).iter())
-                    .zip(runtime_adapters.into_iter().zip(client_adapters.iter()))
-                    .map(|((account_id, network_adapter), (runtime_adapter, client_adapter))| {
-                        let rng_seed = match seeds.get(&account_id) {
-                            Some(seed) => *seed,
-                            None => TEST_SEED,
-                        };
-                        setup_client_with_runtime(
-                            u64::try_from(num_validators).unwrap(),
-                            Some(account_id),
-                            false,
-                            network_adapter.clone(),
-                            client_adapter.clone(),
-                            chain_genesis.clone(),
-                            runtime_adapter,
-                            rng_seed,
-                        )
-                    })
-                    .collect()
+        let mut account_to_instance_index = HashMap::new();
+        let mut validators = vec![];
+        let mut instances = vec![];
+        for instance_builder in self.instances {
+            if instance_builder.is_validator {
+                validators.push(instance_builder.account_id.clone());
             }
-        };
-
-        TestEnv {
-            chain_genesis,
-            validators,
-            network_adapters,
-            client_adapters,
-            clients,
-            account_to_client_index: self
-                .clients
-                .into_iter()
-                .enumerate()
-                .map(|(index, client)| (client, index))
-                .collect(),
-            paused_blocks: Default::default(),
-            seeds,
+            account_to_instance_index.insert(instance_builder.account_id.clone(), instances.len());
+            instances.push(instance_builder.build(&self.chain_genesis));
         }
-    }
-
-    fn make_accounts(count: usize) -> Vec<AccountId> {
-        (0..count).map(|i| format!("test{}", i).parse().unwrap()).collect()
+        TestEnv {
+            chain_genesis: self.chain_genesis,
+            validators,
+            instances,
+            account_to_instance_index,
+            paused_blocks: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -1344,17 +1287,13 @@ impl TestEnv {
         TestEnvBuilder::new(chain_genesis)
     }
 
-    /// Process a given block in the client with index `id`.
-    /// Simulate the block processing logic in `Client`, i.e, it would run catchup and then process accepted blocks and possibly produce chunks.
-    pub fn process_block(&mut self, id: usize, block: Block, provenance: Provenance) {
-        self.clients[id].process_block_test(MaybeValidated::from(block), provenance).unwrap();
+    pub fn instance(&mut self, id: usize) -> &mut TestInstance {
+        &mut self.instances[id]
     }
 
-    /// Produces block by given client, which may kick off chunk production.
-    /// This means that transactions added before this call will be included in the next block produced by this validator.
-    pub fn produce_block(&mut self, id: usize, height: BlockHeight) {
-        let block = self.clients[id].produce_block(height).unwrap();
-        self.process_block(id, block.unwrap(), Provenance::PRODUCED);
+    pub fn instance_for_account(&mut self, account_id: &AccountId) -> &mut TestInstance {
+        let index = self.account_to_instance_index[account_id];
+        &mut self.instances[index]
     }
 
     /// Pause processing of the given block, which means that the background
@@ -1393,31 +1332,47 @@ impl TestEnv {
         let _ = cell.set(());
     }
 
-    pub fn client(&mut self, account_id: &AccountId) -> &mut Client {
-        &mut self.clients[self.account_to_client_index[account_id]]
-    }
-
-    pub fn process_partial_encoded_chunks(&mut self) {
-        let network_adapters = self.network_adapters.clone();
+    pub fn process_sending_partial_encoded_chunks(&mut self) {
+        let network_adapters = self
+            .instances
+            .iter()
+            .map(|instance| instance.network_adapter.clone())
+            .collect::<Vec<_>>();
         for network_adapter in network_adapters {
             // process partial encoded chunks
-            while let Some(request) = network_adapter.pop() {
-                if let PeerManagerMessageRequest::NetworkRequests(
+            network_adapter.process_filtered(|request| match request {
+                PeerManagerMessageRequest::NetworkRequests(
                     NetworkRequests::PartialEncodedChunkMessage {
                         account_id,
                         partial_encoded_chunk,
                     },
-                ) = request
-                {
-                    self.client(&account_id)
-                        .shards_mgr
+                ) => {
+                    self.instance_for_account(&account_id)
+                        .shards_manager
                         .process_partial_encoded_chunk(
-                            PartialEncodedChunk::from(partial_encoded_chunk).into(),
+                            PartialEncodedChunk::from(partial_encoded_chunk.clone()).into(),
                         )
                         .unwrap();
+                    true
                 }
-            }
+                _ => false,
+            });
         }
+    }
+}
+
+impl TestInstance {
+    /// Process a given block in this client.
+    /// Simulate the block processing logic in `Client`, i.e, it would run catchup and then process accepted blocks and possibly produce chunks.
+    pub fn process_block(&mut self, block: Block, provenance: Provenance) {
+        self.client.process_block_test(MaybeValidated::from(block), provenance).unwrap();
+    }
+
+    /// Produces block with this client, which may kick off chunk production.
+    /// This means that transactions added before this call will be included in the next block produced by this validator.
+    pub fn produce_block(&mut self, height: BlockHeight) {
+        let block = self.client.produce_block(height).unwrap();
+        self.process_block(block.unwrap(), Provenance::PRODUCED);
     }
 
     /// Process all PartialEncodedChunkRequests in the network queue for a client

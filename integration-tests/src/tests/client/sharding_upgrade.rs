@@ -181,7 +181,7 @@ impl TestShardUpgradeEnv {
             expected_num_shards
         );
 
-        env.process_partial_encoded_chunks();
+        env.process_sending_partial_encoded_chunks();
         for j in 0..self.num_clients {
             env.process_shards_manager_responses_and_finish_processing_blocks(j);
         }

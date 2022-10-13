@@ -131,6 +131,7 @@ mod chunk_cache;
 pub mod client;
 pub mod logic;
 mod metrics;
+pub mod shards_manager_actor;
 pub mod test_utils;
 
 const CHUNK_PRODUCER_BLACKLIST_SIZE: usize = 100;
@@ -865,14 +866,12 @@ impl ShardsManager {
     /// `prev_hash`: hash of prev block of the block we are requesting missing chunks for
     ///              The function assumes the prev block is accepted
     /// `header_head`: current head of the header chain
-    pub fn request_chunks<T>(
+    pub fn request_chunks(
         &mut self,
-        chunks_to_request: T,
+        chunks_to_request: Vec<ShardChunkHeader>,
         prev_hash: CryptoHash,
         header_head: &Tip,
-    ) where
-        T: IntoIterator<Item = ShardChunkHeader>,
-    {
+    ) {
         for chunk_header in chunks_to_request {
             self.request_chunk_single(&chunk_header, prev_hash, Some(header_head));
         }
@@ -886,15 +885,13 @@ impl ShardsManager {
     ///                1) it is from the same epoch than `epoch_id`
     ///                2) it is processed
     ///                If the above conditions are not met, the request will be dropped
-    pub fn request_chunks_for_orphan<T>(
+    pub fn request_chunks_for_orphan(
         &mut self,
-        chunks_to_request: T,
+        chunks_to_request: Vec<ShardChunkHeader>,
         epoch_id: &EpochId,
         ancestor_hash: CryptoHash,
         header_head: &Tip,
-    ) where
-        T: IntoIterator<Item = ShardChunkHeader>,
-    {
+    ) {
         let ancestor_epoch_id =
             unwrap_or_return!(self.runtime_adapter.get_epoch_id_from_prev_block(&ancestor_hash));
         if epoch_id != &ancestor_epoch_id {

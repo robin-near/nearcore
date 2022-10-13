@@ -27,7 +27,7 @@ use near_primitives::validator_signer::InMemoryValidatorSigner;
 use near_primitives::version::PROTOCOL_VERSION;
 use near_store::{DBCol, Store, HEADER_HEAD_KEY};
 
-use crate::client::ShardsManagerResponse;
+use crate::client::{ShardsManagerRequest, ShardsManagerResponse};
 use crate::{
     Seal, SealsManager, ShardsManager, ACCEPTING_SEAL_PERIOD_MS, PAST_SEAL_HEIGHT_HORIZON,
 };
@@ -396,6 +396,31 @@ impl MockClientAdapterForShardsManager {
         self.requests.write().unwrap().pop_front()
     }
     pub fn pop_most_recent(&self) -> Option<ShardsManagerResponse> {
+        self.requests.write().unwrap().pop_back()
+    }
+}
+
+#[derive(Default)]
+pub struct MockShardsManagerAdapter {
+    pub requests: Arc<RwLock<VecDeque<ShardsManagerRequest>>>,
+}
+
+impl MsgRecipient<ShardsManagerRequest> for MockShardsManagerAdapter {
+    fn send(&self, msg: ShardsManagerRequest) -> BoxFuture<'static, Result<(), MailboxError>> {
+        self.do_send(msg);
+        futures::future::ok(()).boxed()
+    }
+
+    fn do_send(&self, msg: ShardsManagerRequest) {
+        self.requests.write().unwrap().push_back(msg);
+    }
+}
+
+impl MockShardsManagerAdapter {
+    pub fn pop(&self) -> Option<ShardsManagerRequest> {
+        self.requests.write().unwrap().pop_front()
+    }
+    pub fn pop_most_recent(&self) -> Option<ShardsManagerRequest> {
         self.requests.write().unwrap().pop_back()
     }
 }

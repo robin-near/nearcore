@@ -24,7 +24,7 @@ use near_chain::{
     ChainGenesis, DoneApplyChunkCallback, Provenance, RuntimeAdapter,
 };
 use near_chain_configs::ClientConfig;
-use near_chunks::client::ShardsManagerResponse;
+use near_chunks::client::{ShardsManagerAdapter, ShardsManagerResponse};
 use near_chunks::logic::cares_about_shard_this_or_next_epoch;
 use near_client_primitives::types::{
     Error, GetNetworkInfo, NetworkInfoResponse, ShardSyncDownload, ShardSyncStatus, Status,
@@ -95,7 +95,6 @@ pub struct ClientActor {
 
     block_production_started: bool,
     doomslug_timer_next_attempt: DateTime<Utc>,
-    chunk_request_retry_next_attempt: DateTime<Utc>,
     sync_started: bool,
     state_parts_task_scheduler: Box<dyn Fn(ApplyStatePartsRequest)>,
     block_catch_up_scheduler: Box<dyn Fn(BlockCatchUpRequest)>,
@@ -138,6 +137,7 @@ impl ClientActor {
         runtime_adapter: Arc<dyn RuntimeAdapter>,
         node_id: PeerId,
         network_adapter: Arc<dyn PeerManagerAdapter>,
+        shards_manager_adapter: Arc<dyn ShardsManagerAdapter>,
         validator_signer: Option<Arc<dyn ValidatorSigner>>,
         telemetry_actor: Addr<TelemetryActor>,
         enable_doomslug: bool,
@@ -166,7 +166,7 @@ impl ClientActor {
             chain_genesis,
             runtime_adapter,
             network_adapter.clone(),
-            Arc::new(self_addr.clone()),
+            shards_manager_adapter.clone(),
             validator_signer,
             enable_doomslug,
             rng_seed,
@@ -195,7 +195,6 @@ impl ClientActor {
             log_summary_timer_next_attempt: now,
             block_production_started: false,
             doomslug_timer_next_attempt: now,
-            chunk_request_retry_next_attempt: now,
             sync_started: false,
             state_parts_task_scheduler: create_sync_job_scheduler::<ApplyStatePartsRequest>(
                 sync_jobs_actor_addr.clone(),
@@ -583,15 +582,14 @@ impl ClientActor {
                 NetworkClientResponses::NoResponse
             }
             NetworkClientMessages::PartialEncodedChunkRequest(part_request_msg, route_back) => {
-                let _ = self
-                    .client
-                    .shards_mgr
+                self.client
+                    .shards_manager_adapter
                     .process_partial_encoded_chunk_request(part_request_msg, route_back);
                 NetworkClientResponses::NoResponse
             }
             NetworkClientMessages::PartialEncodedChunkResponse(response, time) => {
                 PARTIAL_ENCODED_CHUNK_RESPONSE_DELAY.observe(time.elapsed().as_secs_f64());
-                let _ = self.client.shards_mgr.process_partial_encoded_chunk_response(response);
+                self.client.shards_manager_adapter.process_partial_encoded_chunk_response(response);
                 NetworkClientResponses::NoResponse
             }
             NetworkClientMessages::PartialEncodedChunk(partial_encoded_chunk) => {
@@ -599,21 +597,13 @@ impl ClientActor {
                     partial_encoded_chunk.height_created(),
                     partial_encoded_chunk.shard_id(),
                 );
-                let _ = self
-                    .client
-                    .shards_mgr
-                    .process_partial_encoded_chunk(partial_encoded_chunk.into());
+                self.client
+                    .shards_manager_adapter
+                    .process_partial_encoded_chunk(partial_encoded_chunk);
                 NetworkClientResponses::NoResponse
             }
             NetworkClientMessages::PartialEncodedChunkForward(forward) => {
-                match self.client.shards_mgr.process_partial_encoded_chunk_forward(forward) {
-                    Ok(_) => {}
-                    // Unknown chunk is normal if we get parts before the header
-                    Err(near_chunks::Error::UnknownChunk) => (),
-                    Err(err) => {
-                        error!(target: "client", "Error processing forwarded chunk: {}", err)
-                    }
-                }
+                self.client.shards_manager_adapter.process_partial_encoded_chunk_forward(forward);
                 NetworkClientResponses::NoResponse
             }
             NetworkClientMessages::Challenge(challenge) => {
@@ -1152,24 +1142,7 @@ impl ClientActor {
                 .to_std()
                 .unwrap_or(delay),
         );
-
-        self.chunk_request_retry_next_attempt = self.run_timer(
-            self.client.config.chunk_request_retry_period,
-            self.chunk_request_retry_next_attempt,
-            ctx,
-            |act, _ctx| {
-                act.client.shards_mgr.resend_chunk_requests();
-            },
-            "resend_chunk_requests",
-        );
         timer.observe_duration();
-        core::cmp::min(
-            delay,
-            self.chunk_request_retry_next_attempt
-                .signed_duration_since(now)
-                .to_std()
-                .unwrap_or(delay),
-        )
     }
 
     /// "Unfinished" blocks means that blocks that client has started the processing and haven't
@@ -2040,6 +2013,7 @@ pub fn start_client(
     runtime_adapter: Arc<dyn RuntimeAdapter>,
     node_id: PeerId,
     network_adapter: Arc<dyn PeerManagerAdapter>,
+    shards_manager_adapter: Arc<dyn ShardsManagerAdapter>,
     validator_signer: Option<Arc<dyn ValidatorSigner>>,
     telemetry_actor: Addr<TelemetryActor>,
     sender: Option<oneshot::Sender<()>>,
@@ -2055,6 +2029,7 @@ pub fn start_client(
             runtime_adapter,
             node_id,
             network_adapter,
+            shards_manager_adapter,
             validator_signer,
             telemetry_actor,
             true,

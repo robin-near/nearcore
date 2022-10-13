@@ -1,16 +1,23 @@
 use std::collections::HashMap;
 
 use actix::Message;
-use near_network::types::MsgRecipient;
+use near_chain::types::Tip;
+use near_network::types::{
+    MsgRecipient, PartialEncodedChunkForwardMsg, PartialEncodedChunkRequestMsg,
+    PartialEncodedChunkResponseMsg,
+};
 use near_pool::{PoolIteratorWrapper, TransactionPool};
 use near_primitives::{
     epoch_manager::RngSeed,
+    hash::CryptoHash,
+    merkle::MerklePath,
+    receipt::Receipt,
     sharding::{EncodedShardChunk, PartialEncodedChunk, ShardChunk, ShardChunkHeader},
     transaction::SignedTransaction,
-    types::ShardId,
+    types::{EpochId, ShardId},
 };
 
-pub trait ClientAdapterForShardsManager {
+pub trait ClientAdapterForShardsManager: Send + Sync + 'static {
     fn did_complete_chunk(
         &self,
         partial_chunk: PartialEncodedChunk,
@@ -96,6 +103,159 @@ impl ShardedTransactionPool {
         transactions: &[SignedTransaction],
     ) {
         self.pool_for_shard(shard_id).reintroduce_transactions(transactions.to_vec());
+    }
+}
+
+pub trait ShardsManagerAdapter: Send + Sync + 'static {
+    fn process_partial_encoded_chunk(&self, partial_encoded_chunk: PartialEncodedChunk);
+    fn process_partial_encoded_chunk_forward(
+        &self,
+        partial_encoded_chunk_forward: PartialEncodedChunkForwardMsg,
+    );
+    fn process_partial_encoded_chunk_response(
+        &self,
+        partial_encoded_chunk_response: PartialEncodedChunkResponseMsg,
+    );
+    fn process_partial_encoded_chunk_request(
+        &self,
+        partial_encoded_chunk_request: PartialEncodedChunkRequestMsg,
+        route_back: CryptoHash,
+    );
+    fn process_chunk_header_from_block(&self, chunk_header: &ShardChunkHeader);
+    fn update_chain_head(&self, tip: Tip);
+    fn distribute_encoded_chunk(
+        &self,
+        partial_chunk: PartialEncodedChunk,
+        encoded_chunk: EncodedShardChunk,
+        merkle_paths: Vec<MerklePath>,
+        outgoing_receipts: Vec<Receipt>,
+    );
+    fn request_chunks(
+        &self,
+        chunks_to_request: Vec<ShardChunkHeader>,
+        prev_hash: CryptoHash,
+        header_head: Tip,
+    );
+    fn request_chunks_for_orphan(
+        &self,
+        chunks_to_request: Vec<ShardChunkHeader>,
+        epoch_id: EpochId,
+        ancestor_hash: CryptoHash,
+        header_head: Tip,
+    );
+    fn check_incomplete_chunks(&self, prev_block_hash: CryptoHash);
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub enum ShardsManagerRequest {
+    ProcessPartialEncodedChunk(PartialEncodedChunk),
+    ProcessPartialEncodedChunkForward(PartialEncodedChunkForwardMsg),
+    ProcessPartialEncodedChunkResponse(PartialEncodedChunkResponseMsg),
+    ProcessPartialEncodedChunkRequest {
+        partial_encoded_chunk_request: PartialEncodedChunkRequestMsg,
+        route_back: CryptoHash,
+    },
+    ProcessChunkHeaderFromBlock(ShardChunkHeader),
+    UpdateChainHead(Tip),
+    DistributeEncodedChunk {
+        partial_chunk: PartialEncodedChunk,
+        encoded_chunk: EncodedShardChunk,
+        merkle_paths: Vec<MerklePath>,
+        outgoing_receipts: Vec<Receipt>,
+    },
+    RequestChunks {
+        chunks_to_request: Vec<ShardChunkHeader>,
+        prev_hash: CryptoHash,
+        header_head: Tip,
+    },
+    RequestChunksForOrphan {
+        chunks_to_request: Vec<ShardChunkHeader>,
+        epoch_id: EpochId,
+        ancestor_hash: CryptoHash,
+        header_head: Tip,
+    },
+    CheckIncompleteChunks(CryptoHash),
+}
+
+impl<A: MsgRecipient<ShardsManagerRequest>> ShardsManagerAdapter for A {
+    fn process_partial_encoded_chunk(&self, partial_encoded_chunk: PartialEncodedChunk) {
+        self.do_send(ShardsManagerRequest::ProcessPartialEncodedChunk(partial_encoded_chunk));
+    }
+    fn process_partial_encoded_chunk_forward(
+        &self,
+        partial_encoded_chunk_forward: PartialEncodedChunkForwardMsg,
+    ) {
+        self.do_send(ShardsManagerRequest::ProcessPartialEncodedChunkForward(
+            partial_encoded_chunk_forward,
+        ));
+    }
+    fn process_partial_encoded_chunk_response(
+        &self,
+        partial_encoded_chunk_response: PartialEncodedChunkResponseMsg,
+    ) {
+        self.do_send(ShardsManagerRequest::ProcessPartialEncodedChunkResponse(
+            partial_encoded_chunk_response,
+        ));
+    }
+    fn process_partial_encoded_chunk_request(
+        &self,
+        partial_encoded_chunk_request: PartialEncodedChunkRequestMsg,
+        route_back: CryptoHash,
+    ) {
+        self.do_send(ShardsManagerRequest::ProcessPartialEncodedChunkRequest {
+            partial_encoded_chunk_request,
+            route_back,
+        });
+    }
+    fn process_chunk_header_from_block(&self, chunk_header: &ShardChunkHeader) {
+        self.do_send(ShardsManagerRequest::ProcessChunkHeaderFromBlock(chunk_header.clone()));
+    }
+    fn update_chain_head(&self, tip: Tip) {
+        self.do_send(ShardsManagerRequest::UpdateChainHead(tip));
+    }
+    fn distribute_encoded_chunk(
+        &self,
+        partial_chunk: PartialEncodedChunk,
+        encoded_chunk: EncodedShardChunk,
+        merkle_paths: Vec<MerklePath>,
+        outgoing_receipts: Vec<Receipt>,
+    ) {
+        self.do_send(ShardsManagerRequest::DistributeEncodedChunk {
+            partial_chunk,
+            encoded_chunk,
+            merkle_paths,
+            outgoing_receipts,
+        });
+    }
+    fn request_chunks(
+        &self,
+        chunks_to_request: Vec<ShardChunkHeader>,
+        prev_hash: CryptoHash,
+        header_head: Tip,
+    ) {
+        self.do_send(ShardsManagerRequest::RequestChunks {
+            chunks_to_request,
+            prev_hash,
+            header_head,
+        });
+    }
+    fn request_chunks_for_orphan(
+        &self,
+        chunks_to_request: Vec<ShardChunkHeader>,
+        epoch_id: EpochId,
+        ancestor_hash: CryptoHash,
+        header_head: Tip,
+    ) {
+        self.do_send(ShardsManagerRequest::RequestChunksForOrphan {
+            chunks_to_request,
+            epoch_id,
+            ancestor_hash,
+            header_head,
+        });
+    }
+    fn check_incomplete_chunks(&self, prev_block_hash: CryptoHash) {
+        self.do_send(ShardsManagerRequest::CheckIncompleteChunks(prev_block_hash));
     }
 }
 
