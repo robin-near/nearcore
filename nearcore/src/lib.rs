@@ -6,6 +6,7 @@ use actix_rt::ArbiterHandle;
 use actix_web;
 use anyhow::Context;
 use near_chain::{Chain, ChainGenesis};
+use near_chunks::shards_manager_actor::start_shards_manager;
 use near_client::{start_client, start_view_client, ClientActor, ConfigUpdater, ViewClientActor};
 use near_network::time;
 use near_network::types::NetworkRecipient;
@@ -180,6 +181,8 @@ pub fn start_with_config_and_synchronization(
 
     let node_id = config.network_config.node_id();
     let network_adapter = Arc::new(NetworkRecipient::default());
+    let shards_manager_adapter = Arc::new(NetworkRecipient::default());
+    let client_adapter_for_shards_manager = Arc::new(NetworkRecipient::default());
     let adv = near_client::adversarial::Controls::new(config.client_config.archive);
 
     let view_client = start_view_client(
@@ -191,17 +194,28 @@ pub fn start_with_config_and_synchronization(
         adv.clone(),
     );
     let (client_actor, client_arbiter_handle) = start_client(
-        config.client_config,
+        config.client_config.clone(),
         chain_genesis,
-        runtime,
+        runtime.clone(),
         node_id,
         network_adapter.clone(),
-        config.validator_signer,
+        shards_manager_adapter.clone(),
+        config.validator_signer.clone(),
         telemetry,
         shutdown_signal.clone(),
         adv,
         config_updater,
     );
+    client_adapter_for_shards_manager.set_recipient(client_actor.clone());
+    let (shards_manager_actor, shards_manager_arbiter_handle) = start_shards_manager(
+        runtime,
+        network_adapter.clone(),
+        client_adapter_for_shards_manager.clone(),
+        config.validator_signer.as_ref().map(|signer| signer.validator_id().clone()),
+        store.get_store(Temperature::Hot),
+        config.client_config.chunk_request_retry_period,
+    );
+    shards_manager_adapter.set_recipient(shards_manager_actor.clone());
 
     #[allow(unused_mut)]
     let mut rpc_servers = Vec::new();
@@ -210,6 +224,9 @@ pub fn start_with_config_and_synchronization(
         store.into_inner(near_store::Temperature::Hot),
         config.network_config,
         Arc::new(near_client::adapter::Adapter::new(client_actor.clone(), view_client.clone())),
+        Arc::new(near_chunks::adapter::ShardsManagerAdapterAsAdapterForNetwork::new(
+            shards_manager_adapter,
+        )),
         genesis_id,
     )
     .context("PeerManager::spawn()")?;
@@ -248,7 +265,7 @@ pub fn start_with_config_and_synchronization(
         client: client_actor,
         view_client,
         rpc_servers,
-        arbiters: vec![client_arbiter_handle],
+        arbiters: vec![client_arbiter_handle, shards_manager_arbiter_handle],
     })
 }
 
