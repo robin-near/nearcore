@@ -7,9 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
-use near_chunks::client::{
-    ClientAdapterForShardsManager, ShardedTransactionPool, ShardsManagerAdapter,
-};
+use near_chunks::client::{ShardedTransactionPool, ShardsManagerAdapter};
 use near_chunks::logic::{
     cares_about_shard_this_or_next_epoch, decode_encoded_chunk, persist_chunk,
 };
@@ -1334,7 +1332,7 @@ impl Client {
             }
             self.shards_manager_adapter.request_chunks_for_orphan(
                 missing_chunks,
-                fepoch_id,
+                epoch_id,
                 ancestor_hash,
                 self.chain
                     .header_head()

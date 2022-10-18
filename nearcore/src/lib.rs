@@ -181,7 +181,7 @@ pub fn start_with_config_and_synchronization(
         runtime.clone(),
         network_adapter.clone(),
         client_adapter_for_shards_manager.clone(),
-        me,
+        config.validator_signer.as_ref().map(|x| x.validator_id().clone()),
         store.get_store(Temperature::Hot),
         config.client_config.chunk_request_retry_period,
     );

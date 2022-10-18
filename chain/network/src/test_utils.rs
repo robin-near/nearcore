@@ -305,7 +305,7 @@ impl MockPeerManagerAdapter {
     pub fn pop_most_recent(&self) -> Option<PeerManagerMessageRequest> {
         self.requests.write().unwrap().pop_back()
     }
-    pub fn process_filtered(&self, f: Fn(&PeerManagerMessageRequest) -> bool) {
+    pub fn process_filtered(&self, mut f: impl FnMut(&PeerManagerMessageRequest) -> bool) {
         let mut requests_to_handle = vec![];
         let mut requests_queue = self.requests.write().unwrap();
         while let Some(request) = requests_queue.pop_front() {

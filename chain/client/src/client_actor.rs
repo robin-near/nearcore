@@ -1143,6 +1143,7 @@ impl ClientActor {
                 .unwrap_or(delay),
         );
         timer.observe_duration();
+        delay
     }
 
     /// "Unfinished" blocks means that blocks that client has started the processing and haven't

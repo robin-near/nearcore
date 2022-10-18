@@ -1,11 +1,11 @@
 use crate::tests::client::process_blocks::{
-    create_nightshade_runtimes, produce_blocks_from_height,
+    create_nightshade_runtime, create_nightshade_runtimes, produce_blocks_from_height,
 };
 use assert_matches::assert_matches;
 use near_chain::chain::NUM_ORPHAN_ANCESTORS_CHECK;
 use near_chain::{ChainGenesis, Error, Provenance, RuntimeAdapter};
 use near_chain_configs::Genesis;
-use near_client::test_utils::{create_chunk_with_transactions, TestEnv};
+use near_client::test_utils::{create_chunk_with_transactions, TestEnv, TestInstance};
 use near_crypto::{InMemorySigner, KeyType, Signer};
 use near_network::types::{
     MsgRecipient, NetworkClientResponses, NetworkRequests, PeerManagerMessageRequest,
@@ -39,9 +39,9 @@ fn check_tx_processing(
     blocks_number: u64,
 ) -> BlockHeight {
     let tx_hash = tx.get_hash();
-    env.clients[0].process_tx(tx, false, false);
+    env[0].client.process_tx(tx, false, false);
     let next_height = produce_blocks_from_height(env, blocks_number, height);
-    let final_outcome = env.clients[0].chain.get_final_transaction_result(&tx_hash).unwrap();
+    let final_outcome = env[0].client.chain.get_final_transaction_result(&tx_hash).unwrap();
     assert_matches!(final_outcome.status, FinalExecutionStatus::SuccessValue(_));
     next_height
 }
@@ -52,10 +52,10 @@ fn test_transaction_hash_collision() {
     let epoch_length = 5;
     let mut genesis = Genesis::test(vec!["test0".parse().unwrap(), "test1".parse().unwrap()], 1);
     genesis.config.epoch_length = epoch_length;
-    let mut env = TestEnv::builder(ChainGenesis::test())
-        .runtime_adapters(create_nightshade_runtimes(&genesis, 1))
-        .build();
-    let genesis_block = env.clients[0].chain.get_block_by_height(0).unwrap();
+    let mut env = TestInstance::builder(ChainGenesis::test())
+        .runtime_adapter(create_nightshade_runtime(&genesis))
+        .build_env();
+    let genesis_block = env[0].client.chain.get_block_by_height(0).unwrap();
 
     let signer0 = InMemorySigner::from_seed("test0".parse().unwrap(), KeyType::ED25519, "test0");
     let signer1 = InMemorySigner::from_seed("test1".parse().unwrap(), KeyType::ED25519, "test1");
@@ -76,11 +76,11 @@ fn test_transaction_hash_collision() {
         *genesis_block.hash(),
     );
 
-    env.clients[0].process_tx(send_money_tx.clone(), false, false);
-    env.clients[0].process_tx(delete_account_tx, false, false);
+    env[0].process_tx(send_money_tx.clone(), false, false);
+    env[0].process_tx(delete_account_tx, false, false);
 
     for i in 1..4 {
-        env.produce_block(0, i);
+        env[0].produce_block(i);
     }
 
     let create_account_tx = SignedTransaction::create_account(
@@ -92,13 +92,13 @@ fn test_transaction_hash_collision() {
         &signer0,
         *genesis_block.hash(),
     );
-    let res = env.clients[0].process_tx(create_account_tx, false, false);
+    let res = env[0].process_tx(create_account_tx, false, false);
     assert_matches!(res, NetworkClientResponses::ValidTx);
     for i in 4..8 {
         env.produce_block(0, i);
     }
 
-    let res = env.clients[0].process_tx(send_money_tx, false, false);
+    let res = env[0].process_tx(send_money_tx, false, false);
     assert_matches!(res, NetworkClientResponses::InvalidTx(_));
 }
 
@@ -113,10 +113,10 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
     let mut genesis = Genesis::test(vec!["test0".parse().unwrap(), "test1".parse().unwrap()], 1);
     genesis.config.epoch_length = epoch_length;
     genesis.config.protocol_version = protocol_version;
-    let mut env = TestEnv::builder(ChainGenesis::test())
-        .runtime_adapters(create_nightshade_runtimes(&genesis, 1))
-        .build();
-    let genesis_block = env.clients[0].chain.get_block_by_height(0).unwrap();
+    let mut env = TestInstance::builder(ChainGenesis::test())
+        .runtime_adapter(create_nightshade_runtime(&genesis))
+        .build_env();
+    let genesis_block = env[0].client.chain.get_block_by_height(0).unwrap();
 
     let signer1 = InMemorySigner::from_seed("test1".parse().unwrap(), KeyType::ED25519, "test1");
 
@@ -138,8 +138,8 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
         deposit_for_account_creation,
         *genesis_block.hash(),
     );
-    height = check_tx_processing(&mut env, send_money_tx, height, blocks_number);
-    let block = env.clients[0].chain.get_block_by_height(height - 1).unwrap();
+    height = check_tx_processing(&mut instance, send_money_tx, height, blocks_number);
+    let block = env[0].client.chain.get_block_by_height(height - 1).unwrap();
 
     // Delete implicit account.
     let delete_account_tx = SignedTransaction::delete_account(
@@ -151,8 +151,8 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
         &implicit_account_signer,
         *block.hash(),
     );
-    height = check_tx_processing(&mut env, delete_account_tx, height, blocks_number);
-    let block = env.clients[0].chain.get_block_by_height(height - 1).unwrap();
+    height = check_tx_processing(&mut instance, delete_account_tx, height, blocks_number);
+    let block = env[0].client.chain.get_block_by_height(height - 1).unwrap();
 
     // Send money to implicit account again, invoking its second creation.
     let send_money_again_tx = SignedTransaction::send_money(
@@ -163,8 +163,8 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
         deposit_for_account_creation,
         *block.hash(),
     );
-    height = check_tx_processing(&mut env, send_money_again_tx, height, blocks_number);
-    let block = env.clients[0].chain.get_block_by_height(height - 1).unwrap();
+    height = check_tx_processing(&mut instance, send_money_again_tx, height, blocks_number);
+    let block = env[0].client.chain.get_block_by_height(height - 1).unwrap();
 
     // Send money from implicit account with incorrect nonce.
     let send_money_from_implicit_account_tx = SignedTransaction::send_money(
@@ -175,7 +175,7 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
         100,
         *block.hash(),
     );
-    let status = env.clients[0].process_tx(send_money_from_implicit_account_tx, false, false);
+    let status = env[0].client.process_tx(send_money_from_implicit_account_tx, false, false);
 
     // Check that sending money from implicit account with correct nonce is still valid.
     let send_money_from_implicit_account_tx = SignedTransaction::send_money(
@@ -186,7 +186,7 @@ fn get_status_of_tx_hash_collision_for_implicit_account(
         100,
         *block.hash(),
     );
-    check_tx_processing(&mut env, send_money_from_implicit_account_tx, height, blocks_number);
+    check_tx_processing(&mut instance, send_money_from_implicit_account_tx, height, blocks_number);
 
     status
 }
@@ -218,10 +218,10 @@ fn test_chunk_transaction_validity() {
     let epoch_length = 5;
     let mut genesis = Genesis::test(vec!["test0".parse().unwrap(), "test1".parse().unwrap()], 1);
     genesis.config.epoch_length = epoch_length;
-    let mut env = TestEnv::builder(ChainGenesis::test())
-        .runtime_adapters(create_nightshade_runtimes(&genesis, 1))
-        .build();
-    let genesis_block = env.clients[0].chain.get_block_by_height(0).unwrap();
+    let mut env = TestInstance::builder(ChainGenesis::test())
+        .runtime_adapter(create_nightshade_runtime(&genesis))
+        .build_env();
+    let genesis_block = env[0].client.chain.get_block_by_height(0).unwrap();
     let signer = InMemorySigner::from_seed("test0".parse().unwrap(), KeyType::ED25519, "test0");
     let tx = SignedTransaction::send_money(
         1,
@@ -232,14 +232,15 @@ fn test_chunk_transaction_validity() {
         *genesis_block.hash(),
     );
     for i in 1..200 {
-        env.produce_block(0, i);
+        env[0].produce_block(i);
     }
     let (encoded_shard_chunk, merkle_path, receipts, block) =
-        create_chunk_with_transactions(&mut env.clients[0], vec![tx]);
-    env.clients[0]
+        create_chunk_with_transactions(&mut env[0].client, vec![tx]);
+    instance
+        .client
         .persist_and_distribute_encoded_chunk(encoded_shard_chunk, merkle_path, receipts)
         .unwrap();
-    let res = env.clients[0].process_block_test(block.into(), Provenance::NONE);
+    let res = env[0].client.process_block_test(block.into(), Provenance::NONE);
     assert_matches!(res.unwrap_err(), Error::InvalidTransactions);
 }
 
@@ -248,10 +249,10 @@ fn test_transaction_nonce_too_large() {
     let epoch_length = 5;
     let mut genesis = Genesis::test(vec!["test0".parse().unwrap(), "test1".parse().unwrap()], 1);
     genesis.config.epoch_length = epoch_length;
-    let mut env = TestEnv::builder(ChainGenesis::test())
-        .runtime_adapters(create_nightshade_runtimes(&genesis, 1))
-        .build();
-    let genesis_block = env.clients[0].chain.get_block_by_height(0).unwrap();
+    let mut env = TestInstance::builder(ChainGenesis::test())
+        .runtime_adapter(create_nightshade_runtime(&genesis))
+        .build_env();
+    let genesis_block = env[0].client.chain.get_block_by_height(0).unwrap();
     let signer = InMemorySigner::from_seed("test0".parse().unwrap(), KeyType::ED25519, "test0");
     let large_nonce = AccessKey::ACCESS_KEY_NONCE_RANGE_MULTIPLIER + 1;
     let tx = SignedTransaction::send_money(
@@ -262,7 +263,7 @@ fn test_transaction_nonce_too_large() {
         100,
         *genesis_block.hash(),
     );
-    let res = env.clients[0].process_tx(tx, false, false);
+    let res = env[0].client.process_tx(tx, false, false);
     assert_matches!(
         res,
         NetworkClientResponses::InvalidTx(InvalidTxError::InvalidAccessKeyError(_))
@@ -314,78 +315,75 @@ fn test_request_chunks_for_orphan() {
     genesis.config.num_block_producer_seats_per_shard =
         vec![num_validators, num_validators, num_validators, num_validators];
     let chain_genesis = ChainGenesis::new(&genesis);
-    let runtimes: Vec<Arc<dyn RuntimeAdapter>> = (0..2)
-        .map(|_| {
-            Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
-                Path::new("."),
-                create_test_store(),
-                &genesis,
-                TrackedConfig::AllShards,
-                RuntimeConfigStore::test(),
-            )) as Arc<dyn RuntimeAdapter>
-        })
-        .collect();
+    let make_runtime_adapter = || {
+        Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
+            Path::new("."),
+            create_test_store(),
+            &genesis,
+            TrackedConfig::AllShards,
+            RuntimeConfigStore::test(),
+        ))
+    };
     let mut env = TestEnv::builder(chain_genesis)
-        .clients_count(num_clients)
-        .validator_seats(num_validators as usize)
-        .runtime_adapters(runtimes)
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(true))
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(false))
         .build();
 
     let mut blocks = vec![];
     // produce 20 blocks
     for i in 1..=20 {
-        let block = env.clients[0].produce_block(i).unwrap().unwrap();
+        let block = env[0].produce_block(i).unwrap().unwrap();
         blocks.push(block.clone());
-        env.process_block(0, block, Provenance::PRODUCED);
+        env[0].process_block(block, Provenance::PRODUCED);
     }
 
-    let _ = env.clients[1].process_block_test(blocks[0].clone().into(), Provenance::NONE).unwrap();
+    let _ = env[1].client.process_block_test(blocks[0].clone().into(), Provenance::NONE).unwrap();
     // process blocks 1, 2 successfully
     for i in 1..3 {
-        let res = env.clients[1].process_block_test(blocks[i].clone().into(), Provenance::NONE);
+        let res = env[1].client.process_block_test(blocks[i].clone().into(), Provenance::NONE);
         assert_matches!(
             res.unwrap_err(),
             near_chain::Error::ChunksMissing(_) | near_chain::Error::Orphan
         );
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
         env.process_partial_encoded_chunks_requests(1);
     }
-    env.process_shards_manager_responses_and_finish_processing_blocks(1);
+    env[1].process_shards_manager_responses_and_finish_processing_blocks();
 
     // process blocks 3 to 15 without processing missing chunks
     // block 3 will be put into the blocks_with_missing_chunks pool
-    let res = env.clients[1].process_block_test(blocks[3].clone().into(), Provenance::NONE);
+    let res = env[1].client.process_block_test(blocks[3].clone().into(), Provenance::NONE);
     assert_matches!(res.unwrap_err(), near_chain::Error::ChunksMissing(_));
     // remove the missing chunk request from the network queue because we want to process it later
-    let missing_chunk_request = env.network_adapters[1].pop().unwrap();
+    let missing_chunk_request = env[1].network_adapter.pop().unwrap();
     // block 4-20 will be put to the orphan pool
     for i in 4..20 {
-        let res = env.clients[1].process_block_test(blocks[i].clone().into(), Provenance::NONE);
+        let res = env[1].client.process_block_test(blocks[i].clone().into(), Provenance::NONE);
         assert_matches!(res.unwrap_err(), near_chain::Error::Orphan);
     }
     // check that block 4-2+NUM_ORPHAN_ANCESTORS_CHECK requested partial encoded chunks already
     for i in 4..3 + NUM_ORPHAN_ANCESTORS_CHECK {
         assert!(
-            env.clients[1].chain.check_orphan_partial_chunks_requested(blocks[i as usize].hash()),
+            env[1].client.chain.check_orphan_partial_chunks_requested(blocks[i as usize].hash()),
             "{}",
             i
         );
     }
-    assert!(!env.clients[1].chain.check_orphan_partial_chunks_requested(
+    assert!(!env[1].client.chain.check_orphan_partial_chunks_requested(
         blocks[3 + NUM_ORPHAN_ANCESTORS_CHECK as usize].hash()
     ));
-    assert!(!env.clients[1].chain.check_orphan_partial_chunks_requested(
+    assert!(!env[1].client.chain.check_orphan_partial_chunks_requested(
         blocks[4 + NUM_ORPHAN_ANCESTORS_CHECK as usize].hash()
     ));
     // process all the partial encoded chunk requests for block 4 - 2 + NUM_ORPHAN_ANCESTORS_CHECK
     env.process_partial_encoded_chunks_requests(1);
-    env.process_shards_manager_responses_and_finish_processing_blocks(1);
+    env[1].process_shards_manager_responses_and_finish_processing_blocks();
 
     // process partial encoded chunk request for block 3, which will unlock block 4 - 2 + NUM_ORPHAN_ANCESTORS_CHECK
     env.process_partial_encoded_chunk_request(1, missing_chunk_request);
-    env.process_shards_manager_responses_and_finish_processing_blocks(1);
+    env[1].process_shards_manager_responses_and_finish_processing_blocks();
     assert_eq!(
-        &env.clients[1].chain.head().unwrap().last_block_hash,
+        &env[1].client.chain.head().unwrap().last_block_hash,
         blocks[2 + NUM_ORPHAN_ANCESTORS_CHECK as usize].hash()
     );
 
@@ -393,29 +391,31 @@ fn test_request_chunks_for_orphan() {
     // keep processing the partial encoded chunk requests in the queue, which will process
     // block 3+NUM_ORPHAN_ANCESTORS to 8.
     for i in 4 + NUM_ORPHAN_ANCESTORS_CHECK..10 {
-        assert!(env.clients[1]
+        assert!(env[1]
+            .client
             .chain
             .check_orphan_partial_chunks_requested(blocks[i as usize].hash()));
         for _ in 0..4 {
-            let request = env.network_adapters[1].pop().unwrap();
+            let request = env[1].network_adapter.pop().unwrap();
             env.process_partial_encoded_chunk_request(1, request);
-            env.process_shards_manager_responses_and_finish_processing_blocks(1);
+            env[1].process_shards_manager_responses_and_finish_processing_blocks();
         }
     }
-    assert_eq!(&env.clients[1].chain.head().unwrap().last_block_hash, blocks[8].hash());
+    assert_eq!(&env[1].client.chain.head().unwrap().last_block_hash, blocks[8].hash());
     // blocks[10] is at the new epoch, so we can't request partial chunks for it yet
-    assert!(!env.clients[1].chain.check_orphan_partial_chunks_requested(blocks[10].hash()));
+    assert!(!env[1].client.chain.check_orphan_partial_chunks_requested(blocks[10].hash()));
 
     // process missing chunks for block 9, which has 4 chunks, so there are 4 requests in total
     for _ in 0..4 {
-        let request = env.network_adapters[1].pop().unwrap();
+        let request = env[1].network_adapter.pop().unwrap();
         env.process_partial_encoded_chunk_request(1, request);
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
     }
-    assert_eq!(&env.clients[1].chain.head().unwrap().last_block_hash, blocks[9].hash());
+    assert_eq!(&env[1].client.chain.head().unwrap().last_block_hash, blocks[9].hash());
 
     for i in 11..10 + NUM_ORPHAN_ANCESTORS_CHECK {
-        assert!(env.clients[1]
+        assert!(env[1]
+            .client
             .chain
             .check_orphan_partial_chunks_requested(blocks[i as usize].hash()));
     }
@@ -424,11 +424,11 @@ fn test_request_chunks_for_orphan() {
     for i in 10..20 {
         // process missing chunk requests for the 4 chunks in each block
         for _ in 0..4 {
-            let request = env.network_adapters[1].pop().unwrap();
+            let request = env[i].network_adapter.pop().unwrap();
             env.process_partial_encoded_chunk_request(1, request);
         }
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
-        assert_eq!(&env.clients[1].chain.head().unwrap().last_block_hash, blocks[i].hash());
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
+        assert_eq!(&env[1].client.chain.head().unwrap().last_block_hash, blocks[i].hash());
     }
 }
 
@@ -461,27 +461,24 @@ fn test_processing_chunks_sanity() {
     genesis.config.num_block_producer_seats_per_shard =
         vec![num_validators, num_validators, num_validators, num_validators];
     let chain_genesis = ChainGenesis::new(&genesis);
-    let runtimes: Vec<Arc<dyn RuntimeAdapter>> = (0..2)
-        .map(|_| {
-            Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
-                Path::new("."),
-                create_test_store(),
-                &genesis,
-                TrackedConfig::AllShards,
-                RuntimeConfigStore::test(),
-            )) as Arc<dyn RuntimeAdapter>
-        })
-        .collect();
+    let make_runtime_adapter = || {
+        Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
+            Path::new("."),
+            create_test_store(),
+            &genesis,
+            TrackedConfig::AllShards,
+            RuntimeConfigStore::test(),
+        ))
+    };
     let mut env = TestEnv::builder(chain_genesis)
-        .clients_count(num_clients)
-        .validator_seats(num_validators as usize)
-        .runtime_adapters(runtimes)
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(true))
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(false))
         .build();
 
     let mut blocks = vec![];
     // produce 21 blocks
     for i in 1..=21 {
-        let block = env.clients[0].produce_block(i).unwrap().unwrap();
+        let block = env[0].client.produce_block(i).unwrap().unwrap();
         let chunks = block
             .chunks()
             .iter()
@@ -489,7 +486,7 @@ fn test_processing_chunks_sanity() {
             .collect::<Vec<_>>();
         debug!(target: "chunks", "Block #{} has chunks {:?}", i, chunks.join(", "));
         blocks.push(block.clone());
-        env.process_block(0, block, Provenance::PRODUCED);
+        env[0].process_block(block, Provenance::PRODUCED);
     }
 
     // make test1 process these blocks, while grouping blocks to groups of three
@@ -502,35 +499,35 @@ fn test_processing_chunks_sanity() {
         let mut next_blocks: Vec<_> = (3 * i..3 * i + 3).collect();
         next_blocks.shuffle(&mut rng);
         for ind in next_blocks {
-            let _ = env.clients[1].start_process_block(
+            let _ = env[1].client.start_process_block(
                 blocks[ind].clone().into(),
                 Provenance::NONE,
                 Arc::new(|_| {}),
             );
             if rng.gen_bool(0.5) {
-                env.process_shards_manager_responses_and_finish_processing_blocks(1);
+                env[1].process_shards_manager_responses_and_finish_processing_blocks();
             }
-            while let Some(request) = env.network_adapters[1].pop() {
+            while let Some(request) = env[1].network_adapter.pop() {
                 // process the chunk request some times, otherwise keep it in the queue
                 // this is to simulate delays in the network
                 if rng.gen_bool(0.7) {
                     env.process_partial_encoded_chunk_request(1, request);
                     num_requests += 1;
                 } else {
-                    env.network_adapters[1].do_send(request);
+                    env[1].network_adapter.do_send(request);
                 }
             }
         }
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
     }
     // process the remaining chunk requests
-    while let Some(request) = env.network_adapters[1].pop() {
+    while let Some(request) = env[1].network_adapter.pop() {
         env.process_partial_encoded_chunk_request(1, request);
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
         num_requests += 1;
     }
 
-    assert_eq!(env.clients[1].chain.head().unwrap().height, 21);
+    assert_eq!(env[1].client.chain.head().unwrap().height, 21);
 
     // Check each chunk is only requested once.
     // There are 21 blocks in total, but the first block has no chunks,
@@ -571,26 +568,26 @@ impl ChunkForwardingOptimizationTestData {
             config.num_block_producer_seats = num_block_producers as u64;
         }
         let chain_genesis = ChainGenesis::new(&genesis);
-        let runtimes: Vec<Arc<dyn RuntimeAdapter>> = (0..num_clients)
-            .map(|_| {
-                Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
-                    Path::new("."),
-                    create_test_store(),
-                    &genesis,
-                    TrackedConfig::AllShards,
-                    RuntimeConfigStore::test(),
-                )) as Arc<dyn RuntimeAdapter>
-            })
-            .collect();
-        let env = TestEnv::builder(chain_genesis)
-            .clients_count(num_clients)
-            .validator_seats(num_validators as usize)
-            .runtime_adapters(runtimes)
-            .build();
+
+        let make_runtime_adapter = || {
+            Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
+                Path::new("."),
+                create_test_store(),
+                &genesis,
+                TrackedConfig::AllShards,
+                RuntimeConfigStore::test(),
+            ))
+        };
+        let mut env_builder = TestEnv::builder(chain_genesis);
+        for _ in 0..num_clients {
+            env_builder = env_builder.instance(|instance| {
+                env[0].runtime_adapter(make_runtime_adapter()).validator(true)
+            });
+        }
 
         ChunkForwardingOptimizationTestData {
             num_validators,
-            env,
+            env: env_builder.build(),
             num_part_ords_requested: 0,
             num_part_ords_sent_as_partial_encoded_chunk: 0,
             num_part_ords_forwarded: 0,
@@ -650,9 +647,8 @@ impl ChunkForwardingOptimizationTestData {
                 }
                 self.num_part_ords_sent_as_partial_encoded_chunk +=
                     partial_encoded_chunk.parts.len();
-                self.env
-                    .client(&account_id)
-                    .shards_mgr
+                self.env[&account_id]
+                    .shards_manager
                     .process_partial_encoded_chunk(
                         PartialEncodedChunk::from(partial_encoded_chunk).into(),
                     )
@@ -675,10 +671,8 @@ impl ChunkForwardingOptimizationTestData {
                     ));
                 }
                 self.num_part_ords_forwarded += forward.parts.len();
-                match self
-                    .env
-                    .client(&account_id)
-                    .shards_mgr
+                match self.env[&account_id]
+                    .shards_manager
                     .process_partial_encoded_chunk_forward(forward)
                 {
                     Ok(_) => {}
@@ -727,15 +721,15 @@ fn test_chunk_forwarding_optimization() {
     init_test_logger();
     let mut test = ChunkForwardingOptimizationTestData::new();
     loop {
-        let height = test.env.clients[0].chain.head().unwrap().height;
+        let height = test.env[0].client.chain.head().unwrap().height;
         if height >= 31 {
             break;
         }
         debug!(target: "test", "======= Height {} ======", height + 1);
         test.process_network_messages();
-        test.env.process_shards_manager_responses(0);
+        test.env[0].process_shards_manager_responses();
 
-        let block = test.env.clients[0].produce_block(height + 1).unwrap().unwrap();
+        let block = test.env[0].client.produce_block(height + 1).unwrap().unwrap();
         if block.header().height() > 1 {
             // For any block except the first, the previous block's application at each
             // current chunk producer should have produced a chunk and distributed the chunk.
@@ -749,7 +743,7 @@ fn test_chunk_forwarding_optimization() {
         // The block producer of course has the complete block so we can process that.
         for i in 0..test.num_validators {
             debug!(target: "test", "Processing block {} as validator #{}", block.header().height(), i);
-            let _ = test.env.clients[i].start_process_block(
+            let _ = test.env[i].client.start_process_block(
                 block.clone().into(),
                 if i == 0 { Provenance::PRODUCED } else { Provenance::NONE },
                 Arc::new(|_| {}),
@@ -759,8 +753,8 @@ fn test_chunk_forwarding_optimization() {
             // Process any chunk part requests that this client sent. Note that this would also
             // process other network messages (such as production of the next chunk) which is OK.
             test.process_network_messages();
-            test.env.process_shards_manager_responses(i);
-            accepted_blocks.extend(test.env.clients[i].finish_blocks_in_processing());
+            test.env[i].process_shards_manager_responses();
+            accepted_blocks.extend(test.env[i].client.finish_blocks_in_processing());
             assert_eq!(
                 accepted_blocks.len(),
                 1,
@@ -810,27 +804,24 @@ fn test_processing_blocks_async() {
     genesis.config.num_block_producer_seats_per_shard =
         vec![num_validators, num_validators, num_validators, num_validators];
     let chain_genesis = ChainGenesis::new(&genesis);
-    let runtimes: Vec<Arc<dyn RuntimeAdapter>> = (0..2)
-        .map(|_| {
-            Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
-                Path::new("."),
-                create_test_store(),
-                &genesis,
-                TrackedConfig::AllShards,
-                RuntimeConfigStore::test(),
-            )) as Arc<dyn RuntimeAdapter>
-        })
-        .collect();
+    let make_runtime_adapter = || {
+        Arc::new(nearcore::NightshadeRuntime::test_with_runtime_config_store(
+            Path::new("."),
+            create_test_store(),
+            &genesis,
+            TrackedConfig::AllShards,
+            RuntimeConfigStore::test(),
+        ))
+    };
     let mut env = TestEnv::builder(chain_genesis)
-        .clients_count(num_clients)
-        .validator_seats(num_validators as usize)
-        .runtime_adapters(runtimes)
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(true))
+        .instance(|instance| env[0].runtime_adapter(make_runtime_adapter()).validator(false))
         .build();
 
     let mut blocks = vec![];
     // produce 20 blocks
     for i in 1..=20 {
-        let block = env.clients[0].produce_block(i).unwrap().unwrap();
+        let block = env[0].client.produce_block(i).unwrap().unwrap();
         blocks.push(block.clone());
         env.process_block(0, block, Provenance::PRODUCED);
     }
@@ -838,19 +829,19 @@ fn test_processing_blocks_async() {
     let mut rng = thread_rng();
     blocks.shuffle(&mut rng);
     for ind in 0..blocks.len() {
-        let _ = env.clients[1].start_process_block(
+        let _ = env[1].client.start_process_block(
             blocks[ind].clone().into(),
             Provenance::NONE,
             Arc::new(|_| {}),
         );
     }
 
-    env.process_shards_manager_responses_and_finish_processing_blocks(1);
+    env[1].process_shards_manager_responses_and_finish_processing_blocks();
 
-    while let Some(request) = env.network_adapters[1].pop() {
+    while let Some(request) = env[1].network_adapter.pop() {
         env.process_partial_encoded_chunk_request(1, request);
-        env.process_shards_manager_responses_and_finish_processing_blocks(1);
+        env[1].process_shards_manager_responses_and_finish_processing_blocks();
     }
 
-    assert_eq!(env.clients[1].chain.head().unwrap().height, 20);
+    assert_eq!(env[1].client.chain.head().unwrap().height, 20);
 }
