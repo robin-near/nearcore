@@ -25,7 +25,7 @@
                 url: "/status",
                 success: data => {
                     let binaryText = $('<span>')
-                        .text(`version ${data.version.version} built with rustc ${data.version.rustc_version} at `);
+                        .text(`version "${data.version.version}" built with rustc "${data.version.rustc_version}" at `);
                     binaryText.append(
                         $('<a>')
                             .text(data.version.build)
