@@ -1,5 +1,6 @@
 use assert_matches::assert_matches;
 use borsh::BorshSerialize;
+use near_client::testing::chunk_production_test_utils::ClientTestExt;
 
 use crate::tests::client::process_blocks::create_nightshade_runtimes;
 use near_chain::validate::validate_challenge;

@@ -6,6 +6,7 @@ use near_chain::chain::NUM_ORPHAN_ANCESTORS_CHECK;
 use near_chain::{ChainGenesis, Error, Provenance, RuntimeAdapter};
 use near_chain_configs::Genesis;
 use near_client::test_utils::{create_chunk_with_transactions, TestEnv};
+use near_client::testing::chunk_production_test_utils::ClientTestExt;
 use near_client::ProcessTxResponse;
 use near_crypto::{InMemorySigner, KeyType, Signer};
 use near_network::types::{MsgRecipient, NetworkRequests, PeerManagerMessageRequest};

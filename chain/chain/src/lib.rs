@@ -25,6 +25,7 @@ pub mod store_validator;
 pub mod test_utils;
 #[cfg(test)]
 mod tests;
+pub mod topology;
 pub mod types;
 pub mod validate;
 

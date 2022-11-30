@@ -1,4 +1,5 @@
 use crate::store::ChainStoreAccess;
+use crate::topology::Topology;
 use crate::types::RuntimeAdapter;
 use near_chain_primitives::error::Error;
 use near_primitives::hash::CryptoHash;

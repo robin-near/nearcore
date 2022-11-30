@@ -65,6 +65,7 @@ use crate::migrations::check_if_block_is_first_with_chunk_of_version;
 use crate::missing_chunks::{BlockLike, MissingChunksPool};
 use crate::state_request_tracker::StateRequestTracker;
 use crate::store::{ChainStore, ChainStoreAccess, ChainStoreUpdate, GCMode};
+use crate::topology::Topology;
 use crate::types::{
     AcceptedBlock, ApplySplitStateResult, ApplySplitStateResultOrStateChanges,
     ApplyTransactionResult, Block, BlockEconomicsConfig, BlockHeader, BlockHeaderInfo, BlockStatus,
@@ -2351,7 +2352,7 @@ impl Chain {
 
         let (is_caught_up, state_dl_info) =
             if self.runtime_adapter.is_next_block_epoch_start(&prev_hash)? {
-                if !self.prev_block_is_caught_up(&prev_prev_hash, &prev_hash)? {
+                if !self.store.prev_block_is_caught_up(&prev_prev_hash, &prev_hash)? {
                     // The previous block is not caught up for the next epoch relative to the previous
                     // block, which is the current epoch for this block, so this block cannot be applied
                     // at all yet, needs to be orphaned
@@ -2364,7 +2365,7 @@ impl Chain {
                 let state_dl_info = self.get_state_dl_info(me, block)?;
                 (state_dl_info.is_none(), state_dl_info)
             } else {
-                (self.prev_block_is_caught_up(&prev_prev_hash, &prev_hash)?, None)
+                (self.store.prev_block_is_caught_up(&prev_prev_hash, &prev_hash)?, None)
             };
 
         self.check_if_challenged_block_on_chain(block.header())?;
@@ -2517,20 +2518,6 @@ impl Chain {
     /// only used for test
     pub fn check_orphan_partial_chunks_requested(&self, block_hash: &CryptoHash) -> bool {
         self.orphans.orphans_requested_missing_chunks.contains(block_hash)
-    }
-
-    pub fn prev_block_is_caught_up(
-        &self,
-        prev_prev_hash: &CryptoHash,
-        prev_hash: &CryptoHash,
-    ) -> Result<bool, Error> {
-        // Needs to be used with care: for the first block of each epoch the semantic is slightly
-        // different, since the prev_block is in a different epoch. So for all the blocks but the
-        // first one in each epoch this method returns true if the block is ready to have state
-        // applied for the next epoch, while for the first block in a particular epoch this method
-        // returns true if the block is ready to have state applied for the current epoch (and
-        // otherwise should be orphaned)
-        Ok(!self.store.get_blocks_to_catchup(prev_prev_hash)?.contains(prev_hash))
     }
 
     /// Return all shards that whose states need to be caught up

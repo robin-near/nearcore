@@ -1720,7 +1720,11 @@ pub fn create_chunk_on_height_for_shard(
     let last_block_hash = client.chain.head().unwrap().last_block_hash;
     let last_block = client.chain.get_block(&last_block_hash).unwrap();
     client
+        .production
+        .as_mut()
+        .unwrap()
         .produce_chunk(
+            client.chain.mut_store(),
             last_block_hash,
             &client.runtime_adapter.get_epoch_id_from_prev_block(&last_block_hash).unwrap(),
             Chain::get_prev_chunk_header(&*client.runtime_adapter, &last_block, shard_id).unwrap(),
@@ -1755,7 +1759,11 @@ pub fn create_chunk(
     let last_block = client.chain.get_block_by_height(client.chain.head().unwrap().height).unwrap();
     let next_height = last_block.header().height() + 1;
     let (mut chunk, mut merkle_paths, receipts) = client
+        .production
+        .as_mut()
+        .unwrap()
         .produce_chunk(
+            client.chain.mut_store(),
             *last_block.hash(),
             last_block.header().epoch_id(),
             last_block.chunks()[0].clone(),

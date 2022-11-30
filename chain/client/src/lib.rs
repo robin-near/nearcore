@@ -23,9 +23,11 @@ mod client_actor;
 pub mod debug;
 mod info;
 mod metrics;
+mod production;
 mod rocksdb_metrics;
 pub mod sync;
 pub mod test_utils;
+pub mod testing;
 #[cfg(test)]
 mod tests;
 mod view_client;

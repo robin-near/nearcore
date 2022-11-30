@@ -3,6 +3,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use near_chain::topology::Topology;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use near_chain::chain::collect_receipts_from_response;

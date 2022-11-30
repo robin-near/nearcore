@@ -515,8 +515,8 @@ impl ClientActor {
         let head = self.client.chain.head()?;
         let mut productions = vec![];
 
-        if let Some(signer) = &self.client.validator_signer {
-            let validator_id = signer.validator_id().to_string();
+        if let Some(chunk_production) = &mut self.client.production {
+            let validator_id = chunk_production.me().to_string();
 
             // We want to show some older blocks (up to DEBUG_PRODUCTION_OLD_BLOCKS_TO_SHOW in the past)
             // and new blocks (up to the current height for which we've sent approval).
@@ -572,7 +572,7 @@ impl ClientActor {
                     if chunk_producer == validator_id {
                         production.chunk_production.insert(
                             shard_id,
-                            self.client
+                            chunk_production
                                 .chunk_production_info
                                 .get(&(height, shard_id))
                                 .cloned()

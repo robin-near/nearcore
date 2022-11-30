@@ -9,6 +9,7 @@ use assert_matches::assert_matches;
 use futures::{future, FutureExt};
 use near_chain::test_utils::ValidatorSchedule;
 use near_chunks::test_utils::MockClientAdapterForShardsManager;
+use near_client::testing::chunk_production_test_utils::ClientTestExt;
 use near_primitives::config::ActionCosts;
 use near_primitives::num_rational::{Ratio, Rational32};
 
