@@ -7,10 +7,13 @@ use std::sync::{Arc, RwLock};
 use actix::System;
 use assert_matches::assert_matches;
 use futures::{future, FutureExt};
+use near_async::messaging::NoopSenderForTest;
 use near_chain::test_utils::ValidatorSchedule;
+use near_chunks::test_utils::MockClientAdapterForShardsManager;
 use near_chunks::test_utils::{
     MockClientAdapterForShardsManager, NoopShardsManagerAdapterForClient,
 };
+
 use near_primitives::config::{ActionCosts, ExtCosts};
 use near_primitives::num_rational::{Ratio, Rational32};
 
@@ -2158,7 +2161,7 @@ fn test_incorrect_validator_key_produce_block() {
         chain_genesis,
         runtime_adapter,
         Arc::new(MockPeerManagerAdapter::default()),
-        Arc::new(NoopShardsManagerAdapterForClient {}),
+        NoopSenderForTest::new(),
         Some(signer),
         false,
         TEST_SEED,

@@ -51,7 +51,7 @@ checksum = "414360eed71ba2d5435b185ba43ecbe281dfab5df3898286d6b7be8074372c92"
 dependencies = [
  "actix-utils",
  "actix-web",
- "derive_more",
+ "derive_more 0.99.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-util",
  "log",
  "once_cell",
@@ -74,7 +74,7 @@ dependencies = [
  "brotli",
  "bytes",
  "bytestring",
- "derive_more",
+ "derive_more 0.99.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "encoding_rs",
  "flate2",
  "futures-core",
@@ -208,7 +208,7 @@ dependencies = [
  "bytestring",
  "cfg-if 1.0.0",
  "cookie",
- "derive_more",
+ "derive_more 0.99.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "encoding_rs",
  "futures-core",
  "futures-util",
@@ -448,7 +448,7 @@ dependencies = [
  "bytes",
  "cfg-if 1.0.0",
  "cookie",
- "derive_more",
+ "derive_more 0.99.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-core",
  "futures-util",
  "h2",
@@ -948,6 +948,7 @@ dependencies = [
  "dirs",
  "futures",
  "log",
+ "near-async",
  "near-chain-configs",
  "near-crypto",
  "near-network",
@@ -1100,6 +1101,15 @@ name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "convert_case"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+dependencies = [
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "cookie"
@@ -1539,11 +1549,31 @@ version = "0.99.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fb810d30a7c1953f91334de7244731fc3f3c10d7fe163338a35b9f640960321"
 dependencies = [
- "convert_case",
+ "convert_case 0.4.0",
  "proc-macro2",
  "quote",
  "rustc_version 0.4.0",
  "syn",
+]
+
+[[package]]
+name = "derive_more"
+version = "0.99.17"
+source = "git+https://github.com/JelteF/derive_more?rev=ae8eeb90#ae8eeb90c19d3926d9f83ce49fbf19515f166ef1"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "0.99.17"
+source = "git+https://github.com/JelteF/derive_more?rev=ae8eeb90#ae8eeb90c19d3926d9f83ce49fbf19515f166ef1"
+dependencies = [
+ "convert_case 0.6.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -2433,6 +2463,7 @@ dependencies = [
  "hex",
  "insta",
  "near-actix-test-utils",
+ "near-async",
  "near-chain",
  "near-chain-configs",
  "near-chunks",
@@ -2895,6 +2926,7 @@ dependencies = [
  "flate2",
  "futures",
  "near-actix-test-utils",
+ "near-async",
  "near-chain",
  "near-chain-configs",
  "near-chunks",
@@ -3011,8 +3043,10 @@ version = "0.0.0"
 dependencies = [
  "actix",
  "derive-enum-from-into",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
+ "futures",
  "near-o11y",
+ "near-performance-metrics",
  "once_cell",
  "serde",
  "serde_json",
@@ -3069,7 +3103,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "near-config-utils",
  "near-crypto",
  "near-o11y",
@@ -3102,8 +3136,11 @@ dependencies = [
  "assert_matches",
  "borsh",
  "chrono",
+ "derive-enum-from-into",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "futures",
  "lru",
+ "near-async",
  "near-chain",
  "near-chunks-primitives",
  "near-crypto",
@@ -3143,6 +3180,7 @@ dependencies = [
  "itertools",
  "lru",
  "near-actix-test-utils",
+ "near-async",
  "near-chain",
  "near-chain-configs",
  "near-chain-primitives",
@@ -3205,7 +3243,7 @@ dependencies = [
  "bs58",
  "c2-chacha",
  "curve25519-dalek",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "ed25519-dalek",
  "hex-literal",
  "near-account-id",
@@ -3475,6 +3513,7 @@ dependencies = [
  "im",
  "itertools",
  "lru",
+ "near-async",
  "near-crypto",
  "near-o11y",
  "near-performance-metrics",
@@ -3600,7 +3639,7 @@ dependencies = [
  "bytesize",
  "cfg-if 1.0.0",
  "chrono",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "easy-ext",
  "enum-map",
  "hex",
@@ -3633,7 +3672,7 @@ dependencies = [
  "base64",
  "borsh",
  "bs58",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "enum-map",
  "insta",
  "near-account-id",
@@ -3655,7 +3694,7 @@ dependencies = [
  "actix-http",
  "actix-web",
  "awc",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "futures",
  "hex",
  "insta",
@@ -3733,7 +3772,7 @@ dependencies = [
  "byteorder",
  "bytesize",
  "crossbeam",
- "derive_more",
+ "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
  "elastic-array",
  "enum-map",
  "fs2",
@@ -3900,6 +3939,7 @@ dependencies = [
  "hyper-tls",
  "indicatif",
  "near-actix-test-utils",
+ "near-async",
  "near-chain",
  "near-chain-configs",
  "near-chunks",

@@ -7,11 +7,11 @@ use actix_rt::ArbiterHandle;
 use actix_web;
 use anyhow::Context;
 use cold_storage::ColdStoreLoopHandle;
+use near_async::messaging::{LateBoundSender, SenderWithSpanContextExt};
 use near_chain::{Chain, ChainGenesis};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_client::{start_client, start_view_client, ClientActor, ConfigUpdater, ViewClientActor};
 use near_network::time;
-use near_network::types::NetworkRecipient;
 use near_network::PeerManagerActor;
 use near_primitives::block::GenesisId;
 use near_store::{DBCol, Mode, NodeStorage, StoreOpenerError, Temperature};
@@ -187,16 +187,16 @@ pub fn start_with_config_and_synchronization(
     };
 
     let node_id = config.network_config.node_id();
-    let network_adapter = Arc::new(NetworkRecipient::default());
-    let shards_manager_adapter = Arc::new(NetworkRecipient::default());
-    let client_adapter_for_shards_manager = Arc::new(NetworkRecipient::default());
+    let network_adapter = Arc::new(LateBoundSender::default());
+    let shards_manager_adapter = Arc::new(LateBoundSender::default());
+    let client_adapter_for_shards_manager = Arc::new(LateBoundSender::default());
     let adv = near_client::adversarial::Controls::new(config.client_config.archive);
 
     let view_client = start_view_client(
         config.validator_signer.as_ref().map(|signer| signer.validator_id().clone()),
         chain_genesis.clone(),
         runtime.clone(),
-        network_adapter.clone(),
+        network_adapter.clone().as_sender_with_span_context(),
         config.client_config.clone(),
         adv.clone(),
     );
@@ -205,7 +205,7 @@ pub fn start_with_config_and_synchronization(
         chain_genesis,
         runtime.clone(),
         node_id,
-        network_adapter.clone(),
+        network_adapter.clone().as_sender_with_span_context(),
         shards_manager_adapter.clone(),
         config.validator_signer.clone(),
         telemetry,
@@ -213,16 +213,16 @@ pub fn start_with_config_and_synchronization(
         adv,
         config_updater,
     );
-    client_adapter_for_shards_manager.set_recipient(client_actor.clone());
+    client_adapter_for_shards_manager.set_sender(Arc::new(client_actor.clone()));
     let (shards_manager_actor, shards_manager_arbiter_handle) = start_shards_manager(
         runtime,
-        network_adapter.clone(),
-        client_adapter_for_shards_manager.clone(),
+        network_adapter.clone().as_sender_with_span_context(),
+        client_adapter_for_shards_manager.clone().as_sender_with_span_context(),
         config.validator_signer.as_ref().map(|signer| signer.validator_id().clone()),
         store.get_store(Temperature::Hot),
         config.client_config.chunk_request_retry_period,
     );
-    shards_manager_adapter.set_recipient(shards_manager_actor.clone());
+    shards_manager_adapter.set_sender(Arc::new(shards_manager_actor.clone()));
 
     #[allow(unused_mut)]
     let mut rpc_servers = Vec::new();
@@ -235,7 +235,7 @@ pub fn start_with_config_and_synchronization(
         genesis_id,
     )
     .context("PeerManager::spawn()")?;
-    network_adapter.set_recipient(network_actor.clone());
+    network_adapter.set_sender(Arc::new(network_actor.clone()));
 
     #[cfg(feature = "json_rpc")]
     if let Some(rpc_config) = config.rpc_config {

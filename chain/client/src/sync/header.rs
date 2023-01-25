@@ -170,15 +170,14 @@ impl HeaderSync {
                                 {
                                     warn!(target: "sync", "Sync: ban a fraudulent peer: {}, claimed height: {}",
                                         peer.peer_info, peer.highest_block_height);
-                                    self.network_adapter.do_send(
+                                    self.network_adapter.send(
                                         PeerManagerMessageRequest::NetworkRequests(
                                             NetworkRequests::BanPeer {
                                                 peer_id: peer.peer_info.id.clone(),
                                                 ban_reason:
                                                     near_network::types::ReasonForBan::HeightFraud,
                                             },
-                                        )
-                                        .with_span_context(),
+                                        ),
                                     );
                                     // This peer is fraudulent, let's skip this beat and wait for
                                     // the next one when this peer is not in the list anymore.
@@ -222,13 +221,12 @@ impl HeaderSync {
     ) -> Option<HighestHeightPeerInfo> {
         if let Ok(locator) = self.get_locator(chain) {
             debug!(target: "sync", "Sync: request headers: asking {} for headers, {:?}", peer.peer_info.id, locator);
-            self.network_adapter.do_send(
-                PeerManagerMessageRequest::NetworkRequests(NetworkRequests::BlockHeadersRequest {
+            self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                NetworkRequests::BlockHeadersRequest {
                     hashes: locator,
                     peer_id: peer.peer_info.id.clone(),
-                })
-                .with_span_context(),
-            );
+                },
+            ));
             return Some(peer);
         }
         None

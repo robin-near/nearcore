@@ -107,7 +107,7 @@ crossbeam-channel = "0.5"
 csv = "1.1.1"
 curve25519-dalek = "3"
 derive-enum-from-into = "0.1.1"
-derive_more = "0.99.9"
+derive_more = { git = "https://github.com/JelteF/derive_more", rev = "ae8eeb90" }
 dirs = "4"
 easy-ext = "0.2"
 ed25519-dalek = "1"

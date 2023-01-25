@@ -3,3 +3,4 @@ pub mod test_loop;
 
 #[cfg(test)]
 mod examples;
+pub mod futures;

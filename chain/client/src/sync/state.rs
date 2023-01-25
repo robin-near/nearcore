@@ -20,6 +20,7 @@
 //!         here to depend more on local peers instead.
 //!
 
+use near_async::futures::FutureSpawner;
 use near_chain::{near_chain_primitives, Error};
 use near_primitives::state_part::PartId;
 use std::collections::HashMap;
@@ -176,6 +177,7 @@ impl StateSync {
         now: DateTime<Utc>,
         state_parts_task_scheduler: &dyn Fn(ApplyStatePartsRequest),
         state_split_scheduler: &dyn Fn(StateSplitRequest),
+        future_spawner: &dyn FutureSpawner,
     ) -> Result<(bool, bool), near_chain::Error> {
         let mut all_done = true;
         let mut update_sync_status = false;
@@ -423,6 +425,7 @@ impl StateSync {
                     sync_hash,
                     shard_sync_download.clone(),
                     highest_height_peers,
+                    future_spawner,
                 )?;
             }
             update_sync_status |= shard_sync_download.status != old_status;
@@ -576,6 +579,7 @@ impl StateSync {
         sync_hash: CryptoHash,
         shard_sync_download: ShardSyncDownload,
         highest_height_peers: &[HighestHeightPeerInfo],
+        future_spawner: &dyn FutureSpawner,
     ) -> Result<ShardSyncDownload, near_chain::Error> {
         let possible_targets = self.possible_targets(
             me,
@@ -603,15 +607,13 @@ impl StateSync {
                 new_shard_sync_download.downloads[0].last_target =
                     Some(make_account_or_peer_id_or_hash(target.clone()));
                 let run_me = new_shard_sync_download.downloads[0].run_me.clone();
-                near_performance_metrics::actix::spawn(
+
+                future_spawner.spawn(
                     std::any::type_name::<Self>(),
                     self.network_adapter
-                        .send(
-                            PeerManagerMessageRequest::NetworkRequests(
-                                NetworkRequests::StateRequestHeader { shard_id, sync_hash, target },
-                            )
-                            .with_span_context(),
-                        )
+                        .send_async(PeerManagerMessageRequest::NetworkRequests(
+                            NetworkRequests::StateRequestHeader { shard_id, sync_hash, target },
+                        ))
                         .then(move |result| {
                             if let Ok(NetworkResponses::RouteNotFound) =
                                 result.map(|f| f.as_network_response())
@@ -647,29 +649,17 @@ impl StateSync {
                     download.state_requests_count += 1;
                     download.last_target = Some(make_account_or_peer_id_or_hash(target.clone()));
                     let run_me = download.run_me.clone();
-
-                    near_performance_metrics::actix::spawn(
+                    future_spawner.spawn(
                         std::any::type_name::<Self>(),
                         self.network_adapter
-                            .send(
-                                PeerManagerMessageRequest::NetworkRequests(
-                                    NetworkRequests::StateRequestPart {
-                                        shard_id,
-                                        sync_hash,
-                                        part_id: part_id as u64,
-                                        target: target.clone(),
-                                    },
-                                )
-                                .with_span_context(),
-                            )
+                            .send_async(PeerManagerMessageRequest::NetworkRequests(
+                                NetworkRequests::StateRequestHeader { shard_id, sync_hash, target },
+                            ))
                             .then(move |result| {
-                                // TODO: possible optimization - in the current code, even if one of the targets it not present in the network graph
-                                //       (so we keep getting RouteNotFound) - we'll still keep trying to assign parts to it.
-                                //       Fortunately only once every 60 seconds (timeout value).
                                 if let Ok(NetworkResponses::RouteNotFound) =
                                     result.map(|f| f.as_network_response())
                                 {
-                                    // Send a StateRequestPart on the next iteration
+                                    // Send a StateRequestHeader on the next iteration
                                     run_me.store(true, Ordering::SeqCst);
                                 }
                                 future::ready(())
@@ -699,6 +689,7 @@ impl StateSync {
         tracking_shards: Vec<ShardId>,
         state_parts_task_scheduler: &dyn Fn(ApplyStatePartsRequest),
         state_split_scheduler: &dyn Fn(StateSplitRequest),
+        future_spawner: &dyn FutureSpawner,
     ) -> Result<StateSyncResult, near_chain::Error> {
         let _span = tracing::debug_span!(target: "sync", "run", sync = "StateSync").entered();
         debug!(target: "sync", %sync_hash, ?tracking_shards, "syncing state");
@@ -732,6 +723,7 @@ impl StateSync {
             now,
             state_parts_task_scheduler,
             state_split_scheduler,
+            future_spawner,
         )?;
 
         if have_block && all_done {
@@ -878,6 +870,7 @@ mod test {
 
     use actix::System;
     use near_actix_test_utils::run_actix;
+    use near_async::futures::ActixFutureSpawner;
     use near_chain::{test_utils::process_block_sync, BlockProcessingArtifact, Provenance};
 
     use near_epoch_manager::EpochManagerAdapter;
@@ -946,6 +939,7 @@ mod test {
                     vec![0],
                     &apply_parts_fn,
                     &state_split_fn,
+                    &ActixFutureSpawner,
                 )
                 .unwrap();
 

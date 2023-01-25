@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use near_async::messaging::NoopSenderForTest;
 use openssl_probe;
 
 use concurrency::{Ctx, Scope};
@@ -43,7 +44,7 @@ pub fn start_with_config(config: NearConfig, qps_limit: u32) -> anyhow::Result<A
         near_store::db::TestDB::new(),
         config.network_config,
         network.clone(),
-        network.clone(),
+        NoopSenderForTest::new(),
         GenesisId {
             chain_id: config.client_config.chain_id.clone(),
             hash: genesis_hash(&config.client_config.chain_id),

@@ -36,7 +36,7 @@
 //!       relationship, the exact contents of the event messages, and the log output
 //!       during the handling of each event. This is especially useful when debugging
 //!       multi-instance tests.
-//!       
+//!
 //!  - Determinism:
 //!     - Many tests, especially those that involve multiple instances, are most easily
 //!       written by spawning actual actors and threads. This however makes the tests
@@ -61,6 +61,8 @@
 //! then the actual order of execution is B, D, A, E, C.
 pub mod delay_sender;
 pub mod event_handler;
+pub mod futures;
+pub mod multi_instance;
 
 use std::{collections::BinaryHeap, fmt::Debug, sync, time::Duration};
 

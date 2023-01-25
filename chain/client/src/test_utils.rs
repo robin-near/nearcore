@@ -8,11 +8,11 @@ use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, Context};
 use chrono::DateTime;
 use futures::{future, FutureExt};
+use near_async::futures::ActixFutureSpawner;
+use near_async::messaging::{ArcSender, LateBoundSender, Sender};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_chunks::ShardsManager;
-use near_network::shards_manager::{
-    ShardsManagerAdapterForNetwork, ShardsManagerRequestFromNetwork,
-};
+use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_primitives::errors::InvalidTxError;
 use near_primitives::test_utils::create_test_signer;
 use num_rational::Ratio;
@@ -21,6 +21,7 @@ use rand::{thread_rng, Rng};
 use tracing::info;
 
 use crate::{start_view_client, Client, ClientActor, SyncStatus, ViewClientActor};
+use near_async::messaging::SenderWithSpanContextExt;
 use near_chain::chain::{do_apply_chunks, BlockCatchUpRequest, StateSplitRequest};
 use near_chain::test_utils::{
     wait_for_all_blocks_in_processing, wait_for_block_in_processing, KeyValueRuntime,
@@ -32,8 +33,8 @@ use near_chain::{
     RuntimeWithEpochManagerAdapter,
 };
 use near_chain_configs::ClientConfig;
-use near_chunks::adapter::{ShardsManagerAdapterForClient, ShardsManagerRequestFromClient};
-use near_chunks::client::{ClientAdapterForShardsManager, ShardsManagerResponse};
+use near_chunks::adapter::ShardsManagerRequestFromClient;
+use near_chunks::client::ShardsManagerResponse;
 use near_chunks::test_utils::{MockClientAdapterForShardsManager, SynchronousShardsManagerAdapter};
 use near_client_primitives::types::Error;
 #[cfg(feature = "protocol_feature_nep366_delegate_action")]
@@ -41,13 +42,12 @@ use near_crypto::Signer;
 use near_crypto::{InMemorySigner, KeyType, PublicKey};
 use near_network::test_utils::MockPeerManagerAdapter;
 use near_network::types::{
-    AccountOrPeerIdOrHash, HighestHeightPeerInfo, MsgRecipient, PartialEncodedChunkRequestMsg,
+    AccountOrPeerIdOrHash, HighestHeightPeerInfo, PartialEncodedChunkRequestMsg,
     PartialEncodedChunkResponseMsg, PeerInfo, PeerType,
 };
 use near_network::types::{BlockInfo, PeerChainInfo};
 use near_network::types::{
-    ConnectedPeerInfo, FullPeerInfo, NetworkRecipient, NetworkRequests, NetworkResponses,
-    PeerManagerAdapter,
+    ConnectedPeerInfo, FullPeerInfo, NetworkRequests, NetworkResponses, PeerManagerAdapter,
 };
 use near_network::types::{
     NetworkInfo, PeerManagerMessageRequest, PeerManagerMessageResponse, SetChainInfo,
@@ -91,7 +91,7 @@ use crate::adapter::{
 pub struct PeerManagerMock {
     handle: Box<
         dyn FnMut(
-            WithSpanContext<PeerManagerMessageRequest>,
+            PeerManagerMessageRequest,
             &mut actix::Context<Self>,
         ) -> PeerManagerMessageResponse,
     >,
@@ -101,7 +101,7 @@ impl PeerManagerMock {
     fn new(
         f: impl 'static
             + FnMut(
-                WithSpanContext<PeerManagerMessageRequest>,
+                PeerManagerMessageRequest,
                 &mut actix::Context<Self>,
             ) -> PeerManagerMessageResponse,
     ) -> Self {
@@ -113,20 +113,16 @@ impl actix::Actor for PeerManagerMock {
     type Context = actix::Context<Self>;
 }
 
-impl actix::Handler<WithSpanContext<PeerManagerMessageRequest>> for PeerManagerMock {
+impl actix::Handler<PeerManagerMessageRequest> for PeerManagerMock {
     type Result = PeerManagerMessageResponse;
-    fn handle(
-        &mut self,
-        msg: WithSpanContext<PeerManagerMessageRequest>,
-        ctx: &mut Self::Context,
-    ) -> Self::Result {
+    fn handle(&mut self, msg: PeerManagerMessageRequest, ctx: &mut Self::Context) -> Self::Result {
         (self.handle)(msg, ctx)
     }
 }
 
-impl actix::Handler<WithSpanContext<SetChainInfo>> for PeerManagerMock {
+impl actix::Handler<SetChainInfo> for PeerManagerMock {
     type Result = ();
-    fn handle(&mut self, _msg: WithSpanContext<SetChainInfo>, _ctx: &mut Self::Context) {}
+    fn handle(&mut self, _msg: SetChainInfo, _ctx: &mut Self::Context) {}
 }
 
 /// min block production time in milliseconds
@@ -270,7 +266,7 @@ pub fn setup(
     let (shards_manager_addr, _) = start_shards_manager(
         runtime.clone(),
         network_adapter.clone(),
-        Arc::new(ctx.address()),
+        Arc::new(ctx.address()).as_sender_with_span_context(),
         Some(account_id.clone()),
         store.clone(),
         config.chunk_request_retry_period,
@@ -411,7 +407,7 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
     >,
     transaction_validity_period: NumBlocks,
 ) -> ActorHandlesForTesting {
-    let network_adapter = Arc::new(NetworkRecipient::default());
+    let network_adapter = Arc::new(LateBoundSender::default());
     let mut vca: Option<Addr<ViewClientActor>> = None;
     let mut sma: Option<Arc<dyn ShardsManagerAdapterForTest>> = None;
     let client_addr = ClientActor::create(|ctx: &mut Context<ClientActor>| {
@@ -438,10 +434,10 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
     let client_addr1 = client_addr.clone();
 
     let network_actor =
-        PeerManagerMock::new(move |msg, ctx| peermanager_mock(&msg.msg, ctx, client_addr1.clone()))
+        PeerManagerMock::new(move |msg, ctx| peermanager_mock(&msg, ctx, client_addr1.clone()))
             .start();
 
-    network_adapter.set_recipient(network_actor);
+    network_adapter.set_sender(Arc::new(network_actor));
 
     ActorHandlesForTesting {
         client_actor: client_addr,
@@ -682,7 +678,6 @@ pub fn setup_mock_all_validators(
             let client_addr = ctx.address();
             let _account_id = account_id.clone();
             let pm = PeerManagerMock::new(move |msg, _ctx| {
-                let msg = msg.msg;
                 // Note: this `.wait` will block until all `ClientActors` are created.
                 let connectors1 = connectors1.wait();
                 let mut guard = network_mock1.write().unwrap();
@@ -783,10 +778,7 @@ pub fn setup_mock_all_validators(
                                 target.account_id.as_ref().map(|s| s.clone()),
                                 drop_chunks,
                                 |c| {
-                                    c.process_partial_encoded_chunk_request(
-                                        request.clone(),
-                                        my_address,
-                                    )
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest { partial_encoded_chunk_request: request.clone(), route_back: my_address });
                                 },
                             );
                         }
@@ -797,10 +789,7 @@ pub fn setup_mock_all_validators(
                                 route_back,
                                 drop_chunks,
                                 |c| {
-                                    c.process_partial_encoded_chunk_response(
-                                        response.clone(),
-                                        Instant::now(),
-                                    )
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse { partial_encoded_chunk_response: response.clone(), received_time: Instant::now() });
                                 },
                             );
                         }
@@ -814,9 +803,7 @@ pub fn setup_mock_all_validators(
                                 account_id.clone(),
                                 drop_chunks,
                                 |c| {
-                                    c.process_partial_encoded_chunk(
-                                        partial_encoded_chunk.clone().into(),
-                                    )
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(partial_encoded_chunk.clone().into()));
                                 },
                             );
                         }
@@ -826,7 +813,9 @@ pub fn setup_mock_all_validators(
                                 validators_clone2.iter().cloned().enumerate(),
                                 account_id.clone(),
                                 drop_chunks,
-                                |c| c.process_partial_encoded_chunk_forward(forward.clone()),
+                                |c| {
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(forward.clone()));
+                                }
                             );
                         }
                         NetworkRequests::BlockRequest { hash, peer_id } => {
@@ -1062,8 +1051,6 @@ pub fn setup_mock_all_validators(
                 resp
             })
             .start();
-            let network_adapter = NetworkRecipient::default();
-            network_adapter.set_recipient(pm);
             let (block, client, view_client_addr, shards_manager_adapter) = setup(
                 vs,
                 epoch_length,
@@ -1074,7 +1061,7 @@ pub fn setup_mock_all_validators(
                 enable_doomslug,
                 archive1[index],
                 epoch_sync_enabled1[index],
-                Arc::new(network_adapter),
+                Arc::new(pm),
                 10000,
                 genesis_time,
                 ctx,
@@ -1198,7 +1185,7 @@ pub fn setup_client(
 
 pub fn setup_synchronous_shards_manager(
     account_id: Option<AccountId>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    client_adapter: ArcSender<ShardsManagerResponse>,
     network_adapter: Arc<dyn PeerManagerAdapter>,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     chain_genesis: &ChainGenesis,
@@ -1235,7 +1222,7 @@ pub fn setup_client_with_synchronous_shards_manager(
     account_id: Option<AccountId>,
     enable_doomslug: bool,
     network_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    client_adapter: ArcSender<ShardsManagerResponse>,
     chain_genesis: ChainGenesis,
     rng_seed: RngSeed,
     archive: bool,
@@ -1267,22 +1254,20 @@ pub fn setup_client_with_synchronous_shards_manager(
 
 /// A combined trait bound for both the client side and network side of the ShardsManager API.
 pub trait ShardsManagerAdapterForTest:
-    ShardsManagerAdapterForClient + ShardsManagerAdapterForNetwork
+    Sender<ShardsManagerRequestFromClient> + Sender<ShardsManagerRequestFromNetwork>
 {
-    fn for_client(&self) -> Arc<dyn ShardsManagerAdapterForClient>;
-    fn for_network(&self) -> Arc<dyn ShardsManagerAdapterForNetwork>;
+    fn for_client(&self) -> ArcSender<ShardsManagerRequestFromClient>;
+    fn for_network(&self) -> ArcSender<ShardsManagerRequestFromNetwork>;
 }
 
 impl<
-        A: MsgRecipient<ShardsManagerRequestFromClient>
-            + MsgRecipient<ShardsManagerRequestFromNetwork>
-            + Clone,
+        A: Sender<ShardsManagerRequestFromClient> + Sender<ShardsManagerRequestFromNetwork> + Clone,
     > ShardsManagerAdapterForTest for A
 {
-    fn for_client(&self) -> Arc<dyn ShardsManagerAdapterForClient> {
+    fn for_client(&self) -> ArcSender<ShardsManagerRequestFromClient> {
         Arc::new(self.clone())
     }
-    fn for_network(&self) -> Arc<dyn ShardsManagerAdapterForNetwork> {
+    fn for_network(&self) -> ArcSender<ShardsManagerRequestFromNetwork> {
         Arc::new(self.clone())
     }
 }
@@ -1591,8 +1576,10 @@ impl TestEnv {
                     },
                 ) = request
                 {
-                    self.shards_manager(&account_id).process_partial_encoded_chunk(
-                        PartialEncodedChunk::from(partial_encoded_chunk),
+                    self.shards_manager(&account_id).send(
+                        ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(
+                            PartialEncodedChunk::from(partial_encoded_chunk),
+                        ),
                     );
                 }
             }
@@ -1620,8 +1607,12 @@ impl TestEnv {
             let target_id = self.account_to_client_index[&target.account_id.unwrap()];
             let response = self.get_partial_encoded_chunk_response(target_id, request);
             if let Some(response) = response {
-                self.shards_manager_adapters[id]
-                    .process_partial_encoded_chunk_response(response, Instant::now());
+                self.shards_manager_adapters[id].send(
+                    ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse {
+                        partial_encoded_chunk_response: response,
+                        received_time: Instant::now(),
+                    },
+                );
             }
         } else {
             panic!("The request is not a PartialEncodedChunk request {:?}", request);
@@ -1633,8 +1624,12 @@ impl TestEnv {
         id: usize,
         request: PartialEncodedChunkRequestMsg,
     ) -> Option<PartialEncodedChunkResponseMsg> {
-        self.shards_manager_adapters[id]
-            .process_partial_encoded_chunk_request(request.clone(), CryptoHash::default());
+        self.shards_manager_adapters[id].send(
+            ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {
+                partial_encoded_chunk_request: request.clone(),
+                route_back: CryptoHash::default(),
+            },
+        );
         let response = self.network_adapters[id].pop_most_recent();
         match response {
             Some(PeerManagerMessageRequest::NetworkRequests(
@@ -2083,6 +2078,7 @@ pub fn run_catchup(
             &block_catch_up,
             &state_split,
             Arc::new(|_| {}),
+            &ActixFutureSpawner,
         )?;
         let mut catchup_done = true;
         for msg in block_messages.write().unwrap().drain(..) {

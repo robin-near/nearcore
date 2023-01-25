@@ -2,6 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use crate::messaging;
 
+use super::multi_instance::IndexedDelaySender;
+
 /// Interface to send an event with a delay. It implements Sender for any
 /// message that can be converted into this event type.
 pub struct DelaySender<Event> {
@@ -40,6 +42,12 @@ impl<Event> DelaySender<Event> {
         Event: From<InnerEvent> + 'static,
     {
         DelaySender { im: Arc::new(NarrowingDelaySender { sender: self }) }
+    }
+}
+
+impl<Event: 'static> DelaySender<(usize, Event)> {
+    pub fn for_index(self, index: usize) -> DelaySender<Event> {
+        DelaySender { im: Arc::new(IndexedDelaySender::new(self.im, index)) }
     }
 }
 

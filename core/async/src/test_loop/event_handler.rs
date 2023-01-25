@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::delay_sender::DelaySender;
+use super::{delay_sender::DelaySender, multi_instance::IndexedLoopEventHandler};
 
 /// An event handler registered on a test loop. Each event handler usually
 /// handles only some events, so we will usually have multiple event handlers
@@ -22,6 +22,10 @@ pub trait LoopEventHandlerHelpers<Data, Event> {
     /// Adapts this handler to a handler whose data is a superset of our data
     /// and whose event is a superset of our event.
     fn widen(self) -> WideningEventHandler<Data, Event>;
+
+    /// Adapts this handler to a handler whose data is a vector of our data,
+    /// and whose event is a is (index, our event), for a specific index.
+    fn for_index(self, index: usize) -> IndexedLoopEventHandler<Data, Event>;
 }
 
 impl<Data, Event, T: LoopEventHandler<Data, Event> + Sized + 'static>
@@ -29,6 +33,10 @@ impl<Data, Event, T: LoopEventHandler<Data, Event> + Sized + 'static>
 {
     fn widen(self) -> WideningEventHandler<Data, Event> {
         WideningEventHandler { inner: Box::new(self) }
+    }
+
+    fn for_index(self, index: usize) -> IndexedLoopEventHandler<Data, Event> {
+        IndexedLoopEventHandler::new(Box::new(self), index)
     }
 }
 

@@ -1,5 +1,6 @@
 use actix::{Actor, Addr};
 use anyhow::{anyhow, bail, Context};
+use near_async::messaging::LateBoundSender;
 use near_chain::test_utils::{KeyValueRuntime, ValidatorSchedule};
 use near_chain::types::RuntimeAdapter;
 use near_chain::{Chain, ChainGenesis};
@@ -68,7 +69,7 @@ fn setup_network_node(
         hash: genesis_block.header().hash().clone(),
     };
     let network_adapter = Arc::new(NetworkRecipient::default());
-    let shards_manager_adapter = Arc::new(NetworkRecipient::default());
+    let shards_manager_adapter = Arc::new(LateBoundSender::default());
     let adv = near_client::adversarial::Controls::default();
     let client_actor = start_client(
         client_config.clone(),
@@ -100,7 +101,7 @@ fn setup_network_node(
         runtime.store().clone(),
         client_config.chunk_request_retry_period,
     );
-    shards_manager_adapter.set_recipient(shards_manager_actor);
+    shards_manager_adapter.set_sender(Arc::new(shards_manager_actor));
     let peer_manager = PeerManagerActor::spawn(
         time::Clock::real(),
         db.clone(),

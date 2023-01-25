@@ -9,6 +9,8 @@ edition.workspace = true
 actix.workspace = true
 borsh.workspace = true
 chrono.workspace = true
+derive_more.workspace = true
+derive-enum-from-into.workspace = true
 futures.workspace = true
 lru.workspace = true
 once_cell.workspace = true
@@ -16,6 +18,7 @@ rand.workspace = true
 reed-solomon-erasure.workspace = true
 tracing.workspace = true
 
+near-async = { path = "../../core/async" }
 near-crypto = { path = "../../core/crypto" }
 near-primitives = { path = "../../core/primitives" }
 near-chunks-primitives = { path = "../chunks-primitives" }
