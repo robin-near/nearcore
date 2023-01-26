@@ -25,6 +25,8 @@ fn make_peer_manager(
     boot_nodes: Vec<(&str, u16)>,
     peer_max_count: u32,
 ) -> actix::Addr<PeerManagerActor> {
+    use near_async::messaging::NoopSenderForTest;
+
     let mut config = config::NetworkConfig::from_seed(seed, port);
     config.peer_store.boot_nodes = convert_boot_nodes(boot_nodes);
     config.max_num_peers = peer_max_count;
@@ -36,7 +38,7 @@ fn make_peer_manager(
         near_store::db::TestDB::new(),
         config,
         Arc::new(near_network::client::Noop),
-        Arc::new(near_network::client::Noop),
+        NoopSenderForTest::new(),
         GenesisId::default(),
     )
     .unwrap()

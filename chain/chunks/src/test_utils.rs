@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use actix::MailboxError;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use near_async::messaging::Sender;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_network::types::MsgRecipient;
 use near_primitives::receipt::Receipt;
@@ -408,31 +409,15 @@ pub struct SynchronousShardsManagerAdapter {
     pub shards_manager: Arc<Mutex<ShardsManager>>,
 }
 
-impl MsgRecipient<ShardsManagerRequestFromClient> for SynchronousShardsManagerAdapter {
-    fn send(
-        &self,
-        msg: ShardsManagerRequestFromClient,
-    ) -> BoxFuture<'static, Result<(), MailboxError>> {
-        self.do_send(msg);
-        futures::future::ok(()).boxed()
-    }
-
-    fn do_send(&self, msg: ShardsManagerRequestFromClient) {
+impl Sender<ShardsManagerRequestFromClient> for SynchronousShardsManagerAdapter {
+    fn send(&self, msg: ShardsManagerRequestFromClient) {
         let mut shards_manager = self.shards_manager.lock().unwrap();
         shards_manager.handle_client_request(msg);
     }
 }
 
-impl MsgRecipient<ShardsManagerRequestFromNetwork> for SynchronousShardsManagerAdapter {
-    fn send(
-        &self,
-        msg: ShardsManagerRequestFromNetwork,
-    ) -> BoxFuture<'static, Result<(), MailboxError>> {
-        self.do_send(msg);
-        futures::future::ok(()).boxed()
-    }
-
-    fn do_send(&self, msg: ShardsManagerRequestFromNetwork) {
+impl Sender<ShardsManagerRequestFromNetwork> for SynchronousShardsManagerAdapter {
+    fn send(&self, msg: ShardsManagerRequestFromNetwork) {
         let mut shards_manager = self.shards_manager.lock().unwrap();
         shards_manager.handle_network_request(msg);
     }

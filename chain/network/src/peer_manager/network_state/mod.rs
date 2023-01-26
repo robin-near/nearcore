@@ -13,13 +13,14 @@ use crate::peer_manager::peer_manager_actor::Event;
 use crate::peer_manager::peer_store;
 use crate::private_actix::RegisterPeerError;
 use crate::routing::route_back_cache::RouteBackCache;
-use crate::shards_manager::ShardsManagerAdapterForNetwork;
+use crate::shards_manager::ShardsManagerRequestFromNetwork;
 use crate::stats::metrics;
 use crate::store;
 use crate::tcp;
 use crate::time;
 use crate::types::{ChainInfo, PeerType, ReasonForBan};
 use arc_swap::ArcSwap;
+use near_async::messaging::ArcSender;
 use near_primitives::block::GenesisId;
 use near_primitives::hash::CryptoHash;
 use near_primitives::network::PeerId;
@@ -89,7 +90,7 @@ pub(crate) struct NetworkState {
     /// GenesisId of the chain.
     pub genesis_id: GenesisId,
     pub client: Arc<dyn client::Client>,
-    pub shards_manager_adapter: Arc<dyn ShardsManagerAdapterForNetwork>,
+    pub shards_manager_adapter: ArcSender<ShardsManagerRequestFromNetwork>,
 
     /// Network-related info about the chain.
     pub chain_info: ArcSwap<Option<ChainInfo>>,
@@ -150,7 +151,7 @@ impl NetworkState {
         config: config::VerifiedConfig,
         genesis_id: GenesisId,
         client: Arc<dyn client::Client>,
-        shards_manager_adapter: Arc<dyn ShardsManagerAdapterForNetwork>,
+        shards_manager_adapter: ArcSender<ShardsManagerRequestFromNetwork>,
         whitelist_nodes: Vec<WhitelistNode>,
     ) -> Self {
         Self {

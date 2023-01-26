@@ -5,6 +5,7 @@ use actix::{Actor, Addr};
 use actix_rt::ArbiterHandle;
 use actix_web;
 use anyhow::Context;
+use near_async::messaging::LateBoundSender;
 use near_chain::{Chain, ChainGenesis};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_client::{start_client, start_view_client, ClientActor, ConfigUpdater, ViewClientActor};
@@ -181,7 +182,7 @@ pub fn start_with_config_and_synchronization(
 
     let node_id = config.network_config.node_id();
     let network_adapter = Arc::new(NetworkRecipient::default());
-    let shards_manager_adapter = Arc::new(NetworkRecipient::default());
+    let shards_manager_adapter = Arc::new(LateBoundSender::default());
     let client_adapter_for_shards_manager = Arc::new(NetworkRecipient::default());
     let adv = near_client::adversarial::Controls::new(config.client_config.archive);
 
@@ -215,7 +216,7 @@ pub fn start_with_config_and_synchronization(
         store.get_store(Temperature::Hot),
         config.client_config.chunk_request_retry_period,
     );
-    shards_manager_adapter.set_recipient(shards_manager_actor.clone());
+    shards_manager_adapter.set_sender(Arc::new(shards_manager_actor.clone()));
 
     #[allow(unused_mut)]
     let mut rpc_servers = Vec::new();

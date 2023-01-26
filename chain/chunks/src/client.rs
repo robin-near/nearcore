@@ -37,7 +37,7 @@ pub trait ClientAdapterForShardsManager: Send + Sync + 'static {
     );
 }
 
-#[derive(Message)]
+#[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub enum ShardsManagerResponse {
     ChunkCompleted { partial_chunk: PartialEncodedChunk, shard_chunk: Option<ShardChunk> },

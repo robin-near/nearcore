@@ -139,6 +139,7 @@ pub mod client;
 pub mod logic;
 pub mod metrics;
 pub mod shards_manager_actor;
+mod test_loop;
 pub mod test_utils;
 
 const CHUNK_PRODUCER_BLACKLIST_SIZE: usize = 100;
@@ -2267,6 +2268,8 @@ impl ShardsManager {
 
 #[cfg(test)]
 mod test {
+
+    mod basic;
 
     use assert_matches::assert_matches;
     use near_chain::types::EpochManagerAdapter;
