@@ -7,6 +7,7 @@ use crate::routing::routing_table_view::RoutingTableInfo;
 use crate::time;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use near_async::messaging::Sender;
 use near_crypto::PublicKey;
 use near_o11y::WithSpanContext;
 use near_primitives::block::{ApprovalMessage, Block, GenesisId};
@@ -390,62 +391,8 @@ pub enum NetworkAdversarialMessage {
     AdvCheckStorageConsistency,
 }
 
-pub trait MsgRecipient<M: actix::Message>: Send + Sync + 'static {
-    fn send(&self, msg: M) -> BoxFuture<'static, Result<M::Result, actix::MailboxError>>;
-    fn do_send(&self, msg: M);
-}
-
-impl<A, M> MsgRecipient<M> for actix::Addr<A>
-where
-    M: actix::Message + Send + 'static,
-    M::Result: Send,
-    A: actix::Actor + actix::Handler<M>,
-    A::Context: actix::dev::ToEnvelope<A, M>,
-{
-    fn send(&self, msg: M) -> BoxFuture<'static, Result<M::Result, actix::MailboxError>> {
-        actix::Addr::send(self, msg).boxed()
-    }
-    fn do_send(&self, msg: M) {
-        actix::Addr::do_send(self, msg)
-    }
-}
-pub trait PeerManagerAdapter:
-    MsgRecipient<WithSpanContext<PeerManagerMessageRequest>>
-    + MsgRecipient<WithSpanContext<SetChainInfo>>
-{
-}
-impl<
-        A: MsgRecipient<WithSpanContext<PeerManagerMessageRequest>>
-            + MsgRecipient<WithSpanContext<SetChainInfo>>,
-    > PeerManagerAdapter for A
-{
-}
-
-// TODO: rename to a more generic name.
-pub struct NetworkRecipient<T> {
-    recipient: OnceCell<Arc<T>>,
-}
-
-impl<T> Default for NetworkRecipient<T> {
-    fn default() -> Self {
-        Self { recipient: OnceCell::default() }
-    }
-}
-
-impl<T> NetworkRecipient<T> {
-    pub fn set_recipient(&self, t: T) {
-        self.recipient.set(Arc::new(t)).ok().expect("cannot set recipient twice");
-    }
-}
-
-impl<M: actix::Message, T: MsgRecipient<M>> MsgRecipient<M> for NetworkRecipient<T> {
-    fn send(&self, msg: M) -> BoxFuture<'static, Result<M::Result, actix::MailboxError>> {
-        self.recipient.wait().send(msg)
-    }
-    fn do_send(&self, msg: M) {
-        self.recipient.wait().do_send(msg);
-    }
-}
+pub trait PeerManagerAdapter: Sender<PeerManagerMessageRequest> + Sender<SetChainInfo> {}
+impl<A: Sender<PeerManagerMessageRequest> + Sender<SetChainInfo>> PeerManagerAdapter for A {}
 
 #[cfg(test)]
 mod tests {

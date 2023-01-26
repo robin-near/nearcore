@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use near_async::test_loop::CaptureEvents;
+use near_async::{messaging::NoopSenderForTest, test_loop::CaptureEvents};
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 
 use crate::{
@@ -35,17 +35,17 @@ fn test_basic() {
     let shards_manager = ShardsManager::new(
         Some(fixture.mock_chunk_part_owner.clone()),
         fixture.mock_runtime.clone(), // TODO: make thinner
-        fixture.mock_network.clone(), // TODO: replace with sender
-        Arc::new(builder.sender()),
+        NoopSenderForTest::new(),
+        builder.sender(),
         fixture.chain_store.new_read_only_chunks_store(),
         fixture.mock_chain_head.clone(),
         fixture.mock_chain_head.clone(),
     );
     let test_data = TestData { shards_manager, client_events: vec![] };
     let mut test = builder.build(test_data);
-    test.register_handler(Box::new(ForwardClientRequestToShardsManager {}));
-    test.register_handler(Box::new(ForwardNetworkRequestToShardsManager {}));
-    test.register_handler(Box::new(CaptureEvents::<ShardsManagerResponse>::new()));
+    test.register_handler(ForwardClientRequestToShardsManager);
+    test.register_handler(ForwardNetworkRequestToShardsManager);
+    test.register_handler(CaptureEvents::<ShardsManagerResponse>::new());
     test.add_event(TestEvent::NetworkToShardsManager(
         ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(
             fixture.make_partial_encoded_chunk(&fixture.all_part_ords),

@@ -1,21 +1,15 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, RwLock};
-
-use actix::MailboxError;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use near_async::messaging::Sender;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
-use near_network::types::MsgRecipient;
 use near_primitives::receipt::Receipt;
 use near_primitives::test_utils::create_test_signer;
 use near_primitives::time::Clock;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, RwLock};
 
 use near_chain::test_utils::{KeyValueRuntime, ValidatorSchedule};
 use near_chain::types::{EpochManagerAdapter, RuntimeAdapter, Tip};
 use near_chain::{Chain, ChainStore};
 use near_network::test_utils::MockPeerManagerAdapter;
-use near_o11y::WithSpanContext;
 use near_primitives::block::BlockHeader;
 use near_primitives::hash::{self, CryptoHash};
 use near_primitives::merkle::{self, MerklePath};

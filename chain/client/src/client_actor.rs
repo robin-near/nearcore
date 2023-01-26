@@ -331,11 +331,10 @@ impl Handler<WithSpanContext<NetworkAdversarialMessage>> for ClientActor {
                     }
                     let block = block.expect("block should exist after produced");
                     info!(target: "adversary", "Producing {} block out of {}, height = {}", blocks_produced, num_blocks, height);
-                    this.network_adapter.do_send(
+                    this.network_adapter.send(
                         PeerManagerMessageRequest::NetworkRequests(
                             NetworkRequests::Block { block: block.clone() },
                         )
-                        .with_span_context(),
                     );
                     let _ = this.client.start_process_block(
                         block.into(),
@@ -842,17 +841,14 @@ impl ClientActor {
                 &self.node_id,
                 &next_epoch_id,
             );
-            self.network_adapter.do_send(
-                PeerManagerMessageRequest::NetworkRequests(NetworkRequests::AnnounceAccount(
-                    AnnounceAccount {
-                        account_id: validator_signer.validator_id().clone(),
-                        peer_id: self.node_id.clone(),
-                        epoch_id: next_epoch_id,
-                        signature,
-                    },
-                ))
-                .with_span_context(),
-            );
+            self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                NetworkRequests::AnnounceAccount(AnnounceAccount {
+                    account_id: validator_signer.validator_id().clone(),
+                    peer_id: self.node_id.clone(),
+                    epoch_id: next_epoch_id,
+                    signature,
+                }),
+            ));
         }
     }
 
@@ -1203,12 +1199,9 @@ impl ClientActor {
         let _span = tracing::debug_span!(target: "client", "produce_block", next_height).entered();
         if let Some(block) = self.client.produce_block(next_height)? {
             // If we produced the block, send it out before we apply the block.
-            self.network_adapter.do_send(
-                PeerManagerMessageRequest::NetworkRequests(NetworkRequests::Block {
-                    block: block.clone(),
-                })
-                .with_span_context(),
-            );
+            self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                NetworkRequests::Block { block: block.clone() },
+            ));
             // We’ve produced the block so that counts as validated block.
             let block = MaybeValidated::from_validated(block);
             let res = self.client.start_process_block(

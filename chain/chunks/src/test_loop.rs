@@ -13,8 +13,8 @@ use near_primitives::{hash::CryptoHash, types::AccountId};
 
 use crate::{adapter::ShardsManagerRequestFromClient, ShardsManager};
 
-pub struct ForwardClientRequestToShardsManager {}
-pub struct ForwardNetworkRequestToShardsManager {}
+pub struct ForwardClientRequestToShardsManager;
+pub struct ForwardNetworkRequestToShardsManager;
 
 impl<Data: AsMut<ShardsManager>, Event: TryIntoOrSelf<ShardsManagerRequestFromClient>>
     LoopEventHandler<Data, Event> for ForwardClientRequestToShardsManager
@@ -44,74 +44,90 @@ impl<Data: AsMut<ShardsManager>, Event: TryIntoOrSelf<ShardsManagerRequestFromNe
     }
 }
 
-pub struct RouteShardsManagerNetworkMessages {
-    incoming_message_sender: ArcSender<(usize, ShardsManagerRequestFromNetwork)>,
+pub struct RouteShardsManagerNetworkMessages<
+    Event: From<ShardsManagerRequestFromNetwork> + Send + 'static,
+> {
+    incoming_message_sender: ArcSender<(usize, Event)>,
+}
+
+impl<Event: From<ShardsManagerRequestFromNetwork> + Send + 'static>
+    RouteShardsManagerNetworkMessages<Event>
+{
+    pub fn new(incoming_message_sender: ArcSender<(usize, Event)>) -> Self {
+        Self { incoming_message_sender }
+    }
 }
 
 impl<
         Data: AsRef<AccountId>,
         Event: TryIntoOrSelf<PeerManagerMessageRequest>
             + From<PeerManagerMessageRequest>
-            + From<ShardsManagerRequestFromNetwork>,
-    > LoopEventHandler<Vec<Data>, (usize, Event)> for RouteShardsManagerNetworkMessages
+            + From<ShardsManagerRequestFromNetwork>
+            + Send
+            + 'static,
+    > LoopEventHandler<Vec<Data>, (usize, Event)> for RouteShardsManagerNetworkMessages<Event>
 {
     fn handle(&mut self, event: (usize, Event), data: &mut Vec<Data>) -> Option<(usize, Event)> {
         let (idx, event) = event;
         match event.try_into_or_self() {
-            Ok(message) => match message {
-                PeerManagerMessageRequest::NetworkRequests(request) => match request {
-                    NetworkRequests::PartialEncodedChunkRequest { target, request, .. } => {
-                        let target_idx = data.index_for_account(&target.account_id.unwrap());
-                        self.incoming_message_sender.send((
+            Ok(message) => {
+                match message {
+                    PeerManagerMessageRequest::NetworkRequests(request) => match request {
+                        NetworkRequests::PartialEncodedChunkRequest { target, request, .. } => {
+                            let target_idx = data.index_for_account(&target.account_id.unwrap());
+                            self.incoming_message_sender.send((
                             target_idx,
                             ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {
                                 partial_encoded_chunk_request: request,
                                 route_back: CryptoHash::hash_bytes(data[idx].as_ref().as_bytes()),
-                            },
+                            }.into(),
                         ));
-                        None
-                    }
-                    NetworkRequests::PartialEncodedChunkResponse { route_back, response } => {
-                        let target_idx = data.index_for_hash(route_back);
-                        self.incoming_message_sender.send((
+                            None
+                        }
+                        NetworkRequests::PartialEncodedChunkResponse { route_back, response } => {
+                            let target_idx = data.index_for_hash(route_back);
+                            self.incoming_message_sender.send((
                             target_idx,
                             ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse {
                                 partial_encoded_chunk_response: response,
                                 received_time: Instant::now(), // TODO: use clock
-                            },
+                            }.into(),
                         ));
-                        None
-                    }
-                    NetworkRequests::PartialEncodedChunkMessage {
-                        account_id,
-                        partial_encoded_chunk,
-                    } => {
-                        let target_idx = data.index_for_account(&account_id);
-                        self.incoming_message_sender.send((
-                            target_idx,
-                            ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(
-                                partial_encoded_chunk.into(),
-                            ),
-                        ));
-                        None
-                    }
-                    NetworkRequests::PartialEncodedChunkForward { account_id, forward } => {
-                        let target_idx = data.index_for_account(&account_id);
-                        self.incoming_message_sender.send((
-                            target_idx,
-                            ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(
-                                forward,
-                            ),
-                        ));
-                        None
-                    }
-                    other_message => Some((
-                        idx,
-                        PeerManagerMessageRequest::NetworkRequests(other_message).into(),
-                    )),
-                },
-                message => Some((idx, message.into())),
-            },
+                            None
+                        }
+                        NetworkRequests::PartialEncodedChunkMessage {
+                            account_id,
+                            partial_encoded_chunk,
+                        } => {
+                            let target_idx = data.index_for_account(&account_id);
+                            self.incoming_message_sender.send((
+                                target_idx,
+                                ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(
+                                    partial_encoded_chunk.into(),
+                                )
+                                .into(),
+                            ));
+                            None
+                        }
+                        NetworkRequests::PartialEncodedChunkForward { account_id, forward } => {
+                            let target_idx = data.index_for_account(&account_id);
+                            self.incoming_message_sender.send((
+                                target_idx,
+                                ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(
+                                    forward,
+                                )
+                                .into(),
+                            ));
+                            None
+                        }
+                        other_message => Some((
+                            idx,
+                            PeerManagerMessageRequest::NetworkRequests(other_message).into(),
+                        )),
+                    },
+                    message => Some((idx, message.into())),
+                }
+            }
             Err(event) => Some((idx, event)),
         }
     }

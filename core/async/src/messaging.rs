@@ -8,18 +8,16 @@ pub trait Sender<M: Send + 'static>: Send + Sync + 'static {
 
 pub type ArcSender<M> = Arc<dyn Sender<M>>;
 
-struct SenderWithSpanContext<M: actix::Message + Send + 'static> {
-    sender: Arc<dyn Sender<WithSpanContext<M>>>,
+pub struct SenderWithSpanContext<T: Send + 'static> {
+    sender: Arc<T>,
 }
 
-pub trait SenderWithSpanContextExt<M> {
-    fn as_sender_with_span_context(self) -> ArcSender<M>;
+pub trait SenderWithSpanContextExt<T: Send + 'static> {
+    fn as_sender_with_span_context(self) -> Arc<SenderWithSpanContext<T>>;
 }
 
-impl<M: actix::Message + Send + 'static, A: Sender<WithSpanContext<M>>> SenderWithSpanContextExt<M>
-    for Arc<A>
-{
-    fn as_sender_with_span_context(self) -> ArcSender<M> {
+impl<T: Send + Sync + 'static> SenderWithSpanContextExt<T> for Arc<T> {
+    fn as_sender_with_span_context(self) -> Arc<SenderWithSpanContext<T>> {
         Arc::new(SenderWithSpanContext { sender: self })
     }
 }
@@ -36,7 +34,9 @@ where
     }
 }
 
-impl<M: actix::Message + Send + 'static> Sender<M> for SenderWithSpanContext<M> {
+impl<M: actix::Message + Send + 'static, T: Sender<WithSpanContext<M>>> Sender<M>
+    for SenderWithSpanContext<T>
+{
     fn send(&self, message: M) {
         self.sender.send(message.with_span_context())
     }

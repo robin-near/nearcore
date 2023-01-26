@@ -8,7 +8,7 @@ use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, Context};
 use chrono::DateTime;
 use futures::{future, FutureExt};
-use near_async::messaging::{ArcSender, Sender};
+use near_async::messaging::{ArcSender, LateBoundSender, Sender};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_chunks::ShardsManager;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
@@ -44,8 +44,7 @@ use near_network::types::{
 };
 use near_network::types::{BlockInfo, PeerChainInfo};
 use near_network::types::{
-    ConnectedPeerInfo, FullPeerInfo, NetworkRecipient, NetworkRequests, NetworkResponses,
-    PeerManagerAdapter,
+    ConnectedPeerInfo, FullPeerInfo, NetworkRequests, NetworkResponses, PeerManagerAdapter,
 };
 use near_network::types::{
     NetworkInfo, PeerManagerMessageRequest, PeerManagerMessageResponse, SetChainInfo,
@@ -86,7 +85,7 @@ use crate::adapter::{
 pub struct PeerManagerMock {
     handle: Box<
         dyn FnMut(
-            WithSpanContext<PeerManagerMessageRequest>,
+            PeerManagerMessageRequest,
             &mut actix::Context<Self>,
         ) -> PeerManagerMessageResponse,
     >,
@@ -96,7 +95,7 @@ impl PeerManagerMock {
     fn new(
         f: impl 'static
             + FnMut(
-                WithSpanContext<PeerManagerMessageRequest>,
+                PeerManagerMessageRequest,
                 &mut actix::Context<Self>,
             ) -> PeerManagerMessageResponse,
     ) -> Self {
@@ -108,20 +107,16 @@ impl actix::Actor for PeerManagerMock {
     type Context = actix::Context<Self>;
 }
 
-impl actix::Handler<WithSpanContext<PeerManagerMessageRequest>> for PeerManagerMock {
+impl actix::Handler<PeerManagerMessageRequest> for PeerManagerMock {
     type Result = PeerManagerMessageResponse;
-    fn handle(
-        &mut self,
-        msg: WithSpanContext<PeerManagerMessageRequest>,
-        ctx: &mut Self::Context,
-    ) -> Self::Result {
+    fn handle(&mut self, msg: PeerManagerMessageRequest, ctx: &mut Self::Context) -> Self::Result {
         (self.handle)(msg, ctx)
     }
 }
 
-impl actix::Handler<WithSpanContext<SetChainInfo>> for PeerManagerMock {
+impl actix::Handler<SetChainInfo> for PeerManagerMock {
     type Result = ();
-    fn handle(&mut self, _msg: WithSpanContext<SetChainInfo>, _ctx: &mut Self::Context) {}
+    fn handle(&mut self, _msg: SetChainInfo, _ctx: &mut Self::Context) {}
 }
 
 /// min block production time in milliseconds
@@ -406,7 +401,7 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
     >,
     transaction_validity_period: NumBlocks,
 ) -> ActorHandlesForTesting {
-    let network_adapter = Arc::new(NetworkRecipient::default());
+    let network_adapter = Arc::new(LateBoundSender::default());
     let mut vca: Option<Addr<ViewClientActor>> = None;
     let mut sma: Option<Arc<dyn ShardsManagerAdapterForTest>> = None;
     let client_addr = ClientActor::create(|ctx: &mut Context<ClientActor>| {
@@ -433,10 +428,10 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
     let client_addr1 = client_addr.clone();
 
     let network_actor =
-        PeerManagerMock::new(move |msg, ctx| peermanager_mock(&msg.msg, ctx, client_addr1.clone()))
+        PeerManagerMock::new(move |msg, ctx| peermanager_mock(&msg, ctx, client_addr1.clone()))
             .start();
 
-    network_adapter.set_recipient(network_actor);
+    network_adapter.set_sender(Arc::new(network_actor));
 
     ActorHandlesForTesting {
         client_actor: client_addr,
@@ -677,7 +672,6 @@ pub fn setup_mock_all_validators(
             let client_addr = ctx.address();
             let _account_id = account_id.clone();
             let pm = PeerManagerMock::new(move |msg, _ctx| {
-                let msg = msg.msg;
                 // Note: this `.wait` will block until all `ClientActors` are created.
                 let connectors1 = connectors1.wait();
                 let mut guard = network_mock1.write().unwrap();
@@ -1051,8 +1045,6 @@ pub fn setup_mock_all_validators(
                 resp
             })
             .start();
-            let network_adapter = NetworkRecipient::default();
-            network_adapter.set_recipient(pm);
             let (block, client, view_client_addr, shards_manager_adapter) = setup(
                 vs,
                 epoch_length,
@@ -1063,7 +1055,7 @@ pub fn setup_mock_all_validators(
                 enable_doomslug,
                 archive1[index],
                 epoch_sync_enabled1[index],
-                Arc::new(network_adapter),
+                Arc::new(pm),
                 10000,
                 genesis_time,
                 ctx,

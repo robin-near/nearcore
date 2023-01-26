@@ -603,25 +603,11 @@ impl StateSync {
                 new_shard_sync_download.downloads[0].last_target =
                     Some(make_account_or_peer_id_or_hash(target.clone()));
                 let run_me = new_shard_sync_download.downloads[0].run_me.clone();
-                near_performance_metrics::actix::spawn(
-                    std::any::type_name::<Self>(),
-                    self.network_adapter
-                        .send(
-                            PeerManagerMessageRequest::NetworkRequests(
-                                NetworkRequests::StateRequestHeader { shard_id, sync_hash, target },
-                            )
-                            .with_span_context(),
-                        )
-                        .then(move |result| {
-                            if let Ok(NetworkResponses::RouteNotFound) =
-                                result.map(|f| f.as_network_response())
-                            {
-                                // Send a StateRequestHeader on the next iteration
-                                run_me.store(true, Ordering::SeqCst);
-                            }
-                            future::ready(())
-                        }),
-                );
+
+                // TODO: how to respond to RouteNotFound if we don't rely on a response.
+                self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                    NetworkRequests::StateRequestHeader { shard_id, sync_hash, target },
+                ));
             }
             ShardSyncStatus::StateDownloadParts => {
                 // We'll select all the 'highest' peers + validators as candidates (exluding those that gave us timeout in the past).
@@ -648,33 +634,15 @@ impl StateSync {
                     download.last_target = Some(make_account_or_peer_id_or_hash(target.clone()));
                     let run_me = download.run_me.clone();
 
-                    near_performance_metrics::actix::spawn(
-                        std::any::type_name::<Self>(),
-                        self.network_adapter
-                            .send(
-                                PeerManagerMessageRequest::NetworkRequests(
-                                    NetworkRequests::StateRequestPart {
-                                        shard_id,
-                                        sync_hash,
-                                        part_id: part_id as u64,
-                                        target: target.clone(),
-                                    },
-                                )
-                                .with_span_context(),
-                            )
-                            .then(move |result| {
-                                // TODO: possible optimization - in the current code, even if one of the targets it not present in the network graph
-                                //       (so we keep getting RouteNotFound) - we'll still keep trying to assign parts to it.
-                                //       Fortunately only once every 60 seconds (timeout value).
-                                if let Ok(NetworkResponses::RouteNotFound) =
-                                    result.map(|f| f.as_network_response())
-                                {
-                                    // Send a StateRequestPart on the next iteration
-                                    run_me.store(true, Ordering::SeqCst);
-                                }
-                                future::ready(())
-                            }),
-                    );
+                    // TODO: how to respond to RouteNotFound if we don't rely on a response.
+                    self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                        NetworkRequests::StateRequestPart {
+                            shard_id,
+                            sync_hash,
+                            part_id: part_id as u64,
+                            target: target.clone(),
+                        },
+                    ));
                 }
             }
             _ => {}

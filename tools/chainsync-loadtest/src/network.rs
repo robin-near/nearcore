@@ -2,8 +2,8 @@ use crate::concurrency::{Ctx, Once, RateLimiter, Scope, WeakMap};
 use log::info;
 
 use near_network::types::{
-    AccountIdOrPeerTrackingShard, PartialEncodedChunkRequestMsg,
-    PartialEncodedChunkResponseMsg, ReasonForBan, StateResponseInfo,
+    AccountIdOrPeerTrackingShard, PartialEncodedChunkRequestMsg, PartialEncodedChunkResponseMsg,
+    ReasonForBan, StateResponseInfo,
 };
 use near_network::types::{
     FullPeerInfo, NetworkInfo, NetworkRequests, PeerManagerAdapter, PeerManagerMessageRequest,
@@ -127,7 +127,7 @@ impl Network {
                 for peer in peers {
                     // TODO: rate limit per peer.
                     self_.rate_limiter.allow(&ctx).await?;
-                    self_.network_adapter.do_send(
+                    self_.network_adapter.send(
                         PeerManagerMessageRequest::NetworkRequests(new_req(
                             peer.full_peer_info.clone(),
                         ))

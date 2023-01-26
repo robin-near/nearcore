@@ -4,6 +4,9 @@ use std::{
     sync::{self, Arc},
 };
 
+use near_o11y::{testonly::init_test_logger, tracing::log::info};
+use serde::Serialize;
+
 use crate::messaging;
 
 pub struct TestLoop<Data, Event: Debug + Send + 'static> {
@@ -20,16 +23,20 @@ pub struct TestLoopBuilder<Event: Debug + Send + 'static> {
 
 impl<Event: Debug + Send + 'static> TestLoopBuilder<Event> {
     pub fn new() -> Self {
+        init_test_logger();
         let (pending_events_sender, pending_events) = sync::mpsc::sync_channel(65536);
         Self { pending_events, pending_events_sender }
     }
 
-    pub fn sender(&self) -> LoopSender<Event> {
-        LoopSender { event_sender: self.pending_events_sender.clone() }
+    pub fn sender(&self) -> Arc<LoopSender<Event>> {
+        Arc::new(LoopSender { event_sender: self.pending_events_sender.clone() })
     }
 
-    pub fn sender_for_index(&self, index: usize) -> LoopSenderForIndex<Event> {
-        LoopSenderForIndex { inner_sender: self.sender(), index }
+    pub fn sender_for_index(&self, index: usize) -> Arc<LoopSenderForIndex<Event>> {
+        Arc::new(LoopSenderForIndex {
+            inner_sender: LoopSender { event_sender: self.pending_events_sender.clone() },
+            index,
+        })
     }
 
     pub fn build<Data>(self, data: Data) -> TestLoop<Data, Event> {
@@ -48,6 +55,13 @@ pub trait LoopEventHandler<Data, Event> {
     }
 }
 
+#[derive(Serialize)]
+struct EventStartLogOutput {
+    current_index: usize,
+    total_events: usize,
+    current_event: String,
+}
+
 impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
     pub fn new(pending_events: sync::mpsc::Receiver<Event>, data: Data) -> Self {
         Self { data, events: VecDeque::new(), handlers: Vec::new(), pending_events }
@@ -57,16 +71,26 @@ impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
         self.events.push_back(event);
     }
 
-    pub fn register_handler(&mut self, handler: Box<dyn LoopEventHandler<Data, Event>>) {
-        self.handlers.push(handler);
+    pub fn register_handler<T: LoopEventHandler<Data, Event> + 'static>(&mut self, handler: T) {
+        self.handlers.push(Box::new(handler));
     }
 
     pub fn run(&mut self) {
+        let mut event_index = 0;
         'outer: loop {
             while let Ok(event) = self.pending_events.try_recv() {
                 self.events.push_back(event);
             }
             if let Some(event) = self.events.pop_front() {
+                let json_printout = serde_json::to_string(&EventStartLogOutput {
+                    current_index: event_index,
+                    total_events: event_index + self.events.len() + 1,
+                    current_event: format!("{:?}", event),
+                })
+                .unwrap();
+                info!(target: "test_loop", "TEST_LOOP_EVENT_START {}", json_printout);
+                event_index += 1;
+
                 let mut current_event = event;
                 for handler in &mut self.handlers {
                     if let Some(event) = handler.handle(current_event, &mut self.data) {
@@ -140,9 +164,14 @@ impl<
     }
 }
 
-#[derive(Clone)]
 pub struct LoopSender<Event: Send + 'static> {
     event_sender: sync::mpsc::SyncSender<Event>,
+}
+
+impl<Event: Send + 'static> Clone for LoopSender<Event> {
+    fn clone(&self) -> Self {
+        Self { event_sender: self.event_sender.clone() }
+    }
 }
 
 impl<Message: Send + 'static, Event: From<Message> + Send + 'static> messaging::Sender<Message>
@@ -159,8 +188,10 @@ pub struct LoopSenderForIndex<Event: Send + 'static> {
     index: usize,
 }
 
-impl<Message: Send + 'static> messaging::Sender<Message> for LoopSenderForIndex<(usize, Message)> {
+impl<Message: Send + 'static, Event: From<Message> + Send + 'static> messaging::Sender<Message>
+    for LoopSenderForIndex<(usize, Event)>
+{
     fn send(&self, message: Message) {
-        self.inner_sender.send((self.index, message));
+        self.inner_sender.send((self.index, message.into()));
     }
 }

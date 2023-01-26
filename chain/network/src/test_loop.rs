@@ -12,7 +12,9 @@ pub trait SupportsRoutingLookup {
 
 impl<InnerData: AsRef<AccountId>> SupportsRoutingLookup for Vec<InnerData> {
     fn index_for_account(&self, account: &AccountId) -> usize {
-        self.iter().position(|data| data.as_ref() == account).expect("Account not found")
+        self.iter()
+            .position(|data| data.as_ref() == account)
+            .expect(&format!("Account not found: {}", account))
     }
 
     fn index_for_hash(&self, hash: CryptoHash) -> usize {

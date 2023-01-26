@@ -15,5 +15,7 @@ description = "This crate contains the async helpers specific for nearcore"
 actix.workspace = true
 derive_more.workspace = true
 once_cell.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 near-o11y = { path = "../o11y" }
