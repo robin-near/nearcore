@@ -1,3 +1,4 @@
+use near_o11y::{WithSpanContext, WithSpanContextExt};
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 
@@ -6,6 +7,22 @@ pub trait Sender<M: Send + 'static>: Send + Sync + 'static {
 }
 
 pub type ArcSender<M> = Arc<dyn Sender<M>>;
+
+struct SenderWithSpanContext<M: actix::Message + Send + 'static> {
+    sender: Arc<dyn Sender<WithSpanContext<M>>>,
+}
+
+pub trait SenderWithSpanContextExt<M> {
+    fn as_sender_with_span_context(self) -> ArcSender<M>;
+}
+
+impl<M: actix::Message + Send + 'static, A: Sender<WithSpanContext<M>>> SenderWithSpanContextExt<M>
+    for Arc<A>
+{
+    fn as_sender_with_span_context(self) -> ArcSender<M> {
+        Arc::new(SenderWithSpanContext { sender: self })
+    }
+}
 
 impl<M, A> Sender<M> for actix::Addr<A>
 where
@@ -16,6 +33,12 @@ where
 {
     fn send(&self, message: M) {
         actix::Addr::do_send(self, message)
+    }
+}
+
+impl<M: actix::Message + Send + 'static> Sender<M> for SenderWithSpanContext<M> {
+    fn send(&self, message: M) {
+        self.sender.send(message.with_span_context())
     }
 }
 

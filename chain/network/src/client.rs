@@ -1,7 +1,7 @@
 use crate::network_protocol::StateResponseInfo;
-use crate::shards_manager::ShardsManagerRequestFromNetwork;
+
 use crate::types::{NetworkInfo, ReasonForBan};
-use near_async::messaging;
+
 use near_primitives::block::{Approval, Block, BlockHeader};
 use near_primitives::challenge::Challenge;
 use near_primitives::hash::CryptoHash;

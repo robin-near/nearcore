@@ -86,7 +86,7 @@ use std::time::{Duration, Instant};
 
 use adapter::ShardsManagerRequestFromClient;
 use chrono::DateTime;
-use client::ClientAdapterForShardsManager;
+use client::ShardsManagerResponse;
 use logic::{
     decode_encoded_chunk, make_outgoing_receipts_proofs,
     make_partial_encoded_chunk_from_owned_parts_and_needed_receipts, need_part, need_receipt,
@@ -94,6 +94,7 @@ use logic::{
 use metrics::{
     PARTIAL_ENCODED_CHUNK_FORWARD_CACHED_WITHOUT_HEADER, PARTIAL_ENCODED_CHUNK_RESPONSE_DELAY,
 };
+use near_async::messaging::ArcSender;
 use near_chain::chunks_store::ReadOnlyChunksStore;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_primitives::time::Utc;
@@ -487,7 +488,7 @@ pub struct ShardsManager {
 
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     peer_manager_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    client_adapter: ArcSender<ShardsManagerResponse>,
     rs: ReedSolomonWrapper,
 
     encoded_chunks: EncodedChunksCache,
@@ -512,7 +513,7 @@ impl ShardsManager {
         me: Option<AccountId>,
         runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
         network_adapter: Arc<dyn PeerManagerAdapter>,
-        client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+        client_adapter: ArcSender<ShardsManagerResponse>,
         store: ReadOnlyChunksStore,
         initial_chain_head: Tip,
         initial_chain_header_head: Tip,
@@ -1821,8 +1822,10 @@ impl ShardsManager {
 
         if have_all_parts && self.seals_mgr.should_trust_chunk_producer(&chunk_producer) {
             if self.encoded_chunks.mark_chunk_for_inclusion(&chunk_hash) {
-                self.client_adapter
-                    .chunk_header_ready_for_inclusion(header.clone(), chunk_producer);
+                self.client_adapter.send(ShardsManagerResponse::ChunkHeaderReadyForInclusion {
+                    chunk_header: header.clone(),
+                    chunk_producer,
+                });
             }
         }
         // we can safely unwrap here because we already checked that chunk_hash exist in encoded_chunks
@@ -1902,7 +1905,8 @@ impl ShardsManager {
         self.encoded_chunks.remove_from_cache_if_outside_horizon(&chunk_hash);
         self.requested_partial_encoded_chunks.remove(&chunk_hash);
         debug!(target: "chunks", "Completed chunk {:?}", chunk_hash);
-        self.client_adapter.did_complete_chunk(partial_chunk, shard_chunk);
+        self.client_adapter
+            .send(ShardsManagerResponse::ChunkCompleted { partial_chunk, shard_chunk });
     }
 
     /// Try to process chunks in the chunk cache whose previous block hash is `prev_block_hash` and

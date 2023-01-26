@@ -3002,6 +3002,7 @@ version = "0.0.0"
 dependencies = [
  "actix",
  "derive_more 0.99.17 (git+https://github.com/JelteF/derive_more?rev=ae8eeb90)",
+ "near-o11y",
  "once_cell",
 ]
 

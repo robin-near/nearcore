@@ -2,7 +2,7 @@ use crate::concurrency::{Ctx, Once, RateLimiter, Scope, WeakMap};
 use log::info;
 
 use near_network::types::{
-    AccountIdOrPeerTrackingShard, PartialEncodedChunkForwardMsg, PartialEncodedChunkRequestMsg,
+    AccountIdOrPeerTrackingShard, PartialEncodedChunkRequestMsg,
     PartialEncodedChunkResponseMsg, ReasonForBan, StateResponseInfo,
 };
 use near_network::types::{

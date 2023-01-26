@@ -10,7 +10,7 @@ use futures::{future, FutureExt};
 use near_async::messaging::NoopSenderForTest;
 use near_chain::test_utils::ValidatorSchedule;
 use near_chunks::test_utils::MockClientAdapterForShardsManager;
-use near_network::client::Noop;
+
 use near_primitives::config::{ActionCosts, ExtCosts};
 use near_primitives::num_rational::{Ratio, Rational32};
 

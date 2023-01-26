@@ -1,37 +1,56 @@
-use std::{collections::VecDeque, fmt::Debug, sync};
+use std::{
+    collections::VecDeque,
+    fmt::Debug,
+    sync::{self, Arc},
+};
 
 use crate::messaging;
 
 pub struct TestLoop<Data, Event: Debug + Send + 'static> {
-    data: Data,
+    pub data: Data,
     events: VecDeque<Event>,
     handlers: Vec<Box<dyn LoopEventHandler<Data, Event>>>,
+    pending_events: sync::mpsc::Receiver<Event>,
+}
+
+pub struct TestLoopBuilder<Event: Debug + Send + 'static> {
     pending_events: sync::mpsc::Receiver<Event>,
     pending_events_sender: sync::mpsc::SyncSender<Event>,
 }
 
+impl<Event: Debug + Send + 'static> TestLoopBuilder<Event> {
+    pub fn new() -> Self {
+        let (pending_events_sender, pending_events) = sync::mpsc::sync_channel(65536);
+        Self { pending_events, pending_events_sender }
+    }
+
+    pub fn sender(&self) -> LoopSender<Event> {
+        LoopSender { event_sender: self.pending_events_sender.clone() }
+    }
+
+    pub fn sender_for_index(&self, index: usize) -> LoopSenderForIndex<Event> {
+        LoopSenderForIndex { inner_sender: self.sender(), index }
+    }
+
+    pub fn build<Data>(self, data: Data) -> TestLoop<Data, Event> {
+        TestLoop::new(self.pending_events, data)
+    }
+}
+
 pub trait LoopEventHandler<Data, Event> {
     fn handle(&mut self, event: Event, data: &mut Data) -> Option<Event>;
+
+    fn indexed(self) -> IndexedLoopEventHandler<Data, Event>
+    where
+        Self: Sized + 'static,
+    {
+        IndexedLoopEventHandler { handler: Box::new(self) }
+    }
 }
 
 impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
-    pub fn new(data: Data) -> Self {
-        let (pending_events_sender, pending_events) = sync::mpsc::sync_channel(65536);
-        Self {
-            data,
-            events: VecDeque::new(),
-            handlers: Vec::new(),
-            pending_events,
-            pending_events_sender,
-        }
-    }
-
-    pub fn event_sender(&self) -> SendsToLoop<Event> {
-        SendsToLoop { event_sender: self.pending_events_sender.clone() }
-    }
-
-    pub fn event_sender_for_index(&self, index: usize) -> SendsToLoopForIndex<Event> {
-        SendsToLoopForIndex { inner_sender: self.event_sender(), index }
+    pub fn new(pending_events: sync::mpsc::Receiver<Event>, data: Data) -> Self {
+        Self { data, events: VecDeque::new(), handlers: Vec::new(), pending_events }
     }
 
     pub fn add_event(&mut self, event: Event) {
@@ -74,28 +93,47 @@ impl<R, T: TryInto<R, Error = derive_more::TryIntoError<T>>> TryIntoOrSelf<R> fo
     }
 }
 
-pub trait HasIndexedData<InnerData> {
-    fn for_index(&mut self, index: usize) -> &mut InnerData;
+pub struct IndexedLoopEventHandler<InnerData, InnerEvent> {
+    handler: Box<dyn LoopEventHandler<InnerData, InnerEvent>>,
 }
 
-pub struct ForwardToIndex<InnerData, InnerEvent> {
-    inner_handler: Box<dyn LoopEventHandler<InnerData, InnerEvent>>,
+impl<InnerData, InnerEvent> LoopEventHandler<Vec<InnerData>, (usize, InnerEvent)>
+    for IndexedLoopEventHandler<InnerData, InnerEvent>
+{
+    fn handle(
+        &mut self,
+        event: (usize, InnerEvent),
+        data: &mut Vec<InnerData>,
+    ) -> Option<(usize, InnerEvent)> {
+        let idx = event.0;
+        match self.handler.handle(event.1, &mut data[idx]) {
+            Some(event) => Some((idx, event)),
+            None => None,
+        }
+    }
+}
+
+pub struct CaptureEvents<CapturedEvent: Debug + Send + 'static> {
+    _marker: std::marker::PhantomData<CapturedEvent>,
+}
+
+impl<CapturedEvent: Debug + Send + 'static> CaptureEvents<CapturedEvent> {
+    pub fn new() -> Self {
+        Self { _marker: std::marker::PhantomData }
+    }
 }
 
 impl<
-        InnerData,
-        Data: HasIndexedData<InnerData>,
-        InnerEvent,
-        Event: TryIntoOrSelf<(usize, InnerEvent)> + From<(usize, InnerEvent)>,
-    > LoopEventHandler<Data, Event> for ForwardToIndex<InnerData, InnerEvent>
+        CapturedEvent: Debug + Send + 'static,
+        Data: AsMut<Vec<CapturedEvent>>,
+        Event: TryIntoOrSelf<CapturedEvent>,
+    > LoopEventHandler<Data, Event> for CaptureEvents<CapturedEvent>
 {
     fn handle(&mut self, event: Event, data: &mut Data) -> Option<Event> {
         match event.try_into_or_self() {
-            Ok((index, inner_event)) => {
-                match self.inner_handler.handle(inner_event, data.for_index(index)) {
-                    Some(event) => Some((index, event).into()),
-                    None => None,
-                }
+            Ok(event) => {
+                data.as_mut().push(event);
+                None
             }
             Err(event) => Some(event),
         }
@@ -103,12 +141,12 @@ impl<
 }
 
 #[derive(Clone)]
-pub struct SendsToLoop<Event: Send + 'static> {
+pub struct LoopSender<Event: Send + 'static> {
     event_sender: sync::mpsc::SyncSender<Event>,
 }
 
 impl<Message: Send + 'static, Event: From<Message> + Send + 'static> messaging::Sender<Message>
-    for SendsToLoop<Event>
+    for LoopSender<Event>
 {
     fn send(&self, message: Message) {
         self.event_sender.send(message.into()).unwrap();
@@ -116,15 +154,13 @@ impl<Message: Send + 'static, Event: From<Message> + Send + 'static> messaging::
 }
 
 #[derive(Clone)]
-pub struct SendsToLoopForIndex<Event: Send + 'static> {
-    inner_sender: SendsToLoop<Event>,
+pub struct LoopSenderForIndex<Event: Send + 'static> {
+    inner_sender: LoopSender<Event>,
     index: usize,
 }
 
-impl<Message: Send + 'static, Event: From<(usize, Message)> + Send + 'static>
-    messaging::Sender<Message> for SendsToLoopForIndex<Event>
-{
+impl<Message: Send + 'static> messaging::Sender<Message> for LoopSenderForIndex<(usize, Message)> {
     fn send(&self, message: Message) {
-        self.inner_sender.send((self.index, message).into());
+        self.inner_sender.send((self.index, message));
     }
 }

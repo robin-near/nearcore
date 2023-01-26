@@ -20,6 +20,7 @@ use tracing::info;
 use tracing::log::warn;
 
 use crate::{start_view_client, Client, ClientActor, SyncStatus, ViewClientActor};
+use near_async::messaging::SenderWithSpanContextExt;
 use near_chain::chain::{do_apply_chunks, BlockCatchUpRequest, StateSplitRequest};
 use near_chain::test_utils::{
     wait_for_all_blocks_in_processing, wait_for_block_in_processing, KeyValueRuntime,
@@ -32,7 +33,7 @@ use near_chain::{
 };
 use near_chain_configs::ClientConfig;
 use near_chunks::adapter::ShardsManagerRequestFromClient;
-use near_chunks::client::{ClientAdapterForShardsManager, ShardsManagerResponse};
+use near_chunks::client::ShardsManagerResponse;
 use near_chunks::test_utils::{MockClientAdapterForShardsManager, SynchronousShardsManagerAdapter};
 use near_client_primitives::types::Error;
 use near_crypto::{InMemorySigner, KeyType, PublicKey};
@@ -264,7 +265,7 @@ pub fn setup(
     let (shards_manager_addr, _) = start_shards_manager(
         runtime.clone(),
         network_adapter.clone(),
-        Arc::new(ctx.address()),
+        Arc::new(ctx.address()).as_sender_with_span_context(),
         Some(account_id.clone()),
         store.clone(),
         config.chunk_request_retry_period,
@@ -1186,7 +1187,7 @@ pub fn setup_client(
 
 pub fn setup_synchronous_shards_manager(
     account_id: Option<AccountId>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    client_adapter: ArcSender<ShardsManagerResponse>,
     network_adapter: Arc<dyn PeerManagerAdapter>,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     chain_genesis: &ChainGenesis,
@@ -1223,7 +1224,7 @@ pub fn setup_client_with_synchronous_shards_manager(
     account_id: Option<AccountId>,
     enable_doomslug: bool,
     network_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: Arc<dyn ClientAdapterForShardsManager>,
+    client_adapter: ArcSender<ShardsManagerResponse>,
     chain_genesis: ChainGenesis,
     rng_seed: RngSeed,
     archive: bool,

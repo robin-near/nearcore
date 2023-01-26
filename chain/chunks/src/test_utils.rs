@@ -375,17 +375,9 @@ pub struct MockClientAdapterForShardsManager {
     pub requests: Arc<RwLock<VecDeque<ShardsManagerResponse>>>,
 }
 
-impl MsgRecipient<WithSpanContext<ShardsManagerResponse>> for MockClientAdapterForShardsManager {
-    fn send(
-        &self,
-        msg: WithSpanContext<ShardsManagerResponse>,
-    ) -> BoxFuture<'static, Result<(), MailboxError>> {
-        self.do_send(msg);
-        futures::future::ok(()).boxed()
-    }
-
-    fn do_send(&self, msg: WithSpanContext<ShardsManagerResponse>) {
-        self.requests.write().unwrap().push_back(msg.msg);
+impl Sender<ShardsManagerResponse> for MockClientAdapterForShardsManager {
+    fn send(&self, msg: ShardsManagerResponse) {
+        self.requests.write().unwrap().push_back(msg);
     }
 }
 
