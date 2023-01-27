@@ -2,21 +2,21 @@ use near_o11y::{WithSpanContext, WithSpanContextExt};
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 
-pub trait Sender<M: Send + 'static>: Send + Sync + 'static {
+pub trait Sender<M>: Send + Sync + 'static {
     fn send(&self, message: M);
 }
 
 pub type ArcSender<M> = Arc<dyn Sender<M>>;
 
-pub struct SenderWithSpanContext<T: Send + 'static> {
+pub struct SenderWithSpanContext<T> {
     sender: Arc<T>,
 }
 
-pub trait SenderWithSpanContextExt<T: Send + 'static> {
+pub trait SenderWithSpanContextExt<T> {
     fn as_sender_with_span_context(self) -> Arc<SenderWithSpanContext<T>>;
 }
 
-impl<T: Send + Sync + 'static> SenderWithSpanContextExt<T> for Arc<T> {
+impl<T> SenderWithSpanContextExt<T> for Arc<T> {
     fn as_sender_with_span_context(self) -> Arc<SenderWithSpanContext<T>> {
         Arc::new(SenderWithSpanContext { sender: self })
     }
@@ -34,9 +34,7 @@ where
     }
 }
 
-impl<M: actix::Message + Send + 'static, T: Sender<WithSpanContext<M>>> Sender<M>
-    for SenderWithSpanContext<T>
-{
+impl<M: actix::Message, T: Sender<WithSpanContext<M>>> Sender<M> for SenderWithSpanContext<T> {
     fn send(&self, message: M) {
         self.sender.send(message.with_span_context())
     }
@@ -58,7 +56,7 @@ impl<S> LateBoundSender<S> {
     }
 }
 
-impl<M: Send + 'static, S: Sender<M>> Sender<M> for LateBoundSender<S> {
+impl<M, S: Sender<M>> Sender<M> for LateBoundSender<S> {
     fn send(&self, message: M) {
         self.sender.wait().send(message);
     }
@@ -72,6 +70,6 @@ impl NoopSenderForTest {
     }
 }
 
-impl<M: Send + 'static> Sender<M> for NoopSenderForTest {
+impl<M> Sender<M> for NoopSenderForTest {
     fn send(&self, _message: M) {}
 }

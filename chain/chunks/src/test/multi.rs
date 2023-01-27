@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use near_async::{
     messaging::Sender,
@@ -15,7 +15,8 @@ use crate::{
     client::ShardsManagerResponse,
     test_loop::{
         ForwardClientRequestToShardsManager, ForwardNetworkRequestToShardsManager,
-        RouteShardsManagerNetworkMessages,
+        RouteShardsManagerNetworkMessages, ShardsManagerPeriodicallyResendRequests,
+        ShardsManagerResendRequests,
     },
     test_utils::ChunkTestFixture,
     ShardsManager,
@@ -35,6 +36,7 @@ struct TestData {
 enum TestEvent {
     ClientToShardsManager(ShardsManagerRequestFromClient),
     NetworkToShardsManager(ShardsManagerRequestFromNetwork),
+    ShardsManagerResendRequests(ShardsManagerResendRequests),
     ShardsManagerToClient(ShardsManagerResponse),
     OutboundNetwork(PeerManagerMessageRequest),
     ChainInfoForNetwork(SetChainInfo),
@@ -45,14 +47,14 @@ type ShardsManagerTestLoopBuilder = near_async::test_loop::TestLoopBuilder<(usiz
 #[test]
 fn test_multi() {
     let builder = ShardsManagerTestLoopBuilder::new();
-    let data = (0..27)
+    let data = (0..13)
         .map(|idx| {
             let fixture = ChunkTestFixture::default(); // TODO: eventually remove
             let shards_manager = ShardsManager::new(
                 Some(fixture.mock_chunk_part_owner.clone()),
                 fixture.mock_runtime.clone(), // TODO: make thinner
-                builder.sender_for_index(idx),
-                builder.sender_for_index(idx),
+                Arc::new(builder.sender().for_index(idx)),
+                Arc::new(builder.sender().for_index(idx)),
                 fixture.chain_store.new_read_only_chunks_store(),
                 fixture.mock_chain_head.clone(),
                 fixture.mock_chain_head.clone(),
@@ -71,10 +73,15 @@ fn test_multi() {
         .collect::<Vec<_>>();
     let sender = builder.sender();
     let mut test = builder.build(data);
-    test.register_handler(ForwardClientRequestToShardsManager.indexed());
-    test.register_handler(ForwardNetworkRequestToShardsManager.indexed());
-    test.register_handler(CaptureEvents::<ShardsManagerResponse>::new().indexed());
-    test.register_handler(RouteShardsManagerNetworkMessages::new(sender.clone()));
+    for idx in 0..test.data.len() {
+        test.register_handler(ForwardClientRequestToShardsManager.for_index(idx));
+        test.register_handler(ForwardNetworkRequestToShardsManager.for_index(idx));
+        test.register_handler(CaptureEvents::<ShardsManagerResponse>::new().for_index(idx));
+        test.register_handler(RouteShardsManagerNetworkMessages::new(Duration::from_millis(10)));
+        test.register_handler(
+            ShardsManagerPeriodicallyResendRequests::new(Duration::from_millis(400)).for_index(idx),
+        )
+    }
 
     let fixture = ChunkTestFixture::default(); // TODO: eventually remove
     sender.send((
@@ -87,5 +94,5 @@ fn test_multi() {
         }
         .into(),
     ));
-    test.run();
+    test.run(Duration::from_secs(1));
 }

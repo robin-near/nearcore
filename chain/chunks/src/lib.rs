@@ -813,13 +813,13 @@ impl ShardsManager {
         let chunk_hash = chunk_header.chunk_hash();
 
         if self.requested_partial_encoded_chunks.contains_key(&chunk_hash) {
+            debug!(target: "chunks", height, shard_id, ?chunk_hash, "Already being requested.");
             return;
         }
 
-        debug!(target: "chunks", height, shard_id, ?chunk_hash, "Requesting.");
-
         if let Some(entry) = self.encoded_chunks.get(&chunk_header.chunk_hash()) {
             if entry.complete {
+                debug!(target: "chunks", height, shard_id, ?chunk_hash, "Not requesting already-complete chunk.");
                 return;
             }
         } else {
@@ -827,6 +827,7 @@ impl ShardsManager {
             // However, if the chunk had just been processed and marked as complete, it might have
             // been removed from the cache if it is out of horizon. So in this case, the chunk is
             // already complete and we don't need to request anything.
+            debug!(target: "chunks", height, shard_id, ?chunk_hash, "Not requesting already-complete chunk.");
             return;
         }
 
@@ -843,7 +844,10 @@ impl ShardsManager {
             },
         );
 
-        if !mark_only {
+        if mark_only {
+            debug!(target: "chunks", height, shard_id, ?chunk_hash, "Marking chunk as needing to be requested next tick");
+        } else {
+            debug!(target: "chunks", height, shard_id, ?chunk_hash, "Sending chunk request(s).");
             let fetch_from_archival = self.runtime_adapter
                 .chunk_needs_to_be_fetched_from_archival(&ancestor_hash, &self.chain_header_head.last_block_hash).unwrap_or_else(|err| {
                 error!(target: "chunks", "Error during requesting partial encoded chunk. Cannot determine whether to request from an archival node, defaulting to not: {}", err);
