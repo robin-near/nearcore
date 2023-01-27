@@ -3,7 +3,6 @@ import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { CurrentPeersView } from "./CurrentPeersView";
 import './NetworkInfoView.scss';
 import { PeerStorageView } from "./PeerStorageView";
-import { formatDurationInMillis } from "./util";
 type NetworkInfoViewProps = {
     addr: string,
 };
