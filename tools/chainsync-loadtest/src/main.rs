@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use near_async::actix::AddrWithAutoSpanContextExt;
+use near_async::messaging::LateBoundSender;
+use near_async::messaging::Sender;
 use openssl_probe;
 
 use concurrency::{Ctx, Scope};
@@ -13,7 +16,6 @@ use network::Network;
 
 use near_chain_configs::Genesis;
 use near_network::time;
-use near_network::types::NetworkRecipient;
 use near_network::PeerManagerActor;
 use near_o11y::tracing::{error, info};
 use near_primitives::block::GenesisId;
@@ -35,22 +37,22 @@ fn genesis_hash(chain_id: &str) -> CryptoHash {
 }
 
 pub fn start_with_config(config: NearConfig, qps_limit: u32) -> anyhow::Result<Arc<Network>> {
-    let network_adapter = Arc::new(NetworkRecipient::default());
-    let network = Network::new(&config, network_adapter.clone(), qps_limit);
+    let network_adapter = Arc::new(LateBoundSender::default());
+    let network = Network::new(&config, network_adapter.clone().into(), qps_limit);
 
     let network_actor = PeerManagerActor::spawn(
         time::Clock::real(),
         near_store::db::TestDB::new(),
         config.network_config,
         network.clone(),
-        network.clone(),
+        Sender::noop(),
         GenesisId {
             chain_id: config.client_config.chain_id.clone(),
             hash: genesis_hash(&config.client_config.chain_id),
         },
     )
     .context("PeerManagerActor::spawn()")?;
-    network_adapter.set_recipient(network_actor);
+    network_adapter.bind(network_actor.with_auto_span_context());
     return Ok(network);
 }
 

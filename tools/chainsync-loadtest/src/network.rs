@@ -1,14 +1,15 @@
 use crate::concurrency::{Ctx, Once, RateLimiter, Scope, WeakMap};
 use log::info;
 
+use near_async::messaging::CanSend;
 use near_network::types::{
-    AccountIdOrPeerTrackingShard, PartialEncodedChunkForwardMsg, PartialEncodedChunkRequestMsg,
-    PartialEncodedChunkResponseMsg, ReasonForBan, StateResponseInfo,
+    AccountIdOrPeerTrackingShard, PartialEncodedChunkRequestMsg, PartialEncodedChunkResponseMsg,
+    ReasonForBan, StateResponseInfo,
 };
 use near_network::types::{
     FullPeerInfo, NetworkInfo, NetworkRequests, PeerManagerAdapter, PeerManagerMessageRequest,
 };
-use near_o11y::WithSpanContextExt;
+
 use near_primitives::block::{Approval, Block, BlockHeader};
 use near_primitives::challenge::Challenge;
 use near_primitives::hash::CryptoHash;
@@ -51,7 +52,7 @@ struct NetworkData {
 // Network encapsulates PeerManager and exposes an async API for sending RPCs.
 pub struct Network {
     pub stats: Stats,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     pub block_headers: Arc<WeakMap<CryptoHash, Once<Vec<BlockHeader>>>>,
     pub blocks: Arc<WeakMap<CryptoHash, Once<Block>>>,
     pub chunks: Arc<WeakMap<ChunkHash, Once<PartialEncodedChunkResponseMsg>>>,
@@ -71,7 +72,7 @@ pub struct Network {
 impl Network {
     pub fn new(
         config: &NearConfig,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         qps_limit: u32,
     ) -> Arc<Network> {
         Arc::new(Network {
@@ -127,12 +128,9 @@ impl Network {
                 for peer in peers {
                     // TODO: rate limit per peer.
                     self_.rate_limiter.allow(&ctx).await?;
-                    self_.network_adapter.do_send(
-                        PeerManagerMessageRequest::NetworkRequests(new_req(
-                            peer.full_peer_info.clone(),
-                        ))
-                        .with_span_context(),
-                    );
+                    self_.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                        new_req(peer.full_peer_info.clone()),
+                    ));
                     self_.stats.msgs_sent.fetch_add(1, Ordering::Relaxed);
                     ctx.wait(self_.request_timeout).await?;
                 }
@@ -331,33 +329,5 @@ impl near_network::client::Client for Network {
         accounts: Vec<(AnnounceAccount, Option<EpochId>)>,
     ) -> Result<Vec<AnnounceAccount>, ReasonForBan> {
         Ok(accounts.into_iter().map(|a| a.0).collect())
-    }
-}
-
-impl near_network::shards_manager::ShardsManagerAdapterForNetwork for Network {
-    fn process_partial_encoded_chunk(
-        &self,
-        _partial_encoded_chunk: near_primitives::sharding::PartialEncodedChunk,
-    ) {
-    }
-
-    fn process_partial_encoded_chunk_forward(
-        &self,
-        _partial_encoded_chunk_forward: PartialEncodedChunkForwardMsg,
-    ) {
-    }
-
-    fn process_partial_encoded_chunk_response(
-        &self,
-        _partial_encoded_chunk_response: PartialEncodedChunkResponseMsg,
-        _received_time: std::time::Instant,
-    ) {
-    }
-
-    fn process_partial_encoded_chunk_request(
-        &self,
-        _partial_encoded_chunk_request: PartialEncodedChunkRequestMsg,
-        _route_back: CryptoHash,
-    ) {
     }
 }
