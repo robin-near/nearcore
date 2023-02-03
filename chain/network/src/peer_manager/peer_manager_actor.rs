@@ -22,7 +22,7 @@ use crate::types::{
 use actix::fut::future::wrap_future;
 use actix::{Actor as _, AsyncContext as _};
 use anyhow::Context as _;
-use near_async::messaging::ArcSender;
+use near_async::messaging::Sender;
 use near_o11y::{handler_debug_span, handler_trace_span, OpenTelemetrySpanExt, WithSpanContext};
 use near_performance_metrics_macros::perf;
 use near_primitives::block::GenesisId;
@@ -165,7 +165,7 @@ impl PeerManagerActor {
         store: Arc<dyn near_store::db::Database>,
         config: config::NetworkConfig,
         client: Arc<dyn client::Client>,
-        shards_manager_adapter: ArcSender<ShardsManagerRequestFromNetwork>,
+        shards_manager_adapter: Sender<ShardsManagerRequestFromNetwork>,
         genesis_id: GenesisId,
     ) -> anyhow::Result<actix::Addr<Self>> {
         let config = config.verify().context("config")?;

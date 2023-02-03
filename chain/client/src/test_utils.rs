@@ -9,7 +9,7 @@ use actix::{Actor, Addr, AsyncContext, Context};
 use chrono::DateTime;
 use futures::{future, FutureExt};
 use near_async::futures::ActixFutureSpawner;
-use near_async::messaging::{ArcSender, LateBoundSender, Sender};
+use near_async::messaging::{ArcIntoSender, CanSend, IntoSender, LateBoundSender, Sender};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_chunks::ShardsManager;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
@@ -21,7 +21,6 @@ use rand::{thread_rng, Rng};
 use tracing::info;
 
 use crate::{start_view_client, Client, ClientActor, SyncStatus, ViewClientActor};
-use near_async::messaging::SenderWithSpanContextExt;
 use near_chain::chain::{do_apply_chunks, BlockCatchUpRequest, StateSplitRequest};
 use near_chain::test_utils::{
     wait_for_all_blocks_in_processing, wait_for_block_in_processing, KeyValueRuntime,
@@ -201,11 +200,11 @@ pub fn setup(
     enable_doomslug: bool,
     archive: bool,
     epoch_sync_enabled: bool,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     transaction_validity_period: NumBlocks,
     genesis_time: DateTime<Utc>,
     ctx: &Context<ClientActor>,
-) -> (Block, ClientActor, Addr<ViewClientActor>, Arc<dyn ShardsManagerAdapterForTest>) {
+) -> (Block, ClientActor, Addr<ViewClientActor>, ShardsManagerAdapterForTest) {
     let store = create_test_store();
     let num_validator_seats = vs.all_block_producers().count() as NumSeats;
     let runtime = Arc::new(KeyValueRuntime::new_with_validators_and_no_gc(
@@ -265,8 +264,8 @@ pub fn setup(
 
     let (shards_manager_addr, _) = start_shards_manager(
         runtime.clone(),
-        network_adapter.clone(),
-        Arc::new(ctx.address()).as_sender_with_span_context(),
+        network_adapter.clone().into_sender(),
+        ctx.address().into_sender().as_sender_with_span_context(),
         Some(account_id.clone()),
         store.clone(),
         config.chunk_request_retry_period,
@@ -278,7 +277,7 @@ pub fn setup(
         chain_genesis,
         runtime.clone(),
         network_adapter.clone(),
-        shards_manager_adapter.clone(),
+        shards_manager_adapter.clone().into_sender(),
         Some(signer.clone()),
         enable_doomslug,
         TEST_SEED,
@@ -298,7 +297,7 @@ pub fn setup(
         None,
     )
     .unwrap();
-    (genesis_block, client_actor, view_client_addr, shards_manager_adapter.clone())
+    (genesis_block, client_actor, view_client_addr, shards_manager_adapter.into())
 }
 
 pub fn setup_only_view(
@@ -311,7 +310,7 @@ pub fn setup_only_view(
     enable_doomslug: bool,
     archive: bool,
     epoch_sync_enabled: bool,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     transaction_validity_period: NumBlocks,
     genesis_time: DateTime<Utc>,
 ) -> Addr<ViewClientActor> {
@@ -409,7 +408,7 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
 ) -> ActorHandlesForTesting {
     let network_adapter = Arc::new(LateBoundSender::default());
     let mut vca: Option<Addr<ViewClientActor>> = None;
-    let mut sma: Option<Arc<dyn ShardsManagerAdapterForTest>> = None;
+    let mut sma: Option<ShardsManagerAdapterForTest> = None;
     let client_addr = ClientActor::create(|ctx: &mut Context<ClientActor>| {
         let vs = ValidatorSchedule::new().block_producers_per_epoch(vec![validators]);
         let (_, client, view_client_addr, shards_manager_adapter) = setup(
@@ -422,7 +421,7 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
             enable_doomslug,
             false,
             false,
-            network_adapter.clone(),
+            network_adapter.clone().into(),
             transaction_validity_period,
             Clock::utc(),
             ctx,
@@ -437,7 +436,7 @@ pub fn setup_mock_with_validity_period_and_no_epoch_sync(
         PeerManagerMock::new(move |msg, ctx| peermanager_mock(&msg, ctx, client_addr1.clone()))
             .start();
 
-    network_adapter.set_sender(Arc::new(network_actor));
+    network_adapter.bind(network_actor);
 
     ActorHandlesForTesting {
         client_actor: client_addr,
@@ -549,7 +548,7 @@ impl BlockStats {
 pub struct ActorHandlesForTesting {
     pub client_actor: Addr<ClientActor>,
     pub view_client_actor: Addr<ViewClientActor>,
-    pub shards_manager_adapter: Arc<dyn ShardsManagerAdapterForTest>,
+    pub shards_manager_adapter: ShardsManagerAdapterForTest,
 }
 
 fn send_chunks<T, I, F>(
@@ -561,7 +560,7 @@ fn send_chunks<T, I, F>(
 ) where
     T: Eq,
     I: Iterator<Item = (usize, T)>,
-    F: Fn(&Arc<dyn ShardsManagerAdapterForTest>),
+    F: Fn(&ShardsManagerAdapterForTest),
 {
     for (i, name) in recipients {
         if name == target {
@@ -1061,7 +1060,7 @@ pub fn setup_mock_all_validators(
                 enable_doomslug,
                 archive1[index],
                 epoch_sync_enabled1[index],
-                Arc::new(pm),
+                Arc::new(pm).into(),
                 10000,
                 genesis_time,
                 ctx,
@@ -1126,8 +1125,8 @@ pub fn setup_client_with_runtime(
     num_validator_seats: NumSeats,
     account_id: Option<AccountId>,
     enable_doomslug: bool,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
-    shards_manager_adapter: Arc<dyn ShardsManagerAdapterForTest>,
+    network_adapter: PeerManagerAdapter,
+    shards_manager_adapter: ShardsManagerAdapterForTest,
     chain_genesis: ChainGenesis,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     rng_seed: RngSeed,
@@ -1144,7 +1143,7 @@ pub fn setup_client_with_runtime(
         chain_genesis,
         runtime_adapter,
         network_adapter,
-        shards_manager_adapter.for_client(),
+        shards_manager_adapter.client,
         validator_signer,
         enable_doomslug,
         rng_seed,
@@ -1159,8 +1158,8 @@ pub fn setup_client(
     vs: ValidatorSchedule,
     account_id: Option<AccountId>,
     enable_doomslug: bool,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
-    shards_manager_adapter: Arc<dyn ShardsManagerAdapterForTest>,
+    network_adapter: PeerManagerAdapter,
+    shards_manager_adapter: ShardsManagerAdapterForTest,
     chain_genesis: ChainGenesis,
     rng_seed: RngSeed,
     archive: bool,
@@ -1185,11 +1184,11 @@ pub fn setup_client(
 
 pub fn setup_synchronous_shards_manager(
     account_id: Option<AccountId>,
-    client_adapter: ArcSender<ShardsManagerResponse>,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    client_adapter: Sender<ShardsManagerResponse>,
+    network_adapter: PeerManagerAdapter,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     chain_genesis: &ChainGenesis,
-) -> Arc<dyn ShardsManagerAdapterForTest> {
+) -> ShardsManagerAdapterForTest {
     // Initialize the chain, to make sure that if the store is empty, we write the genesis
     // into the store, and as a short cut to get the parameters needed to instantiate
     // ShardsManager. This way we don't have to wait to construct the Client first.
@@ -1207,13 +1206,13 @@ pub fn setup_synchronous_shards_manager(
     let shards_manager = ShardsManager::new(
         account_id,
         runtime_adapter,
-        network_adapter,
+        network_adapter.request_sender,
         client_adapter,
         chain.store().new_read_only_chunks_store(),
         chain_head,
         chain_header_head,
     );
-    Arc::new(SynchronousShardsManagerAdapter::new(shards_manager))
+    Arc::new(SynchronousShardsManagerAdapter::new(shards_manager)).into()
 }
 
 pub fn setup_client_with_synchronous_shards_manager(
@@ -1221,8 +1220,8 @@ pub fn setup_client_with_synchronous_shards_manager(
     vs: ValidatorSchedule,
     account_id: Option<AccountId>,
     enable_doomslug: bool,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: ArcSender<ShardsManagerResponse>,
+    network_adapter: PeerManagerAdapter,
+    client_adapter: Sender<ShardsManagerResponse>,
     chain_genesis: ChainGenesis,
     rng_seed: RngSeed,
     archive: bool,
@@ -1253,22 +1252,19 @@ pub fn setup_client_with_synchronous_shards_manager(
 }
 
 /// A combined trait bound for both the client side and network side of the ShardsManager API.
-pub trait ShardsManagerAdapterForTest:
-    Sender<ShardsManagerRequestFromClient> + Sender<ShardsManagerRequestFromNetwork>
-{
-    fn for_client(&self) -> ArcSender<ShardsManagerRequestFromClient>;
-    fn for_network(&self) -> ArcSender<ShardsManagerRequestFromNetwork>;
+#[derive(Clone, derive_more::AsRef)]
+pub struct ShardsManagerAdapterForTest {
+    pub client: Sender<ShardsManagerRequestFromClient>,
+    pub network: Sender<ShardsManagerRequestFromNetwork>,
 }
 
 impl<
-        A: Sender<ShardsManagerRequestFromClient> + Sender<ShardsManagerRequestFromNetwork> + Clone,
-    > ShardsManagerAdapterForTest for A
+        A: ArcIntoSender<ShardsManagerRequestFromClient>
+            + ArcIntoSender<ShardsManagerRequestFromNetwork>,
+    > From<Arc<A>> for ShardsManagerAdapterForTest
 {
-    fn for_client(&self) -> ArcSender<ShardsManagerRequestFromClient> {
-        Arc::new(self.clone())
-    }
-    fn for_network(&self) -> ArcSender<ShardsManagerRequestFromNetwork> {
-        Arc::new(self.clone())
+    fn from(arc: Arc<A>) -> Self {
+        Self { client: arc.clone().into_sender(), network: arc.into_sender() }
     }
 }
 
@@ -1279,7 +1275,7 @@ pub struct TestEnv {
     pub validators: Vec<AccountId>,
     pub network_adapters: Vec<Arc<MockPeerManagerAdapter>>,
     pub client_adapters: Vec<Arc<MockClientAdapterForShardsManager>>,
-    pub shards_manager_adapters: Vec<Arc<dyn ShardsManagerAdapterForTest>>,
+    pub shards_manager_adapters: Vec<ShardsManagerAdapterForTest>,
     pub clients: Vec<Client>,
     account_to_client_index: HashMap<AccountId, usize>,
     paused_blocks: Arc<Mutex<HashMap<CryptoHash, Arc<OnceCell<()>>>>>,
@@ -1445,8 +1441,8 @@ impl TestEnvBuilder {
                 let client_adapter = client_adapters[i].clone();
                 setup_synchronous_shards_manager(
                     Some(clients[i].clone()),
-                    client_adapter,
-                    network_adapter,
+                    client_adapter.into_sender(),
+                    network_adapter.into(),
                     runtime_adapter,
                     &chain_genesis,
                 )
@@ -1466,7 +1462,7 @@ impl TestEnvBuilder {
                     u64::try_from(num_validators).unwrap(),
                     Some(account_id),
                     false,
-                    network_adapter,
+                    network_adapter.into(),
                     shards_manager_adapter,
                     chain_genesis.clone(),
                     runtime_adapter,
@@ -1560,7 +1556,7 @@ impl TestEnv {
         &mut self.clients[self.account_to_client_index[account_id]]
     }
 
-    pub fn shards_manager(&self, account: &AccountId) -> &Arc<dyn ShardsManagerAdapterForTest> {
+    pub fn shards_manager(&self, account: &AccountId) -> &ShardsManagerAdapterForTest {
         &self.shards_manager_adapters[self.account_to_client_index[account]]
     }
 
@@ -1795,7 +1791,7 @@ impl TestEnv {
             num_validator_seats,
             Some(self.get_client_id(idx).clone()),
             false,
-            self.network_adapters[idx].clone(),
+            self.network_adapters[idx].clone().into(),
             self.shards_manager_adapters[idx].clone(),
             self.chain_genesis.clone(),
             runtime_adapter,

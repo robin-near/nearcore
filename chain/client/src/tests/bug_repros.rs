@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use actix::System;
 use futures::FutureExt;
+use near_async::messaging::CanSend;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use rand::{thread_rng, Rng};
 

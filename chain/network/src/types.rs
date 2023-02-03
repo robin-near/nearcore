@@ -5,8 +5,9 @@ pub use crate::network_protocol::{
 };
 use crate::routing::routing_table_view::RoutingTableInfo;
 use crate::time;
-use near_async::messaging::{AsyncSender, Sender};
+use near_async::messaging::{ArcIntoAsyncSender, ArcIntoSender, AsyncSender, Sender};
 use near_crypto::PublicKey;
+use near_o11y::WithSpanContext;
 use near_primitives::block::{ApprovalMessage, Block, GenesisId};
 use near_primitives::challenge::Challenge;
 use near_primitives::hash::CryptoHash;
@@ -387,18 +388,45 @@ pub enum NetworkAdversarialMessage {
     AdvCheckStorageConsistency,
 }
 
-pub trait PeerManagerAdapter:
-    AsyncSender<PeerManagerMessageRequest, Result<PeerManagerMessageResponse, ()>>
-    + Sender<PeerManagerMessageRequest>
-    + Sender<SetChainInfo>
-{
+#[derive(Clone, derive_more::AsRef)]
+pub struct PeerManagerAdapter {
+    pub async_request_sender:
+        AsyncSender<PeerManagerMessageRequest, Result<PeerManagerMessageResponse, ()>>,
+    pub request_sender: Sender<PeerManagerMessageRequest>,
+    pub set_chain_info_sender: Sender<SetChainInfo>,
 }
+
 impl<
-        A: AsyncSender<PeerManagerMessageRequest, Result<PeerManagerMessageResponse, ()>>
-            + Sender<PeerManagerMessageRequest>
-            + Sender<SetChainInfo>,
-    > PeerManagerAdapter for A
+        A: ArcIntoAsyncSender<PeerManagerMessageRequest, Result<PeerManagerMessageResponse, ()>>
+            + ArcIntoSender<PeerManagerMessageRequest>
+            + ArcIntoSender<SetChainInfo>,
+    > From<Arc<A>> for PeerManagerAdapter
 {
+    fn from(arc: Arc<A>) -> Self {
+        Self {
+            async_request_sender: arc.clone().into_async_sender(),
+            request_sender: arc.clone().into_sender(),
+            set_chain_info_sender: arc.into_sender(),
+        }
+    }
+}
+
+impl PeerManagerAdapter {
+    pub fn from_with_span_context<
+        A: ArcIntoAsyncSender<
+                WithSpanContext<PeerManagerMessageRequest>,
+                Result<PeerManagerMessageResponse, ()>,
+            > + ArcIntoSender<WithSpanContext<PeerManagerMessageRequest>>
+            + ArcIntoSender<WithSpanContext<SetChainInfo>>,
+    >(
+        arc: Arc<A>,
+    ) -> Self {
+        Self {
+            async_request_sender: arc.clone().into_async_sender().as_sender_with_span_context(),
+            request_sender: arc.clone().into_sender().as_sender_with_span_context(),
+            set_chain_info_sender: arc.into_sender().as_sender_with_span_context(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -119,7 +119,7 @@ impl client::Client for Fake {
     }
 }
 
-impl messaging::Sender<ShardsManagerRequestFromNetwork> for Fake {
+impl messaging::CanSend<ShardsManagerRequestFromNetwork> for Fake {
     fn send(&self, message: ShardsManagerRequestFromNetwork) {
         match message {
             ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {

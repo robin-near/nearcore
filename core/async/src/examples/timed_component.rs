@@ -1,14 +1,14 @@
-use crate::messaging::ArcSender;
+use crate::messaging::Sender;
 
 pub(crate) struct TimedComponent {
     buffered_messages: Vec<String>,
-    message_sender: ArcSender<Vec<String>>,
+    message_sender: Sender<Vec<String>>,
 }
 
 /// Mimics a component that has a specific function that is supposed to be
 /// triggered by a timer.
 impl TimedComponent {
-    pub fn new(message_sender: ArcSender<Vec<String>>) -> Self {
+    pub fn new(message_sender: Sender<Vec<String>>) -> Self {
         Self { buffered_messages: vec![], message_sender }
     }
 

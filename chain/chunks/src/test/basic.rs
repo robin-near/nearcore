@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use derive_enum_from_into::{EnumFrom, EnumTryInto};
 use near_async::{
-    messaging::{NoopSenderForTest, Sender},
+    messaging::{CanSend, IntoSender, Sender},
     test_loop::event_handler::{capture_events, LoopEventHandlerHelpers},
 };
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
@@ -40,8 +40,8 @@ fn test_basic() {
     let shards_manager = ShardsManager::new(
         Some(fixture.mock_chunk_part_owner.clone()),
         fixture.mock_runtime.clone(), // TODO: make thinner
-        NoopSenderForTest::new(),
-        Arc::new(builder.sender()),
+        Sender::noop(),
+        builder.sender().into_sender(),
         fixture.chain_store.new_read_only_chunks_store(),
         fixture.mock_chain_head.clone(),
         fixture.mock_chain_head.clone(),

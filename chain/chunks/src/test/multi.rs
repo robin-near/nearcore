@@ -1,8 +1,8 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, time::Duration};
 
 use derive_enum_from_into::{EnumFrom, EnumTryInto};
 use near_async::{
-    messaging::Sender,
+    messaging::{CanSend, IntoSender},
     test_loop::{
         event_handler::{capture_events, periodic_timer, LoopEventHandlerHelpers},
         futures::MessageExpectingResponse,
@@ -59,8 +59,8 @@ fn test_multi() {
             let shards_manager = ShardsManager::new(
                 Some(fixture.mock_chunk_part_owner.clone()),
                 fixture.mock_runtime.clone(), // TODO: make thinner
-                Arc::new(builder.sender().for_index(idx)),
-                Arc::new(builder.sender().for_index(idx)),
+                builder.sender().for_index(idx).into_sender(),
+                builder.sender().for_index(idx).into_sender(),
                 fixture.chain_store.new_read_only_chunks_store(),
                 fixture.mock_chain_head.clone(),
                 fixture.mock_chain_head.clone(),

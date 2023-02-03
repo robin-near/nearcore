@@ -2,6 +2,7 @@
 //! Useful for querying from RPC.
 
 use actix::{Actor, Addr, Handler, SyncArbiter, SyncContext};
+use near_async::messaging::CanSend;
 use near_chain::types::Tip;
 use near_primitives::receipt::Receipt;
 use near_primitives::time::Clock;
@@ -97,7 +98,7 @@ pub struct ViewClientActor {
     validator_account_id: Option<AccountId>,
     chain: Chain,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     pub config: ClientConfig,
     request_manager: Arc<RwLock<ViewClientRequestManager>>,
     state_request_cache: Arc<Mutex<VecDeque<Instant>>>,
@@ -123,7 +124,7 @@ impl ViewClientActor {
         validator_account_id: Option<AccountId>,
         chain_genesis: &ChainGenesis,
         runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         config: ClientConfig,
         request_manager: Arc<RwLock<ViewClientRequestManager>>,
         adv: crate::adversarial::Controls,
@@ -1452,7 +1453,7 @@ pub fn start_view_client(
     validator_account_id: Option<AccountId>,
     chain_genesis: ChainGenesis,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     config: ClientConfig,
     adv: crate::adversarial::Controls,
 ) -> Addr<ViewClientActor> {

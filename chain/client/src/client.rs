@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 use near_async::futures::FutureSpawner;
-use near_async::messaging::ArcSender;
+use near_async::messaging::{CanSend, Sender};
 use near_chunks::adapter::ShardsManagerRequestFromClient;
 use near_chunks::client::ShardedTransactionPool;
 use near_chunks::logic::{
@@ -105,7 +105,7 @@ pub struct Client {
     pub chain: Chain,
     pub doomslug: Doomslug,
     pub runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-    pub shards_manager_adapter: ArcSender<ShardsManagerRequestFromClient>,
+    pub shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
     pub sharded_tx_pool: ShardedTransactionPool,
     prev_block_to_chunk_headers_ready_for_inclusion: LruCache<
         CryptoHash,
@@ -113,7 +113,7 @@ pub struct Client {
     >,
     pub do_not_include_chunks_from: LruCache<(EpochId, AccountId), ()>,
     /// Network adapter.
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     /// Signer for block producer (if present).
     pub validator_signer: Option<Arc<dyn ValidatorSigner>>,
     /// Approvals for which we do not have the block yet
@@ -189,8 +189,8 @@ impl Client {
         config: ClientConfig,
         chain_genesis: ChainGenesis,
         runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
-        shards_manager_adapter: ArcSender<ShardsManagerRequestFromClient>,
+        network_adapter: PeerManagerAdapter,
+        shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
         validator_signer: Option<Arc<dyn ValidatorSigner>>,
         enable_doomslug: bool,
         rng_seed: RngSeed,

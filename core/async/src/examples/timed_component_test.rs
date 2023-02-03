@@ -2,8 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use derive_enum_from_into::{EnumFrom, EnumTryInto};
 
-use crate::test_loop::event_handler::{
-    capture_events, periodic_timer, LoopEventHandler, LoopEventHandlerHelpers,
+use crate::{
+    messaging::IntoSender,
+    test_loop::event_handler::{
+        capture_events, periodic_timer, LoopEventHandler, LoopEventHandlerHelpers,
+    },
 };
 
 use super::timed_component::TimedComponent;
@@ -37,7 +40,7 @@ impl LoopEventHandler<TimedComponent, String> for ForwardSendMessage {
 fn test_timed_component() {
     let builder = crate::test_loop::TestLoopBuilder::<TestEvent>::new();
     let data = TestData {
-        component: TimedComponent::new(Arc::new(builder.sender())),
+        component: TimedComponent::new(builder.sender().into_sender()),
         messages_sent: vec![],
     };
     let sender = builder.sender();

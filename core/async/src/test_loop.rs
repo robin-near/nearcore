@@ -70,7 +70,7 @@ use near_o11y::{testonly::init_test_logger, tracing::log::info};
 use serde::Serialize;
 
 use self::{
-    delay_sender::{DelaySender, DelaySenderImpl},
+    delay_sender::{DelayCanSend, DelaySender},
     event_handler::LoopEventHandler,
 };
 
@@ -186,7 +186,7 @@ struct LoopSender<Event: Send + 'static> {
     event_sender: sync::mpsc::SyncSender<EventInFlight<Event>>,
 }
 
-impl<Event: Send + 'static> DelaySenderImpl<Event> for LoopSender<Event> {
+impl<Event: Send + 'static> DelayCanSend<Event> for LoopSender<Event> {
     fn send_with_delay(&self, event: Event, delay: Duration) {
         self.event_sender.send(EventInFlight { event, delay }).unwrap();
     }

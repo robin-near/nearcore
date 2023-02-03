@@ -94,7 +94,7 @@ use logic::{
 use metrics::{
     PARTIAL_ENCODED_CHUNK_FORWARD_CACHED_WITHOUT_HEADER, PARTIAL_ENCODED_CHUNK_RESPONSE_DELAY,
 };
-use near_async::messaging::ArcSender;
+use near_async::messaging::Sender;
 use near_chain::chunks_store::ReadOnlyChunksStore;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_primitives::time::Utc;
@@ -102,7 +102,7 @@ use rand::seq::{IteratorRandom, SliceRandom};
 use tracing::{debug, error, warn};
 
 use near_chain::{byzantine_assert, RuntimeWithEpochManagerAdapter};
-use near_network::types::{NetworkRequests, PeerManagerAdapter, PeerManagerMessageRequest};
+use near_network::types::{NetworkRequests, PeerManagerMessageRequest};
 use near_primitives::block::Tip;
 use near_primitives::hash::CryptoHash;
 use near_primitives::merkle::{verify_path, MerklePath};
@@ -486,8 +486,8 @@ pub struct ShardsManager {
     store: ReadOnlyChunksStore,
 
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-    peer_manager_adapter: Arc<dyn PeerManagerAdapter>,
-    client_adapter: ArcSender<ShardsManagerResponse>,
+    peer_manager_adapter: Sender<PeerManagerMessageRequest>,
+    client_adapter: Sender<ShardsManagerResponse>,
     rs: ReedSolomonWrapper,
 
     encoded_chunks: EncodedChunksCache,
@@ -511,8 +511,8 @@ impl ShardsManager {
     pub fn new(
         me: Option<AccountId>,
         runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
-        client_adapter: ArcSender<ShardsManagerResponse>,
+        network_adapter: Sender<PeerManagerMessageRequest>,
+        client_adapter: Sender<ShardsManagerResponse>,
         store: ReadOnlyChunksStore,
         initial_chain_head: Tip,
         initial_chain_header_head: Tip,
@@ -2270,6 +2270,7 @@ mod test {
     pub mod multi;
 
     use assert_matches::assert_matches;
+    use near_async::messaging::ArcIntoSender;
     use near_chain::types::EpochManagerAdapter;
     use near_primitives::test_utils::create_test_signer;
     use std::sync::Arc;
@@ -2309,8 +2310,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some("test".parse().unwrap()),
             runtime_adapter,
-            network_adapter.clone(),
-            client_adapter,
+            network_adapter.clone().into_sender(),
+            client_adapter.into_sender(),
             ReadOnlyChunksStore::new(store),
             mock_tip.clone(),
             mock_tip,
@@ -2367,8 +2368,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some("test".parse().unwrap()),
             runtime_adapter.clone(),
-            network_adapter,
-            client_adapter,
+            network_adapter.into_sender(),
+            client_adapter.into_sender(),
             chain_store.new_read_only_chunks_store(),
             mock_tip.clone(),
             mock_tip,
@@ -2530,8 +2531,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2594,8 +2595,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2621,8 +2622,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_chunk_part_owner.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2672,8 +2673,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_chunk_part_owner.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2737,8 +2738,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             account_id,
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2821,8 +2822,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_chunk_part_owner.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2904,8 +2905,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -2973,8 +2974,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3035,8 +3036,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3067,8 +3068,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3096,8 +3097,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3126,8 +3127,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3155,8 +3156,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3192,8 +3193,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3233,8 +3234,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3272,8 +3273,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3294,8 +3295,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3316,8 +3317,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3346,8 +3347,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_shard_tracker.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),
@@ -3374,8 +3375,8 @@ mod test {
         let mut shards_manager = ShardsManager::new(
             Some(fixture.mock_chunk_part_owner.clone()),
             fixture.mock_runtime.clone(),
-            fixture.mock_network.clone(),
-            fixture.mock_client_adapter.clone(),
+            fixture.mock_network.clone().into_sender(),
+            fixture.mock_client_adapter.clone().into_sender(),
             fixture.chain_store.new_read_only_chunks_store(),
             fixture.mock_chain_head.clone(),
             fixture.mock_chain_head.clone(),

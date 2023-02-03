@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::test_utils::TestEnv;
+use near_async::messaging::CanSend;
 use near_chain::ChainGenesis;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_network::types::NetworkRequests;

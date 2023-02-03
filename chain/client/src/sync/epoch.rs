@@ -18,7 +18,7 @@ use near_primitives::types::EpochId;
 // TODO #3488
 #[allow(dead_code)]
 pub struct EpochSync {
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     /// Datastructure to keep track of when the last request to each peer was made.
     /// Peers do not respond to Epoch Sync requests more frequently than once per a certain time
     /// interval, thus there's no point in requesting more frequently.
@@ -58,7 +58,7 @@ pub struct EpochSync {
 
 impl EpochSync {
     pub fn new(
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         genesis_epoch_id: EpochId,
         genesis_next_epoch_id: EpochId,
         first_epoch_block_producers: Vec<ValidatorStake>,

@@ -3,7 +3,7 @@
 
 use actix::{Actor, Context, Handler};
 use anyhow::{anyhow, Context as AnyhowContext};
-use near_async::messaging::ArcSender;
+use near_async::messaging::Sender;
 use near_chain::{Block, BlockHeader, Chain, ChainStoreAccess, Error};
 use near_chain_configs::GenesisConfig;
 use near_client::sync::header::MAX_BLOCK_HEADERS;
@@ -198,7 +198,7 @@ impl IncomingRequests {
 pub struct MockPeerManagerActor {
     /// Client address for the node that we are testing
     client: Arc<dyn near_network::client::Client>,
-    shards_manager_adapter: ArcSender<ShardsManagerRequestFromNetwork>,
+    shards_manager_adapter: Sender<ShardsManagerRequestFromNetwork>,
     /// Access a pre-generated chain history from storage
     chain_history_access: ChainHistoryAccess,
     /// Current network state for the simulated network
@@ -215,7 +215,7 @@ pub struct MockPeerManagerActor {
 impl MockPeerManagerActor {
     fn new(
         client: Arc<dyn near_network::client::Client>,
-        shards_manager_adapter: ArcSender<ShardsManagerRequestFromNetwork>,
+        shards_manager_adapter: Sender<ShardsManagerRequestFromNetwork>,
         genesis_config: &GenesisConfig,
         mut chain: Chain,
         client_start_height: BlockHeight,

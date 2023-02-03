@@ -1,3 +1,4 @@
+use near_async::messaging::CanSend;
 use near_chain::{check_known, ChainStoreAccess};
 
 use std::sync::Arc;
@@ -35,7 +36,7 @@ pub struct BlockSyncRequest {
 
 /// Helper to track block syncing.
 pub struct BlockSync {
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     last_request: Option<BlockSyncRequest>,
     /// How far to fetch blocks vs fetch state.
     block_fetch_horizon: BlockHeightDelta,
@@ -45,7 +46,7 @@ pub struct BlockSync {
 
 impl BlockSync {
     pub fn new(
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         block_fetch_horizon: BlockHeightDelta,
         archive: bool,
     ) -> Self {
@@ -289,7 +290,8 @@ mod test {
         let mut capture = TracingCapture::enable();
         let network_adapter = Arc::new(MockPeerManagerAdapter::default());
         let block_fetch_horizon = 10;
-        let mut block_sync = BlockSync::new(network_adapter.clone(), block_fetch_horizon, false);
+        let mut block_sync =
+            BlockSync::new(network_adapter.clone().into(), block_fetch_horizon, false);
         let mut chain_genesis = ChainGenesis::test();
         chain_genesis.epoch_length = 100;
         let mut env = TestEnv::builder(chain_genesis).clients_count(2).build();
@@ -368,7 +370,8 @@ mod test {
     fn test_block_sync_archival() {
         let network_adapter = Arc::new(MockPeerManagerAdapter::default());
         let block_fetch_horizon = 10;
-        let mut block_sync = BlockSync::new(network_adapter.clone(), block_fetch_horizon, true);
+        let mut block_sync =
+            BlockSync::new(network_adapter.clone().into(), block_fetch_horizon, true);
         let mut chain_genesis = ChainGenesis::test();
         chain_genesis.epoch_length = 5;
         let mut env = TestEnv::builder(chain_genesis).clients_count(2).build();

@@ -1,4 +1,4 @@
-use near_async::messaging::Sender;
+use near_async::messaging::CanSend;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_primitives::receipt::Receipt;
 use near_primitives::test_utils::create_test_signer;
@@ -369,7 +369,7 @@ pub struct MockClientAdapterForShardsManager {
     pub requests: Arc<RwLock<VecDeque<ShardsManagerResponse>>>,
 }
 
-impl Sender<ShardsManagerResponse> for MockClientAdapterForShardsManager {
+impl CanSend<ShardsManagerResponse> for MockClientAdapterForShardsManager {
     fn send(&self, msg: ShardsManagerResponse) {
         self.requests.write().unwrap().push_back(msg);
     }
@@ -395,14 +395,14 @@ pub struct SynchronousShardsManagerAdapter {
     pub shards_manager: Arc<Mutex<ShardsManager>>,
 }
 
-impl Sender<ShardsManagerRequestFromClient> for SynchronousShardsManagerAdapter {
+impl CanSend<ShardsManagerRequestFromClient> for SynchronousShardsManagerAdapter {
     fn send(&self, msg: ShardsManagerRequestFromClient) {
         let mut shards_manager = self.shards_manager.lock().unwrap();
         shards_manager.handle_client_request(msg);
     }
 }
 
-impl Sender<ShardsManagerRequestFromNetwork> for SynchronousShardsManagerAdapter {
+impl CanSend<ShardsManagerRequestFromNetwork> for SynchronousShardsManagerAdapter {
     fn send(&self, msg: ShardsManagerRequestFromNetwork) {
         let mut shards_manager = self.shards_manager.lock().unwrap();
         shards_manager.handle_network_request(msg);

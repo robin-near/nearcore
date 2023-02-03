@@ -1,6 +1,7 @@
 use crate::concurrency::{Ctx, Once, RateLimiter, Scope, WeakMap};
 use log::info;
 
+use near_async::messaging::CanSend;
 use near_network::types::{
     AccountIdOrPeerTrackingShard, PartialEncodedChunkRequestMsg, PartialEncodedChunkResponseMsg,
     ReasonForBan, StateResponseInfo,
@@ -51,7 +52,7 @@ struct NetworkData {
 // Network encapsulates PeerManager and exposes an async API for sending RPCs.
 pub struct Network {
     pub stats: Stats,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     pub block_headers: Arc<WeakMap<CryptoHash, Once<Vec<BlockHeader>>>>,
     pub blocks: Arc<WeakMap<CryptoHash, Once<Block>>>,
     pub chunks: Arc<WeakMap<ChunkHash, Once<PartialEncodedChunkResponseMsg>>>,
@@ -71,7 +72,7 @@ pub struct Network {
 impl Network {
     pub fn new(
         config: &NearConfig,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         qps_limit: u32,
     ) -> Arc<Network> {
         Arc::new(Network {
@@ -127,12 +128,9 @@ impl Network {
                 for peer in peers {
                     // TODO: rate limit per peer.
                     self_.rate_limiter.allow(&ctx).await?;
-                    self_.network_adapter.send(
-                        PeerManagerMessageRequest::NetworkRequests(new_req(
-                            peer.full_peer_info.clone(),
-                        ))
-                        .with_span_context(),
-                    );
+                    self_.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
+                        new_req(peer.full_peer_info.clone()),
+                    ));
                     self_.stats.msgs_sent.fetch_add(1, Ordering::Relaxed);
                     ctx.wait(self_.request_timeout).await?;
                 }

@@ -21,7 +21,7 @@ use actix_rt::ArbiterHandle;
 use borsh::BorshSerialize;
 use chrono::DateTime;
 use near_async::futures::ActixFutureSpawner;
-use near_async::messaging::ArcSender;
+use near_async::messaging::{CanSend, Sender};
 use near_chain::chain::{
     do_apply_chunks, ApplyStatePartsRequest, ApplyStatePartsResponse, BlockCatchUpRequest,
     BlockCatchUpResponse, StateSplitRequest, StateSplitResponse,
@@ -87,7 +87,7 @@ pub struct ClientActor {
     // Address of this ClientActor. Can be used to send messages to self.
     my_address: Addr<ClientActor>,
     pub(crate) client: Client,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
     network_info: NetworkInfo,
     /// Identity that represents this Client at the network level.
     /// It is used as part of the messages that identify this client.
@@ -149,7 +149,7 @@ impl ClientActor {
         address: Addr<ClientActor>,
         config: ClientConfig,
         node_id: PeerId,
-        network_adapter: Arc<dyn PeerManagerAdapter>,
+        network_adapter: PeerManagerAdapter,
         validator_signer: Option<Arc<dyn ValidatorSigner>>,
         telemetry_actor: Addr<TelemetryActor>,
         ctx: &Context<ClientActor>,
@@ -1890,8 +1890,8 @@ pub fn start_client(
     chain_genesis: ChainGenesis,
     runtime_adapter: Arc<dyn RuntimeWithEpochManagerAdapter>,
     node_id: PeerId,
-    network_adapter: Arc<dyn PeerManagerAdapter>,
-    shards_manager_adapter: ArcSender<ShardsManagerRequestFromClient>,
+    network_adapter: PeerManagerAdapter,
+    shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
     validator_signer: Option<Arc<dyn ValidatorSigner>>,
     telemetry_actor: Addr<TelemetryActor>,
     sender: Option<broadcast::Sender<()>>,

@@ -21,6 +21,7 @@
 //!
 
 use near_async::futures::FutureSpawner;
+use near_async::messaging::CanSendAsync;
 use near_chain::{near_chain_primitives, Error};
 use near_primitives::state_part::PartId;
 use std::collections::HashMap;
@@ -100,7 +101,7 @@ fn make_account_or_peer_id_or_hash(
 
 /// Helper to track state sync.
 pub struct StateSync {
-    network_adapter: Arc<dyn PeerManagerAdapter>,
+    network_adapter: PeerManagerAdapter,
 
     last_time_block_requested: Option<DateTime<Utc>>,
 
@@ -120,7 +121,7 @@ pub struct StateSync {
 }
 
 impl StateSync {
-    pub fn new(network_adapter: Arc<dyn PeerManagerAdapter>, timeout: TimeDuration) -> Self {
+    pub fn new(network_adapter: PeerManagerAdapter, timeout: TimeDuration) -> Self {
         StateSync {
             network_adapter,
             last_time_block_requested: None,
@@ -889,7 +890,8 @@ mod test {
     // Start a new state sync - and check that it asks for a header.
     fn test_ask_for_header() {
         let mock_peer_manager = Arc::new(MockPeerManagerAdapter::default());
-        let mut state_sync = StateSync::new(mock_peer_manager.clone(), TimeDuration::from_secs(1));
+        let mut state_sync =
+            StateSync::new(mock_peer_manager.clone().into(), TimeDuration::from_secs(1));
         let mut new_shard_sync = HashMap::new();
 
         let (mut chain, kv, signer) = test_utils::setup();
