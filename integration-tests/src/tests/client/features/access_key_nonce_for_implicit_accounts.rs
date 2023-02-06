@@ -13,7 +13,7 @@ use near_crypto::{InMemorySigner, KeyType, Signer};
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
 use near_network::types::{NetworkRequests, PeerManagerMessageRequest};
 use near_o11y::testonly::init_test_logger;
-use near_o11y::WithSpanContextExt;
+
 use near_primitives::account::AccessKey;
 use near_primitives::errors::InvalidTxError;
 use near_primitives::runtime::config_store::RuntimeConfigStore;
@@ -523,7 +523,7 @@ fn test_processing_chunks_sanity() {
                     env.process_partial_encoded_chunk_request(1, request);
                     num_requests += 1;
                 } else {
-                    env.network_adapters[1].do_send(request.with_span_context());
+                    env.network_adapters[1].send(request);
                 }
             }
         }
