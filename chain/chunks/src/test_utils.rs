@@ -1,10 +1,5 @@
-use actix::MailboxError;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use near_async::messaging::CanSend;
 use near_network::shards_manager::ShardsManagerRequestFromNetwork;
-use near_network::types::MsgRecipient;
-use near_o11y::WithSpanContext;
 use near_primitives::receipt::Receipt;
 use near_primitives::test_utils::create_test_signer;
 use near_primitives::time::Clock;
@@ -374,17 +369,9 @@ pub struct MockClientAdapterForShardsManager {
     pub requests: Arc<RwLock<VecDeque<ShardsManagerResponse>>>,
 }
 
-impl MsgRecipient<WithSpanContext<ShardsManagerResponse>> for MockClientAdapterForShardsManager {
-    fn send(
-        &self,
-        msg: WithSpanContext<ShardsManagerResponse>,
-    ) -> BoxFuture<'static, Result<(), MailboxError>> {
-        self.do_send(msg);
-        futures::future::ok(()).boxed()
-    }
-
-    fn do_send(&self, msg: WithSpanContext<ShardsManagerResponse>) {
-        self.requests.write().unwrap().push_back(msg.msg);
+impl CanSend<ShardsManagerResponse> for MockClientAdapterForShardsManager {
+    fn send(&self, msg: ShardsManagerResponse) {
+        self.requests.write().unwrap().push_back(msg);
     }
 }
 
