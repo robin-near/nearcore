@@ -13,7 +13,6 @@ use near_chain::{Chain, ChainGenesis};
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_client::{start_client, start_view_client, ClientActor, ConfigUpdater, ViewClientActor};
 use near_network::time;
-use near_network::types::NetworkRecipient;
 use near_network::PeerManagerActor;
 use near_primitives::block::GenesisId;
 use near_store::{DBCol, Mode, NodeStorage, StoreOpenerError, Temperature};
@@ -189,7 +188,7 @@ pub fn start_with_config_and_synchronization(
     };
 
     let node_id = config.network_config.node_id();
-    let network_adapter = Arc::new(NetworkRecipient::default());
+    let network_adapter = Arc::new(LateBoundSender::default());
     let shards_manager_adapter = Arc::new(LateBoundSender::default());
     let client_adapter_for_shards_manager = Arc::new(LateBoundSender::default());
     let adv = near_client::adversarial::Controls::new(config.client_config.archive);
@@ -198,7 +197,7 @@ pub fn start_with_config_and_synchronization(
         config.validator_signer.as_ref().map(|signer| signer.validator_id().clone()),
         chain_genesis.clone(),
         runtime.clone(),
-        network_adapter.clone(),
+        network_adapter.clone().into(),
         config.client_config.clone(),
         adv.clone(),
     );
@@ -207,7 +206,7 @@ pub fn start_with_config_and_synchronization(
         chain_genesis,
         runtime.clone(),
         node_id,
-        network_adapter.clone(),
+        network_adapter.clone().into(),
         shards_manager_adapter.as_sender(),
         config.validator_signer.clone(),
         telemetry,
@@ -218,7 +217,7 @@ pub fn start_with_config_and_synchronization(
     client_adapter_for_shards_manager.bind(client_actor.clone().with_auto_span_context());
     let (shards_manager_actor, shards_manager_arbiter_handle) = start_shards_manager(
         runtime,
-        network_adapter.clone(),
+        network_adapter.as_sender(),
         client_adapter_for_shards_manager.as_sender(),
         config.validator_signer.as_ref().map(|signer| signer.validator_id().clone()),
         store.get_store(Temperature::Hot),
@@ -237,7 +236,7 @@ pub fn start_with_config_and_synchronization(
         genesis_id,
     )
     .context("PeerManager::spawn()")?;
-    network_adapter.set_recipient(network_actor.clone());
+    network_adapter.bind(network_actor.clone().with_auto_span_context());
 
     #[cfg(feature = "json_rpc")]
     if let Some(rpc_config) = config.rpc_config {
