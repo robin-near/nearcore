@@ -594,13 +594,15 @@ impl Chain {
                 for chunk in genesis_chunks {
                     store_update.save_chunk(chunk.clone());
                 }
-                store_update.merge(runtime_adapter.add_validator_proposals(
-                    BlockHeaderInfo::new(
-                        genesis.header(),
-                        // genesis height is considered final
-                        chain_genesis.height,
-                    ),
-                )?);
+                store_update.merge(
+                    runtime_adapter
+                        .add_validator_proposals(BlockHeaderInfo::new(
+                            genesis.header(),
+                            // genesis height is considered final
+                            chain_genesis.height,
+                        ))?
+                        .into(),
+                );
                 store_update.save_block_header(genesis.header().clone())?;
                 store_update.save_block(genesis.clone());
                 store_update
@@ -1756,7 +1758,7 @@ impl Chain {
                 let epoch_manager_update = chain_update
                     .runtime_adapter
                     .add_validator_proposals(BlockHeaderInfo::new(header, last_finalized_height))?;
-                chain_update.chain_store_update.merge(epoch_manager_update);
+                chain_update.chain_store_update.merge(epoch_manager_update.into());
                 chain_update.commit()?;
             }
         }
@@ -2959,7 +2961,7 @@ impl Chain {
         let prev_chunk_header = shard_state_header.cloned_prev_chunk_header();
 
         // 1-2. Checking chunk validity
-        if !validate_chunk_proofs(&chunk, &*self.runtime_adapter)? {
+        if !validate_chunk_proofs(&chunk, self.runtime_adapter.epoch_manager_adapter())? {
             byzantine_assert!(false);
             return Err(Error::Other(
                 "set_shard_state failed: chunk header proofs are invalid".into(),
@@ -3547,7 +3549,7 @@ impl Chain {
     ) -> Result<AccountId, Error> {
         let head = self.head()?;
         let target_height = head.height + horizon - 1;
-        self.runtime_adapter.get_chunk_producer(epoch_id, target_height, shard_id)
+        Ok(self.runtime_adapter.get_chunk_producer(epoch_id, target_height, shard_id)?)
     }
 
     /// Find a validator that is responsible for a given shard to forward requests to
@@ -4503,7 +4505,7 @@ impl Chain {
         {
             let prev_hash = *sync_block.header().prev_hash();
             // If sync_hash is not on the Epoch boundary, it's malicious behavior
-            self.runtime_adapter.is_next_block_epoch_start(&prev_hash)
+            Ok(self.runtime_adapter.is_next_block_epoch_start(&prev_hash)?)
         } else {
             Ok(false) // invalid Epoch of sync_hash, possible malicious behavior
         }
@@ -5118,7 +5120,7 @@ impl<'a> ChainUpdate<'a> {
         let epoch_manager_update = self
             .runtime_adapter
             .add_validator_proposals(BlockHeaderInfo::new(block.header(), last_finalized_height))?;
-        self.chain_store_update.merge(epoch_manager_update);
+        self.chain_store_update.merge(epoch_manager_update.into());
 
         // Add validated block to the db, even if it's not the canonical fork.
         self.chain_store_update.save_block(block.clone());

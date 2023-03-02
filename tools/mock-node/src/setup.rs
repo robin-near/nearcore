@@ -41,7 +41,7 @@ fn setup_runtime(
             .get_hot_store()
     };
 
-    Arc::new(NightshadeRuntime::from_config(home_dir, store, config))
+    NightshadeRuntime::from_config(home_dir, store, config)
 }
 
 fn setup_mock_peer_manager_actor(
@@ -171,12 +171,12 @@ pub fn setup_mock_node(
 
         // copy epoch info
         let mut epoch_manager = EpochManager::new_from_genesis_config(
-            client_runtime.store().clone(),
+            client_runtime.store().clone().into(),
             &config.genesis.config,
         )
         .unwrap();
         let mock_epoch_manager = EpochManager::new_from_genesis_config(
-            mock_network_runtime.store().clone(),
+            mock_network_runtime.store().clone().into(),
             &config.genesis.config,
         )
         .unwrap();

@@ -4,6 +4,8 @@ use std::sync::Arc;
 use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::DateTime;
 use chrono::Utc;
+use near_epoch_manager::shard_tracker::ShardTracker;
+use near_epoch_manager::types::EpochManagerStoreUpdate;
 use near_primitives::sandbox::state_patch::SandboxStatePatch;
 use num_rational::Rational32;
 
@@ -400,7 +402,7 @@ pub trait RuntimeAdapter: Send + Sync {
     fn add_validator_proposals(
         &self,
         block_header_info: BlockHeaderInfo,
-    ) -> Result<StoreUpdate, Error>;
+    ) -> Result<EpochManagerStoreUpdate, Error>;
 
     /// Apply transactions to given state root and return store update and new state root.
     /// Also returns transaction result for each transaction and new receipts.
@@ -566,16 +568,15 @@ pub trait RuntimeAdapter: Send + Sync {
         state_root: &StateRoot,
     ) -> bool;
 
-    fn chunk_needs_to_be_fetched_from_archival(
-        &self,
-        chunk_prev_block_hash: &CryptoHash,
-        header_head: &CryptoHash,
-    ) -> Result<bool, Error>;
-
     fn get_protocol_config(&self, epoch_id: &EpochId) -> Result<ProtocolConfig, Error>;
 }
 
-pub trait RuntimeWithEpochManagerAdapter: RuntimeAdapter + EpochManagerAdapter {}
+/// LEGACY trait. Will be removed. Use RuntimeAdapter or EpochManagerHandler instead.
+pub trait RuntimeWithEpochManagerAdapter: RuntimeAdapter + EpochManagerAdapter {
+    fn epoch_manager_adapter(&self) -> &dyn EpochManagerAdapter;
+    fn epoch_manager_adapter_arc(&self) -> Arc<dyn EpochManagerAdapter>;
+    fn shard_tracker(&self) -> ShardTracker;
+}
 
 /// The last known / checked height and time when we have processed it.
 /// Required to keep track of skipped blocks and not fallback to produce blocks at lower height.

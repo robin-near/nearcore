@@ -219,9 +219,9 @@ fn apply_state_parts(
     location: Location,
 ) {
     let runtime_adapter: Arc<dyn RuntimeAdapter> =
-        Arc::new(NightshadeRuntime::from_config(home_dir, store.clone(), &near_config));
+        NightshadeRuntime::from_config(home_dir, store.clone(), &near_config);
     let epoch_manager =
-        EpochManager::new_from_genesis_config(store.clone(), &near_config.genesis.config)
+        EpochManager::new_from_genesis_config(store.clone().into(), &near_config.genesis.config)
             .expect("Failed to start Epoch Manager");
     let chain_store = ChainStore::new(
         store.clone(),
@@ -310,9 +310,9 @@ fn dump_state_parts(
     location: Location,
 ) {
     let runtime_adapter: Arc<dyn RuntimeAdapter> =
-        Arc::new(NightshadeRuntime::from_config(home_dir, store.clone(), &near_config));
+        NightshadeRuntime::from_config(home_dir, store.clone(), &near_config);
     let epoch_manager =
-        EpochManager::new_from_genesis_config(store.clone(), &near_config.genesis.config)
+        EpochManager::new_from_genesis_config(store.clone().into(), &near_config.genesis.config)
             .expect("Failed to start Epoch Manager");
     let chain_store = ChainStore::new(
         store.clone(),

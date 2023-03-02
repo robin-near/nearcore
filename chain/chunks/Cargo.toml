@@ -20,7 +20,9 @@ time.workspace = true
 tracing.workspace = true
 
 near-async = { path = "../../core/async" }
+near-chain-configs = { path = "../../core/chain-configs" }
 near-crypto = { path = "../../core/crypto" }
+near-epoch-manager = { path = "../epoch-manager" }
 near-primitives = { path = "../../core/primitives" }
 near-chunks-primitives = { path = "../chunks-primitives" }
 near-store = { path = "../../core/store" }

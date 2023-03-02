@@ -379,9 +379,14 @@ fn test_validator_unstake() {
         stake("test1".parse().unwrap(), amount_staked),
         stake("test2".parse().unwrap(), amount_staked),
     ];
-    let mut epoch_manager =
-        EpochManager::new(store, config, PROTOCOL_VERSION, default_reward_calculator(), validators)
-            .unwrap();
+    let mut epoch_manager = EpochManager::new(
+        store.into(),
+        config,
+        PROTOCOL_VERSION,
+        default_reward_calculator(),
+        validators,
+    )
+    .unwrap();
     let h = hash_range(8);
     record_block(&mut epoch_manager, CryptoHash::default(), h[0], 0, vec![]);
     // test1 unstakes in epoch 1, and should be kicked out in epoch 3 (validators stored at h2).
@@ -444,9 +449,14 @@ fn test_slashing() {
         stake("test1".parse().unwrap(), amount_staked),
         stake("test2".parse().unwrap(), amount_staked),
     ];
-    let mut epoch_manager =
-        EpochManager::new(store, config, PROTOCOL_VERSION, default_reward_calculator(), validators)
-            .unwrap();
+    let mut epoch_manager = EpochManager::new(
+        store.into(),
+        config,
+        PROTOCOL_VERSION,
+        default_reward_calculator(),
+        validators,
+    )
+    .unwrap();
 
     let h = hash_range(10);
     record_block(&mut epoch_manager, CryptoHash::default(), h[0], 0, vec![]);
@@ -511,9 +521,14 @@ fn test_double_sign_slashing1() {
         stake("test1".parse().unwrap(), amount_staked),
         stake("test2".parse().unwrap(), amount_staked),
     ];
-    let mut epoch_manager =
-        EpochManager::new(store, config, PROTOCOL_VERSION, default_reward_calculator(), validators)
-            .unwrap();
+    let mut epoch_manager = EpochManager::new(
+        store.into(),
+        config,
+        PROTOCOL_VERSION,
+        default_reward_calculator(),
+        validators,
+    )
+    .unwrap();
 
     let h = hash_range(10);
     record_block(&mut epoch_manager, CryptoHash::default(), h[0], 0, vec![]);
@@ -2109,7 +2124,8 @@ fn test_protocol_version_switch() {
         stake("test2".parse().unwrap(), amount_staked),
     ];
     let mut epoch_manager =
-        EpochManager::new(store, config, 0, default_reward_calculator(), validators).unwrap();
+        EpochManager::new(store.into(), config, 0, default_reward_calculator(), validators)
+            .unwrap();
     let h = hash_range(8);
     record_block(&mut epoch_manager, CryptoHash::default(), h[0], 0, vec![]);
     let mut block_info1 = block_info(h[1], 1, 1, h[0], h[0], h[0], vec![], DEFAULT_TOTAL_SUPPLY);
@@ -2136,7 +2152,7 @@ fn test_protocol_version_switch_with_shard_layout_change() {
     ];
     let new_protocol_version = SimpleNightshade.protocol_version();
     let mut epoch_manager = EpochManager::new(
-        store,
+        store.into(),
         config,
         new_protocol_version - 1,
         default_reward_calculator(),
@@ -2215,7 +2231,8 @@ fn test_protocol_version_switch_with_many_seats() {
         stake("test2".parse().unwrap(), amount_staked / 5),
     ];
     let mut epoch_manager =
-        EpochManager::new(store, config, 0, default_reward_calculator(), validators).unwrap();
+        EpochManager::new(store.into(), config, 0, default_reward_calculator(), validators)
+            .unwrap();
     let h = hash_range(50);
     record_block(&mut epoch_manager, CryptoHash::default(), h[0], 0, vec![]);
     let mut block_info1 = block_info(h[1], 1, 1, h[0], h[0], h[0], vec![], DEFAULT_TOTAL_SUPPLY);
@@ -2245,7 +2262,7 @@ fn test_protocol_version_switch_after_switch() {
         stake("test2".parse().unwrap(), amount_staked),
     ];
     let mut epoch_manager = EpochManager::new(
-        store,
+        store.into(),
         config,
         UPGRADABILITY_FIX_PROTOCOL_VERSION,
         default_reward_calculator(),

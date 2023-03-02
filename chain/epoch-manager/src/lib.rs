@@ -21,13 +21,13 @@ use near_primitives::version::{ProtocolVersion, UPGRADABILITY_FIX_PROTOCOL_VERSI
 use near_primitives::views::{
     CurrentEpochValidatorInfo, EpochValidatorInfo, NextEpochValidatorInfo, ValidatorKickoutView,
 };
-use near_store::{DBCol, Store, StoreUpdate};
 use num_rational::Rational64;
 use primitive_types::U256;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::{debug, warn};
+use types::{EpochManagerDBColumn, EpochManagerStore, EpochManagerStoreUpdate};
 
 pub use crate::adapter::{EpochManagerAdapter, HasEpochMangerHandle};
 pub use crate::reward_calculator::RewardCalculator;
@@ -38,6 +38,7 @@ mod adapter;
 mod proposals;
 mod reward_calculator;
 mod shard_assignment;
+pub mod shard_tracker;
 pub mod test_utils;
 #[cfg(test)]
 mod tests;
@@ -109,7 +110,7 @@ impl EpochInfoProvider for EpochManagerHandle {
 /// Tracks epoch information across different forks, such as validators.
 /// Note: that even after garbage collection, the data about genesis epoch should be in the store.
 pub struct EpochManager {
-    store: Store,
+    store: EpochManagerStore,
     /// Current epoch config.
     config: AllEpochConfig,
     reward_calculator: RewardCalculator,
@@ -147,7 +148,7 @@ pub struct EpochManager {
 
 impl EpochManager {
     pub fn new_from_genesis_config(
-        store: Store,
+        store: EpochManagerStore,
         genesis_config: &GenesisConfig,
     ) -> Result<Self, EpochError> {
         let reward_calculator = RewardCalculator::new(genesis_config);
@@ -162,7 +163,7 @@ impl EpochManager {
     }
 
     pub fn new(
-        store: Store,
+        store: EpochManagerStore,
         config: AllEpochConfig,
         genesis_protocol_version: ProtocolVersion,
         reward_calculator: RewardCalculator,
@@ -171,7 +172,7 @@ impl EpochManager {
         let validator_reward =
             HashMap::from([(reward_calculator.protocol_treasury_account.clone(), 0u128)]);
         let epoch_info_aggregator = store
-            .get_ser(DBCol::EpochInfo, AGGREGATOR_KEY)
+            .get_ser(EpochManagerDBColumn::EpochInfo, AGGREGATOR_KEY)
             .map_err(EpochError::from)?
             .unwrap_or_default();
         let genesis_num_block_producer_seats =
@@ -300,7 +301,7 @@ impl EpochManager {
         epoch_info: EpochInfo,
         next_epoch_id: &EpochId,
         next_epoch_info: EpochInfo,
-    ) -> Result<StoreUpdate, EpochError> {
+    ) -> Result<EpochManagerStoreUpdate, EpochError> {
         let mut store_update = self.store.store_update();
         self.save_block_info(&mut store_update, Arc::new(prev_epoch_first_block_info))?;
         self.save_block_info(&mut store_update, Arc::new(prev_epoch_prev_last_block_info))?;
@@ -615,7 +616,7 @@ impl EpochManager {
     /// Finalizes epoch (T), where given last block hash is given, and returns next next epoch id (T + 2).
     fn finalize_epoch(
         &mut self,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
         block_info: &BlockInfo,
         last_block_hash: &CryptoHash,
         rng_seed: RngSeed,
@@ -697,7 +698,7 @@ impl EpochManager {
         &mut self,
         mut block_info: BlockInfo,
         rng_seed: RngSeed,
-    ) -> Result<StoreUpdate, EpochError> {
+    ) -> Result<EpochManagerStoreUpdate, EpochError> {
         let current_hash = *block_info.hash();
         let mut store_update = self.store.store_update();
         // Check that we didn't record this block yet.
@@ -1486,7 +1487,7 @@ impl EpochManager {
     pub fn get_epoch_info(&self, epoch_id: &EpochId) -> Result<Arc<EpochInfo>, EpochError> {
         self.epochs_info.get_or_try_put(epoch_id.clone(), |epoch_id| {
             self.store
-                .get_ser(DBCol::EpochInfo, epoch_id.as_ref())?
+                .get_ser(EpochManagerDBColumn::EpochInfo, epoch_id.as_ref())?
                 .ok_or_else(|| EpochError::EpochOutOfBounds(epoch_id.clone()))
         })
     }
@@ -1501,11 +1502,11 @@ impl EpochManager {
 
     fn save_epoch_info(
         &mut self,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
         epoch_id: &EpochId,
         epoch_info: Arc<EpochInfo>,
     ) -> Result<(), EpochError> {
-        store_update.set_ser(DBCol::EpochInfo, epoch_id.as_ref(), &epoch_info)?;
+        store_update.set_ser(EpochManagerDBColumn::EpochInfo, epoch_id.as_ref(), &epoch_info)?;
         self.epochs_info.put(epoch_id.clone(), epoch_info);
         Ok(())
     }
@@ -1513,7 +1514,7 @@ impl EpochManager {
     pub fn get_epoch_validator_info(&self, epoch_id: &EpochId) -> Result<EpochSummary, EpochError> {
         // We don't use cache here since this query happens rarely and only for rpc.
         self.store
-            .get_ser(DBCol::EpochValidatorInfo, epoch_id.as_ref())?
+            .get_ser(EpochManagerDBColumn::EpochValidatorInfo, epoch_id.as_ref())?
             .ok_or_else(|| EpochError::EpochOutOfBounds(epoch_id.clone()))
     }
 
@@ -1521,12 +1522,12 @@ impl EpochManager {
     // `get_epoch_validator_info` will return stale results.
     fn save_epoch_validator_info(
         &self,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
         epoch_id: &EpochId,
         epoch_summary: &EpochSummary,
     ) -> Result<(), EpochError> {
         store_update
-            .set_ser(DBCol::EpochValidatorInfo, epoch_id.as_ref(), epoch_summary)
+            .set_ser(EpochManagerDBColumn::EpochValidatorInfo, epoch_id.as_ref(), epoch_summary)
             .map_err(EpochError::from)
     }
 
@@ -1545,7 +1546,7 @@ impl EpochManager {
     pub fn get_block_info(&self, hash: &CryptoHash) -> Result<Arc<BlockInfo>, EpochError> {
         self.blocks_info.get_or_try_put(*hash, |hash| {
             self.store
-                .get_ser(DBCol::BlockInfo, hash.as_ref())?
+                .get_ser(EpochManagerDBColumn::BlockInfo, hash.as_ref())?
                 .ok_or_else(|| EpochError::MissingBlock(*hash))
                 .map(Arc::new)
         })
@@ -1553,12 +1554,12 @@ impl EpochManager {
 
     fn save_block_info(
         &mut self,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
         block_info: Arc<BlockInfo>,
     ) -> Result<(), EpochError> {
         let block_hash = *block_info.hash();
         store_update
-            .insert_ser(DBCol::BlockInfo, block_hash.as_ref(), &block_info)
+            .insert_ser(EpochManagerDBColumn::BlockInfo, block_hash.as_ref(), &block_info)
             .map_err(EpochError::from)?;
         self.blocks_info.put(block_hash, block_info);
         Ok(())
@@ -1566,12 +1567,12 @@ impl EpochManager {
 
     fn save_epoch_start(
         &mut self,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
         epoch_id: &EpochId,
         epoch_start: BlockHeight,
     ) -> Result<(), EpochError> {
         store_update
-            .set_ser(DBCol::EpochStart, epoch_id.as_ref(), &epoch_start)
+            .set_ser(EpochManagerDBColumn::EpochStart, epoch_id.as_ref(), &epoch_start)
             .map_err(EpochError::from)?;
         self.epoch_id_to_start.put(epoch_id.clone(), epoch_start);
         Ok(())
@@ -1580,7 +1581,7 @@ impl EpochManager {
     fn get_epoch_start_from_epoch_id(&self, epoch_id: &EpochId) -> Result<BlockHeight, EpochError> {
         self.epoch_id_to_start.get_or_try_put(epoch_id.clone(), |epoch_id| {
             self.store
-                .get_ser(DBCol::EpochStart, epoch_id.as_ref())?
+                .get_ser(EpochManagerDBColumn::EpochStart, epoch_id.as_ref())?
                 .ok_or_else(|| EpochError::EpochOutOfBounds(epoch_id.clone()))
         })
     }
@@ -1601,7 +1602,7 @@ impl EpochManager {
     pub fn update_epoch_info_aggregator_upto_final(
         &mut self,
         last_final_block_hash: &CryptoHash,
-        store_update: &mut StoreUpdate,
+        store_update: &mut EpochManagerStoreUpdate,
     ) -> Result<(), EpochError> {
         if let Some((aggregator, replace)) =
             self.aggregate_epoch_info_upto(last_final_block_hash)?
@@ -1616,7 +1617,7 @@ impl EpochManager {
             };
             if save {
                 store_update.set_ser(
-                    DBCol::EpochInfo,
+                    EpochManagerDBColumn::EpochInfo,
                     AGGREGATOR_KEY,
                     &self.epoch_info_aggregator,
                 )?;

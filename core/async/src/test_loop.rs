@@ -59,6 +59,7 @@
 //! timestamp are executed in FIFO order. For example, if the events are emitted in the
 //! following order: (A due 100ms), (B due 0ms), (C due 200ms), (D due 0ms), (E due 100ms)
 //! then the actual order of execution is B, D, A, E, C.
+pub mod adhoc;
 pub mod delay_sender;
 pub mod event_handler;
 pub mod futures;
@@ -243,6 +244,10 @@ impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
         }
     }
 
+    pub fn sender(&self) -> DelaySender<Event> {
+        self.sender.clone()
+    }
+
     /// Registers a new event handler to the test loop.
     pub fn register_handler(&mut self, handler: LoopEventHandler<Data, Event>) {
         assert!(!self.handlers_initialized, "Cannot register more handlers after run() is called");
@@ -309,5 +314,6 @@ impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
             }
             panic!("Unhandled event: {:?}", current_event);
         }
+        self.current_time = deadline;
     }
 }

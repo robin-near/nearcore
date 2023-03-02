@@ -80,11 +80,12 @@ pub fn start_shards_manager(
         .get_ser::<Tip>(DBCol::BlockMisc, HEADER_HEAD_KEY)
         .unwrap()
         .expect("ShardsManager must be initialized after the chain is initialized");
-    let chunks_store = ReadOnlyChunksStore::new(store);
+    let chunks_store = ReadOnlyChunksStore::new(store.into());
     let shards_manager = ShardsManager::new(
         time::Clock::real(),
         me,
-        runtime_adapter,
+        runtime_adapter.epoch_manager_adapter_arc(),
+        runtime_adapter.shard_tracker(),
         network_adapter,
         client_adapter_for_shards_manager,
         chunks_store,

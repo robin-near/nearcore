@@ -10,6 +10,8 @@ use near_primitives::types::{
     AccountId, BlockHeight, EpochId, ShardId, ValidatorId, ValidatorStats,
 };
 use near_primitives::version::ProtocolVersion;
+use near_store::thin_store::{IsColumn, ThinStore, ThinStoreUpdate};
+use near_store::DBCol;
 
 use crate::EpochManager;
 
@@ -222,3 +224,24 @@ impl EpochInfoAggregator {
         }
     }
 }
+
+pub enum EpochManagerDBColumn {
+    EpochInfo,
+    EpochValidatorInfo,
+    BlockInfo,
+    EpochStart,
+}
+
+impl IsColumn for EpochManagerDBColumn {
+    fn col(&self) -> DBCol {
+        match self {
+            EpochManagerDBColumn::EpochInfo => DBCol::EpochInfo,
+            EpochManagerDBColumn::EpochValidatorInfo => DBCol::EpochValidatorInfo,
+            EpochManagerDBColumn::BlockInfo => DBCol::BlockInfo,
+            EpochManagerDBColumn::EpochStart => DBCol::EpochStart,
+        }
+    }
+}
+
+pub type EpochManagerStore = ThinStore<EpochManagerDBColumn>;
+pub type EpochManagerStoreUpdate = ThinStoreUpdate<EpochManagerDBColumn>;
