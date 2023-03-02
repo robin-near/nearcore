@@ -1,6 +1,5 @@
 use crate::metrics;
 use crate::migrations::load_migration_data;
-use crate::shard_tracker::{ShardTracker, TrackedConfig};
 use crate::NearConfig;
 use borsh::ser::BorshSerialize;
 use borsh::BorshDeserialize;
@@ -15,6 +14,7 @@ use near_chain_configs::{
 };
 use near_client_primitives::types::StateSplitApplyingStatus;
 use near_crypto::PublicKey;
+use near_epoch_manager::shard_tracker::ShardTracker;
 use near_epoch_manager::{EpochManager, EpochManagerAdapter, EpochManagerHandle};
 use near_o11y::log_assert;
 use near_pool::types::PoolIterator;
@@ -1412,29 +1412,6 @@ impl RuntimeAdapter for NightshadeRuntime {
         }
     }
 
-    fn chunk_needs_to_be_fetched_from_archival(
-        &self,
-        chunk_prev_block_hash: &CryptoHash,
-        header_head: &CryptoHash,
-    ) -> Result<bool, Error> {
-        let epoch_manager = self.epoch_manager.read();
-        let head_epoch_id = epoch_manager.get_epoch_id(header_head)?;
-        let head_next_epoch_id = epoch_manager.get_next_epoch_id(header_head)?;
-        let chunk_epoch_id = epoch_manager.get_epoch_id_from_prev_block(chunk_prev_block_hash)?;
-        let chunk_next_epoch_id =
-            epoch_manager.get_next_epoch_id_from_prev_block(chunk_prev_block_hash)?;
-
-        // `chunk_epoch_id != head_epoch_id && chunk_next_epoch_id != head_epoch_id` covers the
-        // common case: the chunk is in the current epoch, or in the previous epoch, relative to the
-        // header head. The third condition (`chunk_epoch_id != head_next_epoch_id`) covers a
-        // corner case, in which the `header_head` is the last block of an epoch, and the chunk is
-        // for the next block. In this case the `chunk_epoch_id` will be one epoch ahead of the
-        // `header_head`.
-        Ok(chunk_epoch_id != head_epoch_id
-            && chunk_next_epoch_id != head_epoch_id
-            && chunk_epoch_id != head_next_epoch_id)
-    }
-
     fn get_protocol_config(&self, epoch_id: &EpochId) -> Result<ProtocolConfig, Error> {
         let protocol_version = self.get_epoch_protocol_version(epoch_id)?;
         let mut genesis_config = self.genesis_config.clone();
@@ -1561,6 +1538,7 @@ mod test {
     use std::collections::BTreeSet;
 
     use near_chain::{Chain, ChainGenesis};
+    use near_epoch_manager::shard_tracker::TrackedConfig;
     use near_primitives::test_utils::create_test_signer;
     use near_primitives::types::validator_stake::ValidatorStake;
     use num_rational::Ratio;

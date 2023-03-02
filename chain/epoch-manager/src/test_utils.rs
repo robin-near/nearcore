@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use num_rational::Ratio;
 
 use crate::proposals::find_threshold;
+use crate::types::EpochManagerStore;
 use crate::RewardCalculator;
 use crate::RngSeed;
 use crate::{BlockInfo, EpochManager};
@@ -222,7 +223,7 @@ pub fn setup_epoch_manager(
         fishermen_threshold,
     );
     EpochManager::new(
-        store,
+        store.into(),
         config,
         PROTOCOL_VERSION,
         reward_calculator,
@@ -254,6 +255,40 @@ pub fn setup_default_epoch_manager(
         1,
         default_reward_calculator(),
     )
+}
+
+pub fn setup_epoch_manager_with_block_and_chunk_producers(
+    store: EpochManagerStore,
+    block_producers: Vec<AccountId>,
+    chunk_only_producers: Vec<AccountId>,
+    num_shards: NumShards,
+    epoch_length: BlockHeightDelta,
+) -> EpochManager {
+    let num_block_producers = block_producers.len() as u64;
+    let block_producer_stake = 1_000_000 as u128;
+    let mut total_stake = 0;
+    let mut validators = vec![];
+    for block_producer in block_producers {
+        validators.push((block_producer, block_producer_stake));
+        total_stake += block_producer_stake;
+    }
+    for chunk_only_producer in chunk_only_producers {
+        let stake = total_stake * 160 / 1_000_000 / num_shards as u128 + 1;
+        validators.push((chunk_only_producer, stake));
+        total_stake += stake;
+    }
+    let config = epoch_config(epoch_length, num_shards, num_block_producers, 0, 0, 0, 0);
+    EpochManager::new(
+        store.into(),
+        config,
+        PROTOCOL_VERSION,
+        default_reward_calculator(),
+        validators
+            .iter()
+            .map(|(account_id, balance)| stake(account_id.clone(), *balance))
+            .collect(),
+    )
+    .unwrap()
 }
 
 pub fn record_block_with_final_block_hash(

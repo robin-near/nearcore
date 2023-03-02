@@ -250,13 +250,13 @@ impl KeyValueRuntime {
     fn get_epoch_and_valset(
         &self,
         prev_hash: CryptoHash,
-    ) -> Result<(EpochId, usize, EpochId), Error> {
+    ) -> Result<(EpochId, usize, EpochId), EpochError> {
         if prev_hash == CryptoHash::default() {
             return Ok((EpochId(prev_hash), 0, EpochId(prev_hash)));
         }
         let prev_block_header = self
             .get_block_header(&prev_hash)?
-            .ok_or_else(|| Error::DBNotFoundErr(prev_hash.to_string()))?;
+            .ok_or_else(|| EpochError::IOErr(prev_hash.to_string()))?;
 
         let mut hash_to_epoch = self.hash_to_epoch.write().unwrap();
         let mut hash_to_next_epoch_approvals_req =
@@ -336,17 +336,6 @@ impl KeyValueRuntime {
             .get(epoch_id)
             .ok_or_else(|| Error::EpochOutOfBounds(epoch_id.clone()))? as usize
             % self.validators_by_valset.len())
-    }
-
-    pub fn get_chunk_only_producers_for_shard(
-        &self,
-        epoch_id: &EpochId,
-        shard_id: ShardId,
-    ) -> Result<Vec<&ValidatorStake>, Error> {
-        let valset = self.get_valset_for_epoch(epoch_id)?;
-        let block_producers = &self.validators_by_valset[valset].block_producers;
-        let chunk_producers = &self.validators_by_valset[valset].chunk_producers[shard_id as usize];
-        Ok(chunk_producers.iter().filter(|it| !block_producers.contains(it)).collect())
     }
 }
 
@@ -464,7 +453,10 @@ impl EpochManagerAdapter for KeyValueRuntime {
             != self.get_epoch_and_valset(prev_prev_hash)?.0)
     }
 
-    fn get_epoch_id_from_prev_block(&self, parent_hash: &CryptoHash) -> Result<EpochId, Error> {
+    fn get_epoch_id_from_prev_block(
+        &self,
+        parent_hash: &CryptoHash,
+    ) -> Result<EpochId, EpochError> {
         Ok(self.get_epoch_and_valset(*parent_hash)?.0)
     }
 
@@ -473,6 +465,10 @@ impl EpochManagerAdapter for KeyValueRuntime {
         _prev_block_hash: &CryptoHash,
     ) -> Result<EpochHeight, Error> {
         Ok(0)
+    }
+
+    fn get_next_epoch_id(&self, _block_hash: &CryptoHash) -> Result<EpochId, Error> {
+        unimplemented!()
     }
 
     fn get_next_epoch_id_from_prev_block(
@@ -1323,14 +1319,6 @@ impl RuntimeAdapter for KeyValueRuntime {
         }
     }
 
-    fn chunk_needs_to_be_fetched_from_archival(
-        &self,
-        _chunk_prev_block_hash: &CryptoHash,
-        _header_head: &CryptoHash,
-    ) -> Result<bool, Error> {
-        Ok(false)
-    }
-
     fn get_protocol_config(&self, _epoch_id: &EpochId) -> Result<ProtocolConfig, Error> {
         unreachable!("get_protocol_config should not be called in KeyValueRuntime");
     }
@@ -1363,4 +1351,8 @@ impl RuntimeAdapter for KeyValueRuntime {
     }
 }
 
-impl RuntimeWithEpochManagerAdapter for KeyValueRuntime {}
+impl RuntimeWithEpochManagerAdapter for KeyValueRuntime {
+    fn epoch_manager_adapter(&self) -> &dyn EpochManagerAdapter {
+        self
+    }
+}

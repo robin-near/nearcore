@@ -75,13 +75,17 @@ pub trait EpochManagerAdapter: Send + Sync {
     fn is_next_block_epoch_start(&self, parent_hash: &CryptoHash) -> Result<bool, Error>;
 
     /// Get epoch id given hash of previous block.
-    fn get_epoch_id_from_prev_block(&self, parent_hash: &CryptoHash) -> Result<EpochId, Error>;
+    fn get_epoch_id_from_prev_block(&self, parent_hash: &CryptoHash)
+        -> Result<EpochId, EpochError>;
 
     /// Get epoch height given hash of previous block.
     fn get_epoch_height_from_prev_block(
         &self,
         parent_hash: &CryptoHash,
     ) -> Result<EpochHeight, Error>;
+
+    /// Get next epoch id given hash of the current block.
+    fn get_next_epoch_id(&self, block_hash: &CryptoHash) -> Result<EpochId, Error>;
 
     /// Get next epoch id given hash of previous block.
     fn get_next_epoch_id_from_prev_block(&self, parent_hash: &CryptoHash)
@@ -449,9 +453,12 @@ impl<T: HasEpochMangerHandle + Send + Sync> EpochManagerAdapter for T {
         epoch_manager.is_next_block_epoch_start(parent_hash).map_err(Error::from)
     }
 
-    fn get_epoch_id_from_prev_block(&self, parent_hash: &CryptoHash) -> Result<EpochId, Error> {
+    fn get_epoch_id_from_prev_block(
+        &self,
+        parent_hash: &CryptoHash,
+    ) -> Result<EpochId, EpochError> {
         let epoch_manager = self.read();
-        epoch_manager.get_epoch_id_from_prev_block(parent_hash).map_err(Error::from)
+        epoch_manager.get_epoch_id_from_prev_block(parent_hash)
     }
 
     fn get_epoch_height_from_prev_block(
@@ -461,6 +468,11 @@ impl<T: HasEpochMangerHandle + Send + Sync> EpochManagerAdapter for T {
         let epoch_manager = self.read();
         let epoch_id = epoch_manager.get_epoch_id_from_prev_block(prev_block_hash)?;
         epoch_manager.get_epoch_info(&epoch_id).map(|info| info.epoch_height()).map_err(Error::from)
+    }
+
+    fn get_next_epoch_id(&self, block_hash: &CryptoHash) -> Result<EpochId, Error> {
+        let epoch_manager = self.read();
+        epoch_manager.get_next_epoch_id(block_hash).map_err(Error::from)
     }
 
     fn get_next_epoch_id_from_prev_block(

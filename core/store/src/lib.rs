@@ -51,6 +51,7 @@ pub mod migrations;
 mod opener;
 mod sync_utils;
 pub mod test_utils;
+pub mod thin_store;
 mod trie;
 
 pub use crate::config::{Mode, StoreConfig};

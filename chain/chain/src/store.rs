@@ -412,7 +412,7 @@ impl ChainStore {
     }
 
     pub fn new_read_only_chunks_store(&self) -> ReadOnlyChunksStore {
-        ReadOnlyChunksStore::new(self.store.clone())
+        ReadOnlyChunksStore::new(self.store.clone().into())
     }
 
     pub fn store_update(&mut self) -> ChainStoreUpdate<'_> {

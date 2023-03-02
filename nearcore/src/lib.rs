@@ -1,7 +1,6 @@
 use crate::cold_storage::spawn_cold_store_loop;
 pub use crate::config::{init_configs, load_config, load_test_config, NearConfig, NEAR_BASE};
 pub use crate::runtime::NightshadeRuntime;
-pub use crate::shard_tracker::TrackedConfig;
 use actix::{Actor, Addr};
 use actix_rt::ArbiterHandle;
 use actix_web;
@@ -31,7 +30,6 @@ pub mod dyn_config;
 mod metrics;
 pub mod migrations;
 mod runtime;
-mod shard_tracker;
 
 pub fn get_default_home() -> PathBuf {
     if let Ok(near_home) = std::env::var("NEAR_HOME") {

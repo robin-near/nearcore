@@ -1,11 +1,14 @@
-use crate::append_only_map::AppendOnlyMap;
+use std::sync::Arc;
+
+use crate::EpochManagerAdapter;
+use near_cache::SyncLruCache;
 use near_chain_configs::ClientConfig;
-use near_epoch_manager::EpochManagerHandle;
 use near_primitives::errors::EpochError;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::account_id_to_shard_id;
 use near_primitives::types::{AccountId, EpochId, ShardId};
 
+#[derive(Clone)]
 pub enum TrackedConfig {
     Accounts(Vec<AccountId>),
     AllShards,
@@ -31,29 +34,28 @@ type BitMask = Vec<bool>;
 /// Tracker that tracks shard ids and accounts. Right now, it only supports two modes
 /// TrackedConfig::Accounts(accounts): track the shards where `accounts` belong to
 /// TrackedConfig::AllShards: track all shards
+#[derive(Clone)]
 pub struct ShardTracker {
     tracked_config: TrackedConfig,
     /// Stores shard tracking information by epoch, only useful if TrackedState == Accounts
-    tracking_shards: AppendOnlyMap<EpochId, BitMask>,
-    /// Epoch manager that for given block hash computes the epoch id.
-    epoch_manager: EpochManagerHandle,
+    tracking_shards_cache: Arc<SyncLruCache<EpochId, BitMask>>,
 }
 
 impl ShardTracker {
-    pub fn new(tracked_config: TrackedConfig, epoch_manager: EpochManagerHandle) -> Self {
-        ShardTracker { tracked_config, tracking_shards: AppendOnlyMap::new(), epoch_manager }
+    pub fn new(tracked_config: TrackedConfig) -> Self {
+        ShardTracker { tracked_config, tracking_shards_cache: Arc::new(SyncLruCache::new(1024)) }
     }
 
     fn tracks_shard_at_epoch(
         &self,
         shard_id: ShardId,
         epoch_id: &EpochId,
+        epoch_manager: &dyn EpochManagerAdapter,
     ) -> Result<bool, EpochError> {
         match &self.tracked_config {
             TrackedConfig::Accounts(tracked_accounts) => {
-                let epoch_manager = self.epoch_manager.read();
                 let shard_layout = epoch_manager.get_shard_layout(epoch_id)?;
-                let tracking_mask = self.tracking_shards.get_or_insert(epoch_id, || {
+                let tracking_mask = self.tracking_shards_cache.get_or_put(epoch_id.clone(), |_| {
                     let mut tracking_mask = vec![false; shard_layout.num_shards() as usize];
                     for account_id in tracked_accounts {
                         let shard_id = account_id_to_shard_id(account_id, &shard_layout);
@@ -67,12 +69,14 @@ impl ShardTracker {
         }
     }
 
-    fn tracks_shard(&self, shard_id: ShardId, prev_hash: &CryptoHash) -> Result<bool, EpochError> {
-        let epoch_id = {
-            let epoch_manager = self.epoch_manager.read();
-            epoch_manager.get_epoch_id_from_prev_block(prev_hash)?
-        };
-        self.tracks_shard_at_epoch(shard_id, &epoch_id)
+    fn tracks_shard(
+        &self,
+        shard_id: ShardId,
+        prev_hash: &CryptoHash,
+        epoch_manager: &dyn EpochManagerAdapter,
+    ) -> Result<bool, EpochError> {
+        let epoch_id = epoch_manager.get_epoch_id_from_prev_block(prev_hash)?;
+        self.tracks_shard_at_epoch(shard_id, &epoch_id, epoch_manager)
     }
 
     pub fn care_about_shard(
@@ -81,16 +85,14 @@ impl ShardTracker {
         parent_hash: &CryptoHash,
         shard_id: ShardId,
         is_me: bool,
+        epoch_manager: &dyn EpochManagerAdapter,
     ) -> bool {
         // TODO: fix these unwrap_or here and handle error correctly. The current behavior masks potential errors and bugs
         // https://github.com/near/nearcore/issues/4936
         if let Some(account_id) = account_id {
-            let account_cares_about_shard = {
-                let epoch_manager = self.epoch_manager.read();
-                epoch_manager
-                    .cares_about_shard_from_prev_block(parent_hash, account_id, shard_id)
-                    .unwrap_or(false)
-            };
+            let account_cares_about_shard = epoch_manager
+                .cares_about_shard_from_prev_block(parent_hash, account_id, shard_id)
+                .unwrap_or(false);
             if !is_me {
                 return account_cares_about_shard;
             } else if account_cares_about_shard {
@@ -98,7 +100,7 @@ impl ShardTracker {
             }
         }
         matches!(self.tracked_config, TrackedConfig::AllShards)
-            || self.tracks_shard(shard_id, parent_hash).unwrap_or(false)
+            || self.tracks_shard(shard_id, parent_hash, epoch_manager).unwrap_or(false)
     }
 
     // `shard_id` always refers to a shard in the current epoch that the next block from `parent_hash` belongs
@@ -110,6 +112,7 @@ impl ShardTracker {
         parent_hash: &CryptoHash,
         shard_id: ShardId,
         is_me: bool,
+        epoch_manager: &dyn EpochManagerAdapter,
     ) -> bool {
         if let Some(account_id) = account_id {
             let account_cares_about_shard = {
@@ -133,9 +136,9 @@ impl ShardTracker {
 mod tests {
     use super::{account_id_to_shard_id, ShardTracker};
     use crate::shard_tracker::TrackedConfig;
+    use crate::test_utils::hash_range;
+    use crate::{EpochManager, EpochManagerHandle, RewardCalculator};
     use near_crypto::{KeyType, PublicKey};
-    use near_epoch_manager::test_utils::hash_range;
-    use near_epoch_manager::{EpochManager, EpochManagerHandle, RewardCalculator};
     use near_primitives::epoch_manager::block_info::BlockInfo;
     use near_primitives::epoch_manager::{AllEpochConfig, EpochConfig};
     use near_primitives::hash::CryptoHash;
@@ -184,7 +187,7 @@ mod tests {
             num_seconds_per_year: 1000000,
         };
         EpochManager::new(
-            store,
+            store.into(),
             AllEpochConfig::new(use_production_config, initial_epoch_config),
             genesis_protocol_version,
             reward_calculator,

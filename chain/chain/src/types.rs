@@ -572,16 +572,12 @@ pub trait RuntimeAdapter: Send + Sync {
         state_root: &StateRoot,
     ) -> bool;
 
-    fn chunk_needs_to_be_fetched_from_archival(
-        &self,
-        chunk_prev_block_hash: &CryptoHash,
-        header_head: &CryptoHash,
-    ) -> Result<bool, Error>;
-
     fn get_protocol_config(&self, epoch_id: &EpochId) -> Result<ProtocolConfig, Error>;
 }
 
-pub trait RuntimeWithEpochManagerAdapter: RuntimeAdapter + EpochManagerAdapter {}
+pub trait RuntimeWithEpochManagerAdapter: RuntimeAdapter + EpochManagerAdapter {
+    fn epoch_manager_adapter(&self) -> &dyn EpochManagerAdapter;
+}
 
 /// The last known / checked height and time when we have processed it.
 /// Required to keep track of skipped blocks and not fallback to produce blocks at lower height.
