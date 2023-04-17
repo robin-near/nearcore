@@ -6,8 +6,8 @@ use anyhow::Context;
 use near_async::actix::AddrWithAutoSpanContextExt;
 use near_async::messaging::{IntoSender, LateBoundSender, Sender};
 use near_chain::types::RuntimeAdapter;
-use near_chain::ChainStoreUpdate;
 use near_chain::{Chain, ChainGenesis, ChainStore, ChainStoreAccess, DoomslugThresholdMode};
+use near_chain::{ChainStoreUpdate, RuntimeWithEpochManagerAdapter};
 use near_chain_configs::GenesisConfig;
 use near_chunks::shards_manager_actor::start_shards_manager;
 use near_client::{start_client, start_view_client, ClientActor, ViewClientActor};
@@ -160,7 +160,7 @@ pub fn setup_mock_node(
         let chain_store_update = ChainStoreUpdate::copy_chain_state_as_of_block(
             &mut chain_store,
             &hash,
-            mock_network_runtime.clone(),
+            mock_network_runtime.epoch_manager_adapter(),
             &mut network_chain_store,
         )
         .unwrap();
