@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use near_epoch_manager::shard_tracker::{ShardTracker, TrackedConfig};
+use near_epoch_manager::EpochManager;
 use tempfile::tempdir;
 
 use near_chain::types::ChainConfig;
@@ -18,10 +22,20 @@ pub fn genesis_header(genesis: &Genesis) -> BlockHeader {
     let dir = tempdir().unwrap();
     let store = create_test_store();
     let chain_genesis = ChainGenesis::new(genesis);
-    let runtime = NightshadeRuntime::test(dir.path(), store, genesis);
-    let chain =
-        Chain::new(runtime, &chain_genesis, DoomslugThresholdMode::TwoThirds, ChainConfig::test())
-            .unwrap();
+    let runtime = NightshadeRuntime::test(dir.path(), store.clone(), genesis);
+    let epoch_manager = Arc::new(
+        EpochManager::new_from_genesis_config(store, &genesis.config).unwrap().into_handle(),
+    );
+    let shard_tracker = ShardTracker::new(TrackedConfig::new_empty(), epoch_manager.clone());
+    let chain = Chain::new(
+        epoch_manager,
+        shard_tracker,
+        runtime,
+        &chain_genesis,
+        DoomslugThresholdMode::TwoThirds,
+        ChainConfig::test(),
+    )
+    .unwrap();
     chain.genesis().clone()
 }
 
@@ -30,9 +44,19 @@ pub fn genesis_block(genesis: &Genesis) -> Block {
     let dir = tempdir().unwrap();
     let store = create_test_store();
     let chain_genesis = ChainGenesis::new(genesis);
-    let runtime = NightshadeRuntime::test(dir.path(), store, genesis);
-    let chain =
-        Chain::new(runtime, &chain_genesis, DoomslugThresholdMode::TwoThirds, ChainConfig::test())
-            .unwrap();
+    let runtime = NightshadeRuntime::test(dir.path(), store.clone(), genesis);
+    let epoch_manager = Arc::new(
+        EpochManager::new_from_genesis_config(store, &genesis.config).unwrap().into_handle(),
+    );
+    let shard_tracker = ShardTracker::new(TrackedConfig::new_empty(), epoch_manager.clone());
+    let chain = Chain::new(
+        epoch_manager,
+        shard_tracker,
+        runtime,
+        &chain_genesis,
+        DoomslugThresholdMode::TwoThirds,
+        ChainConfig::test(),
+    )
+    .unwrap();
     chain.get_block(&chain.genesis().hash().clone()).unwrap()
 }

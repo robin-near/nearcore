@@ -3018,7 +3018,7 @@ mod tests {
     use crate::store_validator::StoreValidator;
     use crate::test_utils::{KeyValueRuntime, ValidatorSchedule};
     use crate::types::ChainConfig;
-    use crate::{Chain, ChainGenesis, DoomslugThresholdMode};
+    use crate::{Chain, ChainGenesis, DoomslugThresholdMode, RuntimeWithEpochManagerAdapter};
 
     fn get_chain() -> Chain {
         get_chain_with_epoch_length(10)
@@ -3029,9 +3029,11 @@ mod tests {
         let chain_genesis = ChainGenesis::test();
         let vs = ValidatorSchedule::new()
             .block_producers_per_epoch(vec![vec!["test1".parse().unwrap()]]);
-        let runtime_adapter = KeyValueRuntime::new_with_validators(store, vs, epoch_length);
+        let runtime = KeyValueRuntime::new_with_validators(store, vs, epoch_length);
         Chain::new(
-            runtime_adapter,
+            runtime.epoch_manager_adapter_arc(),
+            runtime.shard_tracker(),
+            runtime.runtime_adapter_arc(),
             &chain_genesis,
             DoomslugThresholdMode::NoApprovals,
             ChainConfig::test(),
@@ -3232,7 +3234,7 @@ mod tests {
     #[test]
     fn test_clear_old_data() {
         let mut chain = get_chain_with_epoch_length(1);
-        let runtime_adapter = chain.runtime_adapter.clone();
+        let epoch_manager = chain.epoch_manager.clone();
         let genesis = chain.get_block_by_height(0).unwrap();
         let signer = Arc::new(create_test_signer("test1"));
         let mut prev_block = genesis;
@@ -3240,7 +3242,7 @@ mod tests {
         for i in 1..15 {
             add_block(
                 &mut chain,
-                runtime_adapter.epoch_manager_adapter(),
+                epoch_manager.as_ref(),
                 &mut prev_block,
                 &mut blocks,
                 signer.clone(),
@@ -3248,7 +3250,7 @@ mod tests {
             );
         }
 
-        let trie = chain.runtime_adapter.get_tries();
+        let trie = chain.runtime.get_tries();
         chain.clear_data(trie, &GCConfig { gc_blocks_limit: 100, ..GCConfig::default() }).unwrap();
 
         // epoch didn't change so no data is garbage collected.
@@ -3317,7 +3319,7 @@ mod tests {
     #[test]
     fn test_clear_old_data_fixed_height() {
         let mut chain = get_chain();
-        let runtime_adapter = chain.runtime_adapter.clone();
+        let epoch_manager = chain.epoch_manager.clone();
         let genesis = chain.get_block_by_height(0).unwrap();
         let signer = Arc::new(create_test_signer("test1"));
         let mut prev_block = genesis;
@@ -3325,7 +3327,7 @@ mod tests {
         for i in 1..10 {
             add_block(
                 &mut chain,
-                runtime_adapter.epoch_manager_adapter(),
+                epoch_manager.as_ref(),
                 &mut prev_block,
                 &mut blocks,
                 signer.clone(),
@@ -3349,14 +3351,10 @@ mod tests {
         );
         assert!(chain.mut_store().get_next_block_hash(blocks[5].hash()).is_ok());
 
-        let trie = chain.runtime_adapter.get_tries();
+        let trie = chain.runtime.get_tries();
         let mut store_update = chain.mut_store().store_update();
         assert!(store_update
-            .clear_block_data(
-                runtime_adapter.epoch_manager_adapter(),
-                *blocks[5].hash(),
-                GCMode::Canonical(trie)
-            )
+            .clear_block_data(epoch_manager.as_ref(), *blocks[5].hash(), GCMode::Canonical(trie))
             .is_ok());
         store_update.commit().unwrap();
 
@@ -3429,7 +3427,7 @@ mod tests {
             prev_block = block.clone();
         }
 
-        let trie = chain.runtime_adapter.get_tries();
+        let trie = chain.runtime.get_tries();
 
         for iter in 0..10 {
             println!("ITERATION #{:?}", iter);
@@ -3458,7 +3456,9 @@ mod tests {
             let mut store_validator = StoreValidator::new(
                 None,
                 genesis.clone(),
-                chain.runtime_adapter.clone(),
+                chain.epoch_manager.clone(),
+                chain.shard_tracker.clone(),
+                chain.runtime.clone(),
                 chain.store().store().clone(),
                 false,
             );
@@ -3470,7 +3470,7 @@ mod tests {
     #[test]
     fn test_fork_chunk_tail_updates() {
         let mut chain = get_chain();
-        let runtime_adapter = chain.runtime_adapter.clone();
+        let epoch_manager = chain.epoch_manager.clone();
         let genesis = chain.get_block_by_height(0).unwrap();
         let signer = Arc::new(create_test_signer("test1"));
         let mut prev_block = genesis;
@@ -3478,7 +3478,7 @@ mod tests {
         for i in 1..10 {
             add_block(
                 &mut chain,
-                runtime_adapter.epoch_manager_adapter(),
+                epoch_manager.as_ref(),
                 &mut prev_block,
                 &mut blocks,
                 signer.clone(),

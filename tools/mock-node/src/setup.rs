@@ -280,7 +280,9 @@ pub fn setup_mock_node(
     let network_config = network_config.clone();
 
     let chain = Chain::new_for_view_client(
-        mock_network_runtime,
+        mock_network_runtime.epoch_manager_adapter_arc(),
+        mock_network_runtime.shard_tracker(),
+        mock_network_runtime.runtime_adapter_arc(),
         &chain_genesis,
         DoomslugThresholdMode::NoApprovals,
         config.client_config.save_trie_changes,

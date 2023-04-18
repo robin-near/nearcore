@@ -1,7 +1,10 @@
 use crate::{metrics, NearConfig, NightshadeRuntime};
 use borsh::BorshSerialize;
 use near_chain::types::RuntimeAdapter;
-use near_chain::{Chain, ChainGenesis, ChainStoreAccess, DoomslugThresholdMode, Error};
+use near_chain::{
+    Chain, ChainGenesis, ChainStoreAccess, DoomslugThresholdMode, Error,
+    RuntimeWithEpochManagerAdapter,
+};
 use near_chain_configs::ClientConfig;
 use near_client::sync::state::{s3_location, StateSync};
 use near_epoch_manager::EpochManagerAdapter;
@@ -50,7 +53,9 @@ pub fn spawn_state_sync_dump(
     let num_shards = {
         // Sadly, `Chain` is not `Send` and each thread needs to create its own `Chain` instance.
         let chain = Chain::new_for_view_client(
-            runtime.clone(),
+            runtime.epoch_manager_adapter_arc(),
+            runtime.shard_tracker(),
+            runtime.runtime_adapter_arc(),
             &chain_genesis,
             DoomslugThresholdMode::TwoThirds,
             false,
@@ -66,7 +71,9 @@ pub fn spawn_state_sync_dump(
             let runtime = runtime.clone();
             let chain_genesis = chain_genesis.clone();
             let chain = Chain::new_for_view_client(
-                runtime.clone(),
+                runtime.epoch_manager_adapter_arc(),
+                runtime.shard_tracker(),
+                runtime.runtime_adapter_arc(),
                 &chain_genesis,
                 DoomslugThresholdMode::TwoThirds,
                 false,

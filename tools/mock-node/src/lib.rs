@@ -472,7 +472,7 @@ impl ChainHistoryAccess {
         &mut self,
         request: &PartialEncodedChunkRequestMsg,
     ) -> Result<PartialEncodedChunkResponseMsg, Error> {
-        let num_total_parts = self.chain.runtime_adapter.num_total_parts();
+        let num_total_parts = self.chain.epoch_manager.num_total_parts();
         let partial_chunk = self.chain.mut_store().get_partial_chunk(&request.chunk_hash)?;
         let present_parts: HashMap<u64, _> =
             partial_chunk.parts().iter().map(|part| (part.part_ord, part)).collect();
@@ -542,7 +542,9 @@ mod test {
 
         // Create view client chain to retrieve and check chain data in the test.
         let chain = Chain::new_for_view_client(
-            runtimes[0].clone(),
+            runtimes[0].epoch_manager_adapter_arc(),
+            runtimes[0].shard_tracker(),
+            runtimes[0].runtime_adapter_arc(),
             &chain_genesis,
             env.clients[0].chain.doomslug_threshold_mode,
             true,
