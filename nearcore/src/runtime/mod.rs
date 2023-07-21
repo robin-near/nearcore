@@ -776,10 +776,11 @@ impl RuntimeAdapter for NightshadeRuntime {
         states_to_patch: SandboxStatePatch,
         use_flat_storage: bool,
     ) -> Result<ApplyTransactionResult, Error> {
-        let mut normal_result = {
+        let (mut normal_result, normal_node_counts) = {
             let trie =
                 self.get_trie_for_shard(shard_id, prev_block_hash, *state_root, use_flat_storage)?;
-            match self.process_state_update(
+            let trie_storage = trie.storage.clone();
+            let result = match self.process_state_update(
                 trie,
                 shard_id,
                 height,
@@ -805,10 +806,11 @@ impl RuntimeAdapter for NightshadeRuntime {
                     },
                     _ => Err(e),
                 },
-            }
-        }?;
+            }?;
+            (result, trie_storage.get_trie_nodes_count())
+        };
         if generate_storage_proof {
-            let recording_result = {
+            let (recording_result, recording_node_counts) = {
                 let trie = self.get_trie_for_shard(
                     shard_id,
                     prev_block_hash,
@@ -816,7 +818,8 @@ impl RuntimeAdapter for NightshadeRuntime {
                     use_flat_storage,
                 )?;
                 let trie = trie.recording_reads();
-                match self.process_state_update(
+                let trie_storage = trie.storage.clone();
+                let result = match self.process_state_update(
                     trie,
                     shard_id,
                     height,
@@ -842,45 +845,53 @@ impl RuntimeAdapter for NightshadeRuntime {
                         },
                         _ => Err(e),
                     },
-                }
-            }?;
-            if recording_result.outcomes != normal_result.outcomes {
+                }?;
+                (result, trie_storage.get_trie_nodes_count())
+            };
+
+            // if recording_result.outcomes != normal_result.outcomes {
+            //     println!(
+            //         "Recording mismatch (outcomes): normal {:?} vs recording {:?}",
+            //         normal_result.outcomes, recording_result.outcomes
+            //     );
+            // }
+            // if recording_result.outgoing_receipts != normal_result.outgoing_receipts {
+            //     println!(
+            //         "Recording mismatch (receipts): normal {:?} vs recording {:?}",
+            //         normal_result.outgoing_receipts, recording_result.outgoing_receipts
+            //     );
+            // }
+            // if recording_result.processed_delayed_receipts
+            //     != normal_result.processed_delayed_receipts
+            // {
+            //     println!(
+            //         "Recording mismatch (delayed receipts): normal {:?} vs recording {:?}",
+            //         normal_result.processed_delayed_receipts,
+            //         recording_result.processed_delayed_receipts
+            //     );
+            // }
+            // if recording_result.total_balance_burnt != normal_result.total_balance_burnt {
+            //     println!(
+            //         "Recording mismatch (total balance burnt): normal {:?} vs recording {:?}",
+            //         normal_result.total_balance_burnt, recording_result.total_balance_burnt
+            //     );
+            // }
+            // if recording_result.total_gas_burnt != normal_result.total_gas_burnt {
+            //     println!(
+            //         "Recording mismatch (total gas burnt): normal {:?} vs recording {:?}",
+            //         normal_result.total_gas_burnt, recording_result.total_gas_burnt
+            //     );
+            // }
+            // if recording_result.new_root != normal_result.new_root {
+            //     println!(
+            //         "Recording mismatch (new root): normal {:?} vs recording {:?}",
+            //         normal_result.new_root, recording_result.new_root
+            //     );
+            // }
+            if normal_node_counts != recording_node_counts {
                 println!(
-                    "Recording mismatch (outcomes): normal {:?} vs recording {:?}",
-                    normal_result.outcomes, recording_result.outcomes
-                );
-            }
-            if recording_result.outgoing_receipts != normal_result.outgoing_receipts {
-                println!(
-                    "Recording mismatch (receipts): normal {:?} vs recording {:?}",
-                    normal_result.outgoing_receipts, recording_result.outgoing_receipts
-                );
-            }
-            if recording_result.processed_delayed_receipts
-                != normal_result.processed_delayed_receipts
-            {
-                println!(
-                    "Recording mismatch (delayed receipts): normal {:?} vs recording {:?}",
-                    normal_result.processed_delayed_receipts,
-                    recording_result.processed_delayed_receipts
-                );
-            }
-            if recording_result.total_balance_burnt != normal_result.total_balance_burnt {
-                println!(
-                    "Recording mismatch (total balance burnt): normal {:?} vs recording {:?}",
-                    normal_result.total_balance_burnt, recording_result.total_balance_burnt
-                );
-            }
-            if recording_result.total_gas_burnt != normal_result.total_gas_burnt {
-                println!(
-                    "Recording mismatch (total gas burnt): normal {:?} vs recording {:?}",
-                    normal_result.total_gas_burnt, recording_result.total_gas_burnt
-                );
-            }
-            if recording_result.new_root != normal_result.new_root {
-                println!(
-                    "Recording mismatch (new root): normal {:?} vs recording {:?}",
-                    normal_result.new_root, recording_result.new_root
+                    "Recording mismatch (node counts): normal {:?} vs recording {:?}",
+                    normal_node_counts, recording_node_counts
                 );
             }
             normal_result.proof = recording_result.proof;
