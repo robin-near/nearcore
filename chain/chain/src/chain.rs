@@ -8,6 +8,7 @@ use crate::migrations::check_if_block_is_first_with_chunk_of_version;
 use crate::missing_chunks::{BlockLike, MissingChunksPool};
 use crate::state_request_tracker::StateRequestTracker;
 use crate::state_snapshot_actor::MakeSnapshotCallback;
+use crate::state_witness_estimator::{StateWitnessStat, StateWitnessStatWriter};
 use crate::store::{ChainStore, ChainStoreAccess, ChainStoreUpdate, GCMode};
 use crate::types::{
     AcceptedBlock, ApplySplitStateResult, ApplySplitStateResultOrStateChanges,
@@ -471,6 +472,8 @@ pub struct Chain {
 
     /// Lets trigger new state snapshots.
     state_snapshot_helper: Option<StateSnapshotHelper>,
+
+    state_witness_stat_writer: StateWitnessStatWriter,
 }
 
 /// Lets trigger new state snapshots.
@@ -565,6 +568,7 @@ impl Chain {
             pending_state_patch: Default::default(),
             requested_state_parts: StateRequestTracker::new(),
             state_snapshot_helper: None,
+            state_witness_stat_writer: StateWitnessStatWriter::new(),
         })
     }
 
@@ -737,6 +741,7 @@ impl Chain {
                     .state_snapshot_every_n_blocks
                     .map(|n| (0, n)),
             }),
+            state_witness_stat_writer: StateWitnessStatWriter::new(),
         })
     }
 
@@ -3928,7 +3933,7 @@ impl Chain {
                             shard_id)
                         .entered();
                         let _timer = CryptoHashTimer::new(chunk.chunk_hash().0);
-                        match runtime.apply_transactions(
+                        match runtime.apply_transactions_with_optional_storage_proof(
                             shard_id,
                             chunk_inner.prev_state_root(),
                             height,
@@ -3942,6 +3947,7 @@ impl Chain {
                             gas_limit,
                             &challenges_result,
                             random_seed,
+                            true,
                             true,
                             is_first_block_with_chunk_of_version,
                             state_patch,
@@ -4143,6 +4149,7 @@ impl Chain {
             self.runtime_adapter.clone(),
             self.doomslug_threshold_mode,
             self.transaction_validity_period,
+            &mut self.state_witness_stat_writer,
         )
     }
 
@@ -4728,6 +4735,7 @@ pub struct ChainUpdate<'a> {
     doomslug_threshold_mode: DoomslugThresholdMode,
     #[allow(unused)]
     transaction_validity_period: BlockHeightDelta,
+    state_witness_stat_writer: &'a mut StateWitnessStatWriter,
 }
 
 pub struct SameHeightResult {
@@ -4763,6 +4771,7 @@ impl<'a> ChainUpdate<'a> {
         runtime_adapter: Arc<dyn RuntimeAdapter>,
         doomslug_threshold_mode: DoomslugThresholdMode,
         transaction_validity_period: BlockHeightDelta,
+        state_witness_stat_writer: &'a mut StateWitnessStatWriter,
     ) -> Self {
         let chain_store_update: ChainStoreUpdate<'_> = store.store_update();
         Self::new_impl(
@@ -4772,6 +4781,7 @@ impl<'a> ChainUpdate<'a> {
             doomslug_threshold_mode,
             transaction_validity_period,
             chain_store_update,
+            state_witness_stat_writer,
         )
     }
 
@@ -4782,6 +4792,7 @@ impl<'a> ChainUpdate<'a> {
         doomslug_threshold_mode: DoomslugThresholdMode,
         transaction_validity_period: BlockHeightDelta,
         chain_store_update: ChainStoreUpdate<'a>,
+        state_witness_stat_writer: &'a mut StateWitnessStatWriter,
     ) -> Self {
         ChainUpdate {
             epoch_manager,
@@ -4790,6 +4801,7 @@ impl<'a> ChainUpdate<'a> {
             chain_store_update,
             doomslug_threshold_mode,
             transaction_validity_period,
+            state_witness_stat_writer,
         }
     }
 
@@ -5043,6 +5055,20 @@ impl<'a> ChainUpdate<'a> {
                 apply_result,
                 apply_split_result_or_state_changes,
             }) => {
+                if let Some(proof) = &apply_result.proof {
+                    let PartialState::TrieValues(trie_values) = &proof.nodes;
+                    let stat = StateWitnessStat {
+                        block_hash,
+                        block_height: height,
+                        shard_id: shard_uid.shard_id(),
+                        num_outcomes: apply_result.outcomes.len() as u64,
+                        gas_burnt: apply_result.total_gas_burnt,
+                        num_trie_nodes: trie_values.len() as u64,
+                        total_trie_size: trie_values.iter().map(|v| v.len() as u64).sum(),
+                    };
+                    self.state_witness_stat_writer.write(stat);
+                }
+
                 let (outcome_root, outcome_paths) =
                     ApplyTransactionResult::compute_outcomes_proof(&apply_result.outcomes);
                 let shard_id = shard_uid.shard_id();

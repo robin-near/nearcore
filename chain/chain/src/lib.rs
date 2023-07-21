@@ -28,6 +28,7 @@ pub mod test_utils;
 pub mod types;
 pub mod validate;
 
+mod state_witness_estimator;
 #[cfg(test)]
 mod tests;
 
