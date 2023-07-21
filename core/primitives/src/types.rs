@@ -516,6 +516,7 @@ pub mod validator_stake {
         V1(ValidatorStakeV1),
     }
 
+    #[derive(Clone)]
     pub struct ValidatorStakeIter<'a> {
         collection: ValidatorStakeIterSource<'a>,
         curr_index: usize,
@@ -567,6 +568,7 @@ pub mod validator_stake {
         }
     }
 
+    #[derive(Clone)]
     enum ValidatorStakeIterSource<'a> {
         V1(&'a [ValidatorStakeV1]),
         V2(&'a [ValidatorStake]),

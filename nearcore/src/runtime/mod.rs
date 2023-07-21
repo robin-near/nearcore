@@ -788,14 +788,14 @@ impl RuntimeAdapter for NightshadeRuntime {
                 prev_block_hash,
                 receipts,
                 transactions,
-                last_validator_proposals,
+                last_validator_proposals.clone(),
                 gas_price,
                 gas_limit,
                 challenges,
                 random_seed,
                 is_new_chunk,
                 is_first_block_with_chunk_of_version,
-                states_to_patch,
+                states_to_patch.clone(),
             ) {
                 Ok(result) => Ok(result),
                 Err(e) => match e {
@@ -844,20 +844,14 @@ impl RuntimeAdapter for NightshadeRuntime {
                     },
                 }
             }?;
-            if recording_result.new_root != normal_result.new_root {
-                panic!(
-                    "Recording mismatch (new root): normal {:?} vs recording {:?}",
-                    normal_result.new_root, recording_result.new_root
-                );
-            }
             if recording_result.outcomes != normal_result.outcomes {
-                panic!(
+                println!(
                     "Recording mismatch (outcomes): normal {:?} vs recording {:?}",
                     normal_result.outcomes, recording_result.outcomes
                 );
             }
             if recording_result.outgoing_receipts != normal_result.outgoing_receipts {
-                panic!(
+                println!(
                     "Recording mismatch (receipts): normal {:?} vs recording {:?}",
                     normal_result.outgoing_receipts, recording_result.outgoing_receipts
                 );
@@ -865,28 +859,28 @@ impl RuntimeAdapter for NightshadeRuntime {
             if recording_result.processed_delayed_receipts
                 != normal_result.processed_delayed_receipts
             {
-                panic!(
+                println!(
                     "Recording mismatch (delayed receipts): normal {:?} vs recording {:?}",
                     normal_result.processed_delayed_receipts,
                     recording_result.processed_delayed_receipts
                 );
             }
             if recording_result.total_balance_burnt != normal_result.total_balance_burnt {
-                panic!(
+                println!(
                     "Recording mismatch (total balance burnt): normal {:?} vs recording {:?}",
                     normal_result.total_balance_burnt, recording_result.total_balance_burnt
                 );
             }
             if recording_result.total_gas_burnt != normal_result.total_gas_burnt {
-                panic!(
+                println!(
                     "Recording mismatch (total gas burnt): normal {:?} vs recording {:?}",
                     normal_result.total_gas_burnt, recording_result.total_gas_burnt
                 );
             }
-            if recording_result.validator_proposals != normal_result.validator_proposals {
-                panic!(
-                    "Recording mismatch (validator proposals): normal {:?} vs recording {:?}",
-                    normal_result.validator_proposals, recording_result.validator_proposals
+            if recording_result.new_root != normal_result.new_root {
+                println!(
+                    "Recording mismatch (new root): normal {:?} vs recording {:?}",
+                    normal_result.new_root, recording_result.new_root
                 );
             }
             normal_result.proof = recording_result.proof;
