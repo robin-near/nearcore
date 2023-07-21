@@ -776,37 +776,122 @@ impl RuntimeAdapter for NightshadeRuntime {
         states_to_patch: SandboxStatePatch,
         use_flat_storage: bool,
     ) -> Result<ApplyTransactionResult, Error> {
-        let trie =
-            self.get_trie_for_shard(shard_id, prev_block_hash, *state_root, use_flat_storage)?;
-
-        let trie = if generate_storage_proof { trie.recording_reads() } else { trie };
-        match self.process_state_update(
-            trie,
-            shard_id,
-            height,
-            block_hash,
-            block_timestamp,
-            prev_block_hash,
-            receipts,
-            transactions,
-            last_validator_proposals,
-            gas_price,
-            gas_limit,
-            challenges,
-            random_seed,
-            is_new_chunk,
-            is_first_block_with_chunk_of_version,
-            states_to_patch,
-        ) {
-            Ok(result) => Ok(result),
-            Err(e) => match e {
-                Error::StorageError(err) => match &err {
-                    StorageError::FlatStorageBlockNotSupported(_) => Err(err.into()),
-                    _ => panic!("{err}"),
+        let mut normal_result = {
+            let trie =
+                self.get_trie_for_shard(shard_id, prev_block_hash, *state_root, use_flat_storage)?;
+            match self.process_state_update(
+                trie,
+                shard_id,
+                height,
+                block_hash,
+                block_timestamp,
+                prev_block_hash,
+                receipts,
+                transactions,
+                last_validator_proposals,
+                gas_price,
+                gas_limit,
+                challenges,
+                random_seed,
+                is_new_chunk,
+                is_first_block_with_chunk_of_version,
+                states_to_patch,
+            ) {
+                Ok(result) => Ok(result),
+                Err(e) => match e {
+                    Error::StorageError(err) => match &err {
+                        StorageError::FlatStorageBlockNotSupported(_) => Err(err.into()),
+                        _ => panic!("{err}"),
+                    },
+                    _ => Err(e),
                 },
-                _ => Err(e),
-            },
+            }
+        }?;
+        if generate_storage_proof {
+            let recording_result = {
+                let trie = self.get_trie_for_shard(
+                    shard_id,
+                    prev_block_hash,
+                    *state_root,
+                    use_flat_storage,
+                )?;
+                let trie = trie.recording_reads();
+                match self.process_state_update(
+                    trie,
+                    shard_id,
+                    height,
+                    block_hash,
+                    block_timestamp,
+                    prev_block_hash,
+                    receipts,
+                    transactions,
+                    last_validator_proposals,
+                    gas_price,
+                    gas_limit,
+                    challenges,
+                    random_seed,
+                    is_new_chunk,
+                    is_first_block_with_chunk_of_version,
+                    states_to_patch,
+                ) {
+                    Ok(result) => Ok(result),
+                    Err(e) => match e {
+                        Error::StorageError(err) => match &err {
+                            StorageError::FlatStorageBlockNotSupported(_) => Err(err.into()),
+                            _ => panic!("{err}"),
+                        },
+                        _ => Err(e),
+                    },
+                }
+            }?;
+            if recording_result.new_root != normal_result.new_root {
+                panic!(
+                    "Recording mismatch (new root): normal {:?} vs recording {:?}",
+                    normal_result.new_root, recording_result.new_root
+                );
+            }
+            if recording_result.outcomes != normal_result.outcomes {
+                panic!(
+                    "Recording mismatch (outcomes): normal {:?} vs recording {:?}",
+                    normal_result.outcomes, recording_result.outcomes
+                );
+            }
+            if recording_result.outgoing_receipts != normal_result.outgoing_receipts {
+                panic!(
+                    "Recording mismatch (receipts): normal {:?} vs recording {:?}",
+                    normal_result.outgoing_receipts, recording_result.outgoing_receipts
+                );
+            }
+            if recording_result.processed_delayed_receipts
+                != normal_result.processed_delayed_receipts
+            {
+                panic!(
+                    "Recording mismatch (delayed receipts): normal {:?} vs recording {:?}",
+                    normal_result.processed_delayed_receipts,
+                    recording_result.processed_delayed_receipts
+                );
+            }
+            if recording_result.total_balance_burnt != normal_result.total_balance_burnt {
+                panic!(
+                    "Recording mismatch (total balance burnt): normal {:?} vs recording {:?}",
+                    normal_result.total_balance_burnt, recording_result.total_balance_burnt
+                );
+            }
+            if recording_result.total_gas_burnt != normal_result.total_gas_burnt {
+                panic!(
+                    "Recording mismatch (total gas burnt): normal {:?} vs recording {:?}",
+                    normal_result.total_gas_burnt, recording_result.total_gas_burnt
+                );
+            }
+            if recording_result.validator_proposals != normal_result.validator_proposals {
+                panic!(
+                    "Recording mismatch (validator proposals): normal {:?} vs recording {:?}",
+                    normal_result.validator_proposals, recording_result.validator_proposals
+                );
+            }
+            normal_result.proof = recording_result.proof;
         }
+        Ok(normal_result)
     }
 
     fn check_state_transition(
