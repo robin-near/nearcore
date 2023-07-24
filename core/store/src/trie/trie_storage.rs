@@ -308,12 +308,18 @@ pub trait TrieStorage {
 pub struct TrieRecordingStorage {
     pub(crate) storage: Rc<dyn TrieStorage>,
     pub(crate) recorded: RefCell<HashMap<CryptoHash, Arc<[u8]>>>,
+    pub(crate) db_read_nodes: Cell<u64>,
     pub(crate) mem_read_nodes: Cell<u64>,
 }
 
 impl TrieRecordingStorage {
     pub fn new(storage: Rc<dyn TrieStorage>) -> Self {
-        Self { storage, recorded: Default::default(), mem_read_nodes: Default::default() }
+        Self {
+            storage,
+            recorded: Default::default(),
+            db_read_nodes: Default::default(),
+            mem_read_nodes: Default::default(),
+        }
     }
 }
 
@@ -323,6 +329,7 @@ impl TrieStorage for TrieRecordingStorage {
             self.mem_read_nodes.set(self.mem_read_nodes.get() + 1);
             return Ok(val);
         }
+        self.db_read_nodes.set(self.db_read_nodes.get() + 1);
         let val = self.storage.retrieve_raw_bytes(hash)?;
         self.recorded.borrow_mut().insert(*hash, Arc::clone(&val));
         Ok(val)
@@ -333,10 +340,7 @@ impl TrieStorage for TrieRecordingStorage {
     }
 
     fn get_trie_nodes_count(&self) -> TrieNodesCount {
-        TrieNodesCount {
-            db_reads: self.recorded.borrow().len() as u64,
-            mem_reads: self.mem_read_nodes.get(),
-        }
+        TrieNodesCount { db_reads: self.db_read_nodes.get(), mem_reads: self.mem_read_nodes.get() }
     }
 }
 
