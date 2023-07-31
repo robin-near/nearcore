@@ -227,6 +227,7 @@ export const fieldSemantics: Record<EntityType, FieldSemantic> = {
     FlatStateDeltaMetadata: flatStateDeltaMetadata,
     FlatStorageStatus: flatStorageStatus,
     Receipt: receipt,
+    Receipts: { array: receipt },
     ShardId: shardId,
     ShardLayout: undefined,
     ShardUId: shardUId,

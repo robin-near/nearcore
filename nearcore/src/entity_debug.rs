@@ -11,10 +11,10 @@ use near_jsonrpc_primitives::types::entity_debug::{
 use near_primitives::block::Tip;
 use near_primitives::hash::CryptoHash;
 use near_primitives::receipt::Receipt;
-use near_primitives::sharding::ShardChunk;
+use near_primitives::sharding::{ReceiptProof, ShardChunk};
 use near_primitives::state::FlatStateValue;
 use near_primitives::transaction::{ExecutionOutcomeWithProof, SignedTransaction};
-use near_primitives::utils::get_outcome_id_block_hash;
+use near_primitives::utils::{get_block_shard_id, get_outcome_id_block_hash};
 use near_primitives::views::{
     BlockHeaderView, BlockView, ChunkView, ExecutionOutcomeView, ReceiptView, SignedTransactionView,
 };
@@ -133,6 +133,17 @@ impl EntityDebugHandlerImpl {
                     .ok_or_else(|| anyhow!("Flat storage status not found"))?;
                 Ok(serialize_entity(&status))
             }
+            EntityQuery::IncomingReceiptsByBlockHashShardId { block_hash, shard_id } => {
+                let key = get_block_shard_id(&block_hash, shard_id);
+                let receipts = self
+                    .store
+                    .get_ser::<Vec<ReceiptProof>>(DBCol::IncomingReceipts, &key)?
+                    .ok_or_else(|| anyhow!("Incoming receipts not found"))?
+                    .into_iter()
+                    .map(|receipt_proof| receipt_proof.0)
+                    .collect::<Vec<_>>();
+                Ok(serialize_entity(&receipts))
+            }
             EntityQuery::OutcomeByTransactionHash { transaction_hash: outcome_id }
             | EntityQuery::OutcomeByReceiptId { receipt_id: outcome_id } => {
                 let (_, outcome) = self
@@ -158,6 +169,14 @@ impl EntityDebugHandlerImpl {
                     )?
                     .ok_or_else(|| anyhow!("Outcome not found"))?;
                 Ok(serialize_entity(&ExecutionOutcomeView::from(outcome.outcome)))
+            }
+            EntityQuery::OutgoingReceiptsByBlockHashShardId { block_hash, shard_id } => {
+                let key = get_block_shard_id(&block_hash, shard_id);
+                let receipts = self
+                    .store
+                    .get_ser::<Vec<Receipt>>(DBCol::OutgoingReceipts, &key)?
+                    .ok_or_else(|| anyhow!("Outgoing receipts not found"))?;
+                Ok(serialize_entity(&receipts))
             }
             EntityQuery::ReceiptById { receipt_id } => {
                 let receipt = self

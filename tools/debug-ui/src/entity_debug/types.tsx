@@ -29,6 +29,7 @@ export type EntityType =
     | 'FlatStateDeltaMetadata'
     | 'FlatStorageStatus'
     | 'Receipt'
+    | 'Receipts'
     | 'ShardId'
     | 'ShardLayout'
     | 'ShardUId'
@@ -128,10 +129,12 @@ export type EntityQuery = {
     FlatStateChangesByBlockHash?: { block_hash: string };
     FlatStateDeltaMetadataByBlockHash?: { block_hash: string };
     FlatStorageStatusByShardUId?: { shard_uid: string };
+    IncomingReceiptsByBlockHashShardId?: { block_hash: string; shard_id: number };
     OutcomeByReceiptId?: { receipt_id: string };
     OutcomeByReceiptIdAndBlockHash?: { receipt_id: string; block_hash: string };
     OutcomeByTransactionHash?: { transaction_hash: string };
     OutcomeByTransactionHashAndBlockHash?: { transaction_hash: string; block_hash: string };
+    OutgoingReceiptsByBlockHashShardId?: { block_hash: string; shard_id: number };
     ReceiptById?: { receipt_id: string };
     ShardIdByAccountId?: { account_id: string };
     ShardLayoutByEpochId?: { epoch_id: string };
@@ -220,6 +223,7 @@ export const entityQueryKeyTypes: Record<EntityQueryType, EntityQueryKeySpec[]> 
     FlatStateChangesByBlockHash: [queryKey('block_hash'), implicitQueryKey('shard_uid')],
     FlatStateDeltaMetadataByBlockHash: [queryKey('block_hash'), implicitQueryKey('shard_uid')],
     FlatStorageStatusByShardUId: [queryKey('shard_uid')],
+    IncomingReceiptsByBlockHashShardId: [queryKey('block_hash'), implicitQueryKey('shard_id')],
     OutcomeByReceiptId: [queryKey('receipt_id')],
     OutcomeByReceiptIdAndBlockHash: [queryKey('receipt_id'), implicitQueryKey('block_hash')],
     OutcomeByTransactionHash: [queryKey('transaction_hash')],
@@ -227,6 +231,7 @@ export const entityQueryKeyTypes: Record<EntityQueryType, EntityQueryKeySpec[]> 
         queryKey('transaction_hash'),
         implicitQueryKey('block_hash'),
     ],
+    OutgoingReceiptsByBlockHashShardId: [queryKey('block_hash'), implicitQueryKey('shard_id')],
     ReceiptById: [queryKey('receipt_id')],
     ShardIdByAccountId: [queryKey('account_id'), implicitQueryKey('epoch_id')],
     ShardLayoutByEpochId: [queryKey('epoch_id')],
@@ -252,10 +257,12 @@ export const entityQueryOutputType: Record<EntityQueryType, EntityType> = {
     FlatStateChangesByBlockHash: 'FlatStateChanges',
     FlatStateDeltaMetadataByBlockHash: 'FlatStateDeltaMetadata',
     FlatStorageStatusByShardUId: 'FlatStorageStatus',
+    IncomingReceiptsByBlockHashShardId: 'Receipts',
     OutcomeByReceiptId: 'ExecutionOutcome',
     OutcomeByReceiptIdAndBlockHash: 'ExecutionOutcome',
     OutcomeByTransactionHash: 'ExecutionOutcome',
     OutcomeByTransactionHashAndBlockHash: 'ExecutionOutcome',
+    OutgoingReceiptsByBlockHashShardId: 'Receipts',
     ReceiptById: 'Receipt',
     ShardIdByAccountId: 'ShardId',
     ShardLayoutByEpochId: 'ShardLayout',
