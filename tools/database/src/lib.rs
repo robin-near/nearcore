@@ -6,3 +6,4 @@ mod make_snapshot;
 mod run_migrations;
 mod state_perf;
 mod utils;
+mod test_sweat;
