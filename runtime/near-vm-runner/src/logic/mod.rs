@@ -55,7 +55,7 @@ impl fmt::Debug for dyn CompiledContractCache {
 }
 
 /// Counts trie nodes reads during tx/receipt execution for proper storage costs charging.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrieNodesCount {
     /// Potentially expensive trie node reads which are served from disk in the worst case.
     pub db_reads: u64,

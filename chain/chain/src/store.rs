@@ -2703,6 +2703,7 @@ impl<'a> ChainStoreUpdate<'a> {
             | DBCol::StateChangesForSplitStates
             | DBCol::CachedContractCode
             | DBCol::FlatState
+            | DBCol::FlatNodes
             | DBCol::FlatStateChanges
             | DBCol::FlatStateDeltaMetadata
             | DBCol::FlatStorageStatus

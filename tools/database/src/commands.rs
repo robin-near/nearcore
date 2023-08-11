@@ -1,6 +1,7 @@
 use crate::adjust_database::ChangeDbKindCommand;
 use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::compact::RunCompactionCommand;
+use crate::flat_nodes::CreateFlatNodesCommand;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
@@ -37,6 +38,8 @@ enum SubCommand {
     StatePerf(StatePerfCommand),
 
     TestSweat(TestSweatCommand),
+
+    CreateFlatNodes(CreateFlatNodesCommand),
 }
 
 impl DatabaseCommand {
@@ -56,6 +59,7 @@ impl DatabaseCommand {
             SubCommand::RunMigrations(cmd) => cmd.run(home),
             SubCommand::StatePerf(cmd) => cmd.run(home),
             SubCommand::TestSweat(cmd) => cmd.run(home),
+            SubCommand::CreateFlatNodes(cmd) => cmd.run(home),
         }
     }
 }

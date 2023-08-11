@@ -3685,6 +3685,7 @@ dependencies = [
  "anyhow",
  "borsh 0.10.2",
  "clap 4.2.4",
+ "crossbeam",
  "indicatif",
  "near-chain-configs",
  "near-primitives",

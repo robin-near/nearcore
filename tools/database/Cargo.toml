@@ -12,6 +12,7 @@ publish = false
 anyhow.workspace = true
 clap.workspace = true
 borsh.workspace = true
+crossbeam.workspace = true
 indicatif.workspace = true
 rand.workspace = true
 rayon.workspace = true
