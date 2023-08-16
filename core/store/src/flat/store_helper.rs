@@ -9,7 +9,7 @@ use crate::db::FLAT_STATE_VALUES_INLINING_MIGRATION_STATUS_KEY;
 use crate::flat::delta::{BlockWithChangesInfo, FlatStateChanges, KeyForFlatStateDelta};
 use crate::flat::types::FlatStorageError;
 use crate::flat::FlatStorageReadyStatus;
-use crate::{DBCol, Store, StoreUpdate};
+use crate::{DBCol, Store, StoreUpdate, RawTrieNodeWithSize};
 use borsh::BorshDeserialize;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::ShardUId;
@@ -211,23 +211,22 @@ pub fn get_flat_node(
     key: &[u8],
 ) -> FlatStorageResult<Option<Vec<u8>>> {
     let db_key = encode_flat_state_db_key(shard_uid, key);
-    store
-        .get(DBCol::FlatNodes, &db_key)
-        .map_err(|err| {
-            FlatStorageError::StorageInternalError(format!("failed to read FlatNodes value: {err}"))
-        })
-        .map(|op| op.map(|slice| slice.to_vec()))
+    store.get(DBCol::FlatNodes, &db_key).map_err(|err| {
+        FlatStorageError::StorageInternalError(format!("failed to read FlatNodes value: {err}"))
+    }).map(|op| op.map(|slice| slice.to_vec()))
 }
 
 pub fn set_flat_node_value(
     store_update: &mut StoreUpdate,
     shard_uid: ShardUId,
     key: Vec<u8>,
-    node: Option<Vec<u8>>,
+    node: Option<&RawTrieNodeWithSize>,
 ) {
     let db_key = encode_flat_state_db_key(shard_uid, &key);
     match node {
-        Some(node) => store_update.set(DBCol::FlatNodes, &db_key, &node),
+        Some(node) => store_update
+            .set_ser(DBCol::FlatNodes, &db_key, node)
+            .expect("Borsh should not have failed here"),
         None => store_update.delete(DBCol::FlatNodes, &db_key),
     }
 }

@@ -1,5 +1,4 @@
-use borsh::{BorshDeserialize, BorshSerialize};
-use near_primitives::hash::CryptoHash;
+use borsh::BorshDeserialize;
 use near_primitives::state::ValueRef;
 use near_primitives::types::TrieNodesCount;
 use near_store::flat::store_helper;
@@ -117,75 +116,8 @@ impl Debug for FlatNodeNibbles {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-enum FlatNode {
-    Inlined(RawTrieNodeWithSize),
-    Hashed(CryptoHash, FlatTrieNode),
-}
-
-impl FlatNode {
-    fn from_raw(node: RawTrieNodeWithSize) -> Self {
-        if matches!(node.node, RawTrieNode::Leaf(_, _)) {
-            Self::Inlined(node)
-        } else {
-            Self::Hashed(CryptoHash::hash_borsh(&node), FlatTrieNode::from_raw(node.node))
-        }
-    }
-
-    fn into_trie_node(self) -> FlatTrieNode {
-        match self {
-            FlatNode::Inlined(raw) => FlatTrieNode::from_raw(raw.node),
-            FlatNode::Hashed(_, node) => node,
-        }
-    }
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-struct FlatChildren(u16);
-
-impl FlatChildren {
-    fn from_raw(children: near_store::trie::Children) -> Self {
-        let mut mask = 0;
-        for i in 0..16 {
-            if children.0[i].is_some() {
-                mask += 1 << i;
-            }
-        }
-        Self(mask)
-    }
-
-    fn has_at(&self, nibble: u8) -> bool {
-        assert!(nibble < 16);
-        let mask = (1 << nibble) as u16;
-        (self.0 & mask) == mask
-    }
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-enum FlatTrieNode {
-    Leaf(Vec<u8>, ValueRef),
-    BranchNoValue(FlatChildren),
-    BranchWithValue(ValueRef, FlatChildren),
-    Extension(Vec<u8>),
-}
-
-impl FlatTrieNode {
-    fn from_raw(node: RawTrieNode) -> Self {
-        match node {
-            RawTrieNode::Leaf(key, value_ref) => Self::Leaf(key, value_ref),
-            RawTrieNode::BranchNoValue(children) => {
-                Self::BranchNoValue(FlatChildren::from_raw(children))
-            }
-            RawTrieNode::BranchWithValue(value_ref, chilren) => {
-                Self::BranchWithValue(value_ref, FlatChildren::from_raw(chilren))
-            }
-            RawTrieNode::Extension(key, _) => FlatTrieNode::Extension(key),
-        }
-    }
-}
-
 mod creator {
-    use borsh::{BorshDeserialize, BorshSerialize};
+    use borsh::BorshDeserialize;
     use crossbeam::channel;
     use near_primitives::hash::CryptoHash;
     use near_store::flat::store_helper;
@@ -194,7 +126,7 @@ mod creator {
         RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, StoreUpdate, TrieDBStorage, TrieStorage,
     };
 
-    use super::{FlatNodeNibbles, FlatNode};
+    use super::FlatNodeNibbles;
 
     struct ReadNodeRequest {
         path: FlatNodeNibbles,
@@ -226,12 +158,11 @@ mod creator {
         }
 
         fn create_node(&mut self, path: FlatNodeNibbles, node: RawTrieNodeWithSize) {
-            let flat_node = FlatNode::from_raw(node.clone());
             store_helper::set_flat_node_value(
                 &mut self.store_update,
                 self.shard_uid,
                 path.encode_key(),
-                Some(flat_node.try_to_vec().unwrap()),
+                Some(&node),
             );
             self.pending_update += 1;
             if self.pending_update == UPDATES_COMMIT_SIZE {
@@ -301,7 +232,7 @@ mod creator {
         }
         std::mem::drop(req_recv);
         std::mem::drop(resp_send);
-        let creator = FlatNodesCreator {
+        let creator = FlatNodesCreator{
             shard_uid,
             store_update: store.store_update(),
             store,
@@ -339,7 +270,7 @@ mod creator {
 pub struct FlatNodesTrie {
     shard_uid: ShardUId,
     store: Store,
-    mem: RefCell<HashMap<Vec<u8>, FlatNode>>,
+    mem: RefCell<HashMap<Vec<u8>, RawTrieNodeWithSize>>,
     nodes_count: RefCell<TrieNodesCount>,
     elapsed_db_reads: RefCell<Vec<Duration>>,
     nodes_sizes: RefCell<Vec<usize>>,
@@ -377,7 +308,7 @@ impl FlatNodesTrie {
         NodeReadData { value_ref, nodes_count, elapsed_db_reads, nodes_sizes }
     }
 
-    fn get_node(&self, path: &FlatNodeNibbles) -> FlatNode {
+    fn get_node(&self, path: &FlatNodeNibbles) -> RawTrieNodeWithSize {
         let key = path.encode_key();
         let mut nodes = self.nodes_count.borrow_mut();
         let mut mem = self.mem.borrow_mut();
@@ -387,11 +318,10 @@ impl FlatNodesTrie {
         } else {
             nodes.db_reads += 1;
             let read_start = Instant::now();
-            let node_bytes =
-                store_helper::get_flat_node(&self.store, self.shard_uid, &key).unwrap().unwrap();
+            let node_bytes = store_helper::get_flat_node(&self.store, self.shard_uid, &key).unwrap().unwrap();
             self.elapsed_db_reads.borrow_mut().push(read_start.elapsed());
             self.nodes_sizes.borrow_mut().push(node_bytes.len());
-            let node = FlatNode::try_from_slice(&node_bytes).unwrap();
+            let node = RawTrieNodeWithSize::try_from_slice(&node_bytes).unwrap();
             mem.insert(key, node.clone());
             node
         }
@@ -406,9 +336,9 @@ impl FlatNodesTrie {
         if !lookup_path.starts_with(cur_path) {
             return None;
         }
-        let node = self.get_node(cur_path).into_trie_node();
+        let node = self.get_node(cur_path).node;
         match node {
-            FlatTrieNode::Leaf(key, value_ref) => {
+            RawTrieNode::Leaf(key, value_ref) => {
                 cur_path.append_encoded_slice(&key);
                 if cur_path == lookup_path {
                     Some(value_ref)
@@ -416,21 +346,21 @@ impl FlatNodesTrie {
                     None
                 }
             }
-            FlatTrieNode::BranchNoValue(children) => {
+            RawTrieNode::BranchNoValue(children) => {
                 if cur_path.len() < lookup_path.len() {
                     self.lookup_children(cur_path, lookup_path, children)
                 } else {
                     None
                 }
             }
-            FlatTrieNode::BranchWithValue(value_ref, children) => {
+            RawTrieNode::BranchWithValue(value_ref, children) => {
                 if cur_path.len() < lookup_path.len() {
                     self.lookup_children(cur_path, lookup_path, children)
                 } else {
                     Some(value_ref)
                 }
             }
-            FlatTrieNode::Extension(key) => {
+            RawTrieNode::Extension(key, _) => {
                 cur_path.append_encoded_slice(&key);
                 self.lookup(cur_path, lookup_path)
             }
@@ -441,10 +371,10 @@ impl FlatNodesTrie {
         &self,
         cur_path: &mut FlatNodeNibbles,
         lookup_path: &FlatNodeNibbles,
-        children: FlatChildren,
+        children: near_store::trie::Children,
     ) -> Option<ValueRef> {
         let next_nibble = lookup_path.nibble_at(cur_path.len());
-        if children.has_at(next_nibble) {
+        if children[next_nibble].is_some() {
             cur_path.push(next_nibble);
             self.lookup(cur_path, lookup_path)
         } else {
