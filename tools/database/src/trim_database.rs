@@ -60,7 +60,7 @@ impl TrimDatabaseCommand {
         println!("Inserting the retained block headers back into the DB...");
         let mut update = store.store_update();
         for (hash, header) in block_headers_to_retain {
-            update.set_ser(DBCol::BlockHeader, &hash.try_to_vec().unwrap(), &header)?;
+            update.insert_ser(DBCol::BlockHeader, &hash.try_to_vec().unwrap(), &header)?;
         }
         update.commit()?;
 
