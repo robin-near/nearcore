@@ -5,4 +5,5 @@ mod compact;
 mod make_snapshot;
 mod run_migrations;
 mod state_perf;
+mod trim_database;
 mod utils;

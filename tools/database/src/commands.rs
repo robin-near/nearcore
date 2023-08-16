@@ -4,6 +4,7 @@ use crate::compact::RunCompactionCommand;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
+use crate::trim_database::TrimDatabaseCommand;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -34,6 +35,12 @@ enum SubCommand {
     /// Run performance test for State column reads.
     /// Uses RocksDB data specified via --home argument.
     StatePerf(StatePerfCommand),
+
+    /// Trim the database by removing not-strictly-necessary columns.
+    /// DO NOT USE FOR ANYTHING EXCEPT PERFORMANCE DEBUGGING.
+    /// DO NOT USE FOR PRODUCTION NODES, IT IS UNSUPPORTED AND WILL
+    /// BREAK YOUR NODE.
+    TrimDatabase(TrimDatabaseCommand),
 }
 
 impl DatabaseCommand {
@@ -52,6 +59,7 @@ impl DatabaseCommand {
             }
             SubCommand::RunMigrations(cmd) => cmd.run(home),
             SubCommand::StatePerf(cmd) => cmd.run(home),
+            SubCommand::TrimDatabase(cmd) => cmd.run(home),
         }
     }
 }
