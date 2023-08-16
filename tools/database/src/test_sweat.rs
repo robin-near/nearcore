@@ -44,12 +44,9 @@ impl TestSweatCommand {
             false,
         );
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
-        let trie_update = TrieUpdate::new(Trie::new(
-            Rc::new(storage),
-            flat_head_state_root(&store, &shard_uid),
-            None,
-        ));
-        let flat_trie = FlatNodesTrie::new(shard_uid, store.clone());
+        let state_root = flat_head_state_root(&store, &shard_uid);
+        let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
+        let flat_trie = FlatNodesTrie::new(shard_uid, store.clone(), state_root);
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let costs_config = ExtCostsConfig::test();

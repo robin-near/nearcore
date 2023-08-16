@@ -169,6 +169,7 @@ impl StoreConfig {
             crate::DBCol::State => self.col_state_cache_size,
             crate::DBCol::FlatState => self.col_state_cache_size,
             crate::DBCol::FlatNodes => bytesize::ByteSize::mib(2096),
+            crate::DBCol::SmallState => bytesize::ByteSize::mib(2096),
             _ => bytesize::ByteSize::mib(32),
         }
     }

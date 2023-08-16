@@ -1,8 +1,12 @@
 use borsh::BorshDeserialize;
+use near_primitives::hash::CryptoHash;
+use near_primitives::shard_layout::ShardLayout;
 use near_primitives::state::ValueRef;
 use near_primitives::types::TrieNodesCount;
 use near_store::flat::store_helper;
-use near_store::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
+use near_store::{
+    NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, TrieCachingStorage,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -10,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::utils::{flat_head_state_root, open_rocksdb, sweat_shard};
+use crate::utils::{flat_head_state_root, open_rocksdb};
 
 #[derive(clap::Parser)]
 pub(crate) struct CreateFlatNodesCommand {}
@@ -19,9 +23,18 @@ impl CreateFlatNodesCommand {
     pub(crate) fn run(&self, home: &Path) -> anyhow::Result<()> {
         let rocksdb = Arc::new(open_rocksdb(home, near_store::Mode::ReadWrite)?);
         let store = near_store::NodeStorage::new(rocksdb.clone()).get_hot_store();
-        let shard_uid = sweat_shard();
-        let root = flat_head_state_root(&store, &shard_uid);
-        creator::create_flat_nodes(store, shard_uid, &root);
+        let mut threads = Vec::new();
+        for shard_uid in ShardLayout::get_simple_nightshade_layout().get_shard_uids() {
+            let root = flat_head_state_root(&store, &shard_uid);
+            let store = store.clone();
+            let hdl = std::thread::spawn(move || {
+                creator::create_flat_nodes(store, shard_uid, &root);
+            });
+            threads.push(hdl);
+        }
+        for hdl in threads {
+            hdl.join().unwrap();
+        }
         Ok(())
     }
 }
@@ -123,7 +136,8 @@ mod creator {
     use near_store::flat::store_helper;
     use near_store::trie::Children;
     use near_store::{
-        RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, StoreUpdate, TrieDBStorage, TrieStorage,
+        RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, StoreUpdate, TrieCachingStorage,
+        TrieDBStorage, TrieStorage,
     };
 
     use super::FlatNodeNibbles;
@@ -164,6 +178,16 @@ mod creator {
                 path.encode_key(),
                 Some(&node),
             );
+            self.store_update
+                .set_ser(
+                    near_store::DBCol::SmallState,
+                    &TrieCachingStorage::get_key_from_shard_uid_and_hash(
+                        self.shard_uid,
+                        &CryptoHash::hash_borsh(&node),
+                    ),
+                    &node,
+                )
+                .unwrap();
             self.pending_update += 1;
             if self.pending_update == UPDATES_COMMIT_SIZE {
                 self.commit_update();
@@ -197,7 +221,11 @@ mod creator {
             store_update.commit().unwrap();
             let committed = self.pending_update;
             self.pending_update = 0;
-            eprintln!("Committed {committed}, total: {}M", self.total_created / 1000_000);
+            eprintln!(
+                "Committed {committed} for shard {}, total: {}M",
+                self.shard_uid.shard_id(),
+                self.total_created as f64 / 1000_000.0
+            );
         }
 
         fn create_from_hash(&mut self, hash: CryptoHash, path: FlatNodeNibbles) {
@@ -232,7 +260,7 @@ mod creator {
         }
         std::mem::drop(req_recv);
         std::mem::drop(resp_send);
-        let creator = FlatNodesCreator{
+        let creator = FlatNodesCreator {
             shard_uid,
             store_update: store.store_update(),
             store,
@@ -242,7 +270,6 @@ mod creator {
             recv: resp_recv,
         };
         creator.create_root(*root);
-        //create_nodes(store, shard_uid, root, resp_recv, req_send);
         for hdl in thread_handles {
             hdl.join().unwrap();
         }
@@ -267,15 +294,6 @@ mod creator {
     }
 }
 
-pub struct FlatNodesTrie {
-    shard_uid: ShardUId,
-    store: Store,
-    mem: RefCell<HashMap<Vec<u8>, RawTrieNodeWithSize>>,
-    nodes_count: RefCell<TrieNodesCount>,
-    elapsed_db_reads: RefCell<Vec<Duration>>,
-    nodes_sizes: RefCell<Vec<usize>>,
-}
-
 pub struct NodeReadData {
     pub value_ref: Option<ValueRef>,
     pub nodes_count: TrieNodesCount,
@@ -283,11 +301,24 @@ pub struct NodeReadData {
     pub nodes_sizes: Vec<usize>,
 }
 
+pub struct FlatNodesTrie {
+    shard_uid: ShardUId,
+    store: Store,
+    root: CryptoHash,
+    mem: RefCell<HashMap<Vec<u8>, RawTrieNodeWithSize>>,
+    nodes_count: RefCell<TrieNodesCount>,
+    elapsed_db_reads: RefCell<Vec<Duration>>,
+    nodes_sizes: RefCell<Vec<usize>>,
+}
+
+const USE_SMALL_STATE: bool = true;
+
 impl FlatNodesTrie {
-    pub fn new(shard_uid: ShardUId, store: Store) -> Self {
+    pub fn new(shard_uid: ShardUId, store: Store, root: CryptoHash) -> Self {
         Self {
             shard_uid,
             store,
+            root,
             mem: RefCell::new(HashMap::new()),
             nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
             elapsed_db_reads: RefCell::new(Vec::new()),
@@ -299,7 +330,7 @@ impl FlatNodesTrie {
         let lookup_path = FlatNodeNibbles::from_bytes(key);
         let mut cur_path = FlatNodeNibbles::new();
         let nodes_before = self.nodes_count.borrow().clone();
-        let value_ref = self.lookup(&mut cur_path, &lookup_path);
+        let value_ref = self.lookup(&mut cur_path, &lookup_path, self.root);
         let nodes_count = self.nodes_count.borrow().clone().checked_sub(&nodes_before).unwrap();
         let mut elapsed_db_reads = Vec::new();
         std::mem::swap(self.elapsed_db_reads.borrow_mut().as_mut(), &mut elapsed_db_reads);
@@ -308,7 +339,7 @@ impl FlatNodesTrie {
         NodeReadData { value_ref, nodes_count, elapsed_db_reads, nodes_sizes }
     }
 
-    fn get_node(&self, path: &FlatNodeNibbles) -> RawTrieNodeWithSize {
+    fn get_node(&self, path: &FlatNodeNibbles, hash: CryptoHash) -> RawTrieNodeWithSize {
         let key = path.encode_key();
         let mut nodes = self.nodes_count.borrow_mut();
         let mut mem = self.mem.borrow_mut();
@@ -318,10 +349,22 @@ impl FlatNodesTrie {
         } else {
             nodes.db_reads += 1;
             let read_start = Instant::now();
-            let node_bytes = store_helper::get_flat_node(&self.store, self.shard_uid, &key).unwrap().unwrap();
+            let node_bytes = if USE_SMALL_STATE {
+                self.store
+                    .get(
+                        near_store::DBCol::SmallState,
+                        &TrieCachingStorage::get_key_from_shard_uid_and_hash(self.shard_uid, &hash),
+                    )
+                    .unwrap()
+                    .unwrap()
+                    .to_vec()
+            } else {
+                store_helper::get_flat_node(&self.store, self.shard_uid, &key).unwrap().unwrap()
+            };
             self.elapsed_db_reads.borrow_mut().push(read_start.elapsed());
             self.nodes_sizes.borrow_mut().push(node_bytes.len());
             let node = RawTrieNodeWithSize::try_from_slice(&node_bytes).unwrap();
+            assert_eq!(CryptoHash::hash_bytes(&node_bytes), hash);
             mem.insert(key, node.clone());
             node
         }
@@ -331,12 +374,13 @@ impl FlatNodesTrie {
         &self,
         cur_path: &mut FlatNodeNibbles,
         lookup_path: &FlatNodeNibbles,
+        node_hash: CryptoHash,
     ) -> Option<ValueRef> {
         //eprintln!("lookup path={lookup_path:?}, cur={cur_path:?}");
         if !lookup_path.starts_with(cur_path) {
             return None;
         }
-        let node = self.get_node(cur_path).node;
+        let node = self.get_node(cur_path, node_hash).node;
         match node {
             RawTrieNode::Leaf(key, value_ref) => {
                 cur_path.append_encoded_slice(&key);
@@ -360,9 +404,9 @@ impl FlatNodesTrie {
                     Some(value_ref)
                 }
             }
-            RawTrieNode::Extension(key, _) => {
+            RawTrieNode::Extension(key, hash) => {
                 cur_path.append_encoded_slice(&key);
-                self.lookup(cur_path, lookup_path)
+                self.lookup(cur_path, lookup_path, hash)
             }
         }
     }
@@ -374,9 +418,9 @@ impl FlatNodesTrie {
         children: near_store::trie::Children,
     ) -> Option<ValueRef> {
         let next_nibble = lookup_path.nibble_at(cur_path.len());
-        if children[next_nibble].is_some() {
+        if let Some(hash) = children[next_nibble] {
             cur_path.push(next_nibble);
-            self.lookup(cur_path, lookup_path)
+            self.lookup(cur_path, lookup_path, hash)
         } else {
             None
         }
@@ -454,7 +498,7 @@ mod tests {
         let trie = trie_update.trie();
         create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
         eprintln!("flat nodes created");
-        let flat_trie = FlatNodesTrie::new(shard_uid, shard_tries.get_store());
+        let flat_trie = FlatNodesTrie::new(shard_uid, shard_tries.get_store(), state_root);
         for key in keys.iter() {
             let flat_data = flat_trie.get_ref(key);
             let nodes_before = trie.get_trie_nodes_count();
