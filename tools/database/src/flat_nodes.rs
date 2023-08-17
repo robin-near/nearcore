@@ -311,7 +311,7 @@ pub struct FlatNodesTrie {
     nodes_sizes: RefCell<Vec<usize>>,
 }
 
-const USE_SMALL_STATE: bool = true;
+const USE_SMALL_STATE: bool = false;
 
 impl FlatNodesTrie {
     pub fn new(shard_uid: ShardUId, store: Store, root: CryptoHash) -> Self {

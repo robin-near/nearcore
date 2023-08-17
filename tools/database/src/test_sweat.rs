@@ -22,14 +22,17 @@ use crate::utils::{flat_head_state_root, flush_disk_cache, open_rocksdb, sweat_s
 pub(crate) struct TestSweatCommand {
     #[arg(short, long, default_value_t = 800)]
     request_count: usize,
+
+    #[arg(short, long, default_value_t = 100)]
+    warmup_count: usize,
 }
 
 const MAX_REQUEST_COUNT: usize = 10000;
 
 impl TestSweatCommand {
     pub(crate) fn run(&self, home: &Path) -> anyhow::Result<()> {
-        if self.request_count > MAX_REQUEST_COUNT {
-            panic!("max request count is {MAX_REQUEST_COUNT}, got {}", self.request_count);
+        if self.request_count > MAX_REQUEST_COUNT || self.warmup_count > MAX_REQUEST_COUNT {
+            panic!("max request count is {MAX_REQUEST_COUNT}");
         }
         let near_config = nearcore::config::load_config(
             &home,
@@ -50,18 +53,21 @@ impl TestSweatCommand {
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let costs_config = ExtCostsConfig::test();
-        eprintln!("Start SWEAT test with {} keys", self.request_count);
+        eprintln!(
+            "Start SWEAT with {} test keys and {} warmup keys",
+            self.request_count, self.warmup_count
+        );
         flush_disk_cache();
-        let keys: Vec<_> =
-            generate_sweat_request_keys(&rocksdb).into_iter().take(self.request_count).collect();
+        let all_keys = generate_sweat_request_keys(&rocksdb);
+        let (request_keys, rest_keys) = all_keys.split_at(self.request_count);
+        warm_up_tries(trie, &flat_trie, rest_keys.split_at(self.warmup_count).0);
         let nodes_before = trie.get_trie_nodes_count();
-        warm_up_tries(trie, &flat_trie);
         let mut total_elapsed_trie = Duration::ZERO;
         let mut total_elapsed_flat = Duration::ZERO;
         let mut all_db_reads_elapsed_flat = Vec::new();
         let mut all_nodes_sizes_flat = Vec::new();
         let mut gas: Gas = 0;
-        for key in keys.iter() {
+        for key in request_keys {
             // read trie
             let trie_nodes_before = trie.get_trie_nodes_count();
             let start_trie = Instant::now();
@@ -90,7 +96,7 @@ impl TestSweatCommand {
         }
         eprintln!(
             "Read {} keys: trie elapsed {total_elapsed_trie:?}, flat elapsed {total_elapsed_flat:?}",
-            keys.len(),
+            request_keys.len(),
         );
         let nodes = trie.get_trie_nodes_count().checked_sub(&nodes_before).unwrap();
         eprintln!("Node reads: {nodes:?}, total gas: {}TGas", gas / 10e12 as u64);
@@ -127,16 +133,22 @@ impl TestSweatCommand {
     }
 }
 
-fn warm_up_tries(trie: &Trie, flat_trie: &FlatNodesTrie) {
+fn warm_up_tries(trie: &Trie, flat_trie: &FlatNodesTrie, keys: &[Vec<u8>]) {
     eprintln!("Start tries warmup");
-    let key = sweat_contract_data(vec![]);
     let trie_start = Instant::now();
-    trie.get_ref(&key, near_store::KeyLookupMode::Trie).unwrap();
+    for key in keys {
+        trie.get_ref(&key, near_store::KeyLookupMode::Trie).unwrap();
+    }
     let elapsed_trie = trie_start.elapsed();
     let flat_start = Instant::now();
-    flat_trie.get_ref(&key);
+    for key in keys {
+        flat_trie.get_ref(&key);
+    }
     let elapsed_flat = flat_start.elapsed();
-    eprintln!("Finished warmup: trie {elapsed_trie:?}, flat: {elapsed_flat:?}");
+    eprintln!(
+        "Finished warmup with {} keys: trie {elapsed_trie:?}, flat: {elapsed_flat:?}",
+        keys.len()
+    );
 }
 
 #[allow(dead_code)]
@@ -156,6 +168,7 @@ fn assert_sweat_account(store: &Store, trie: &Trie) {
 
 fn generate_sweat_request_keys(rocksdb: &RocksDB) -> Vec<Vec<u8>> {
     const CACHE_PATH: &str = "/tmp/sweat_request_keys";
+    const READ_COUNT: usize = 2 * MAX_REQUEST_COUNT;
     #[derive(BorshSerialize, BorshDeserialize)]
     struct RequestKeys {
         keys: Vec<Vec<u8>>,
@@ -163,7 +176,7 @@ fn generate_sweat_request_keys(rocksdb: &RocksDB) -> Vec<Vec<u8>> {
     eprintln!("Generate contract data keys");
     if let Ok(bytes) = std::fs::read(CACHE_PATH) {
         if let Ok(req_keys) = RequestKeys::try_from_slice(&bytes) {
-            if req_keys.keys.len() == MAX_REQUEST_COUNT {
+            if req_keys.keys.len() == READ_COUNT {
                 eprintln!("Read keys from the fs cache");
                 return req_keys.keys;
             }
@@ -184,7 +197,7 @@ fn generate_sweat_request_keys(rocksdb: &RocksDB) -> Vec<Vec<u8>> {
     let req_keys = RequestKeys {
         keys: keys
             .iter()
-            .take(MAX_REQUEST_COUNT)
+            .take(READ_COUNT)
             .map(|key| store_helper::decode_flat_state_db_key(&key).unwrap().1)
             .collect(),
     };
