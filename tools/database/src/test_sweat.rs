@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::flat_nodes::FlatNodesTrie;
+use crate::flat_nodes::{FlatNodesTrie, LookupMode};
 use crate::utils::{flat_head_state_root, flush_disk_cache, open_rocksdb, sweat_shard};
 
 #[derive(Parser)]
@@ -25,6 +25,12 @@ pub(crate) struct TestSweatCommand {
 
     #[arg(short, long, default_value_t = 100)]
     warmup_count: usize,
+
+    #[arg(short, long)]
+    flat_lookup_mode: Option<String>,
+
+    #[arg(short, long, default_value_t = 5)]
+    prefetch_threads: usize,
 }
 
 const MAX_REQUEST_COUNT: usize = 10000;
@@ -34,6 +40,17 @@ impl TestSweatCommand {
         if self.request_count > MAX_REQUEST_COUNT || self.warmup_count > MAX_REQUEST_COUNT {
             panic!("max request count is {MAX_REQUEST_COUNT}");
         }
+        let flat_lookup_mode = match self.flat_lookup_mode.as_ref() {
+            Some(str) => match str.as_str() {
+                "small_state" => LookupMode::SmallState,
+                "flat_nodes" => LookupMode::FlatNodes,
+                "flat_nodes_prefetch" => LookupMode::FlatNodesWithPrefetcher {
+                    prefetcher_threads: self.prefetch_threads,
+                },
+                other => panic!("invalid flat_lookup_mode {other}"),
+            },
+            None => LookupMode::Disabled,
+        };
         let near_config = nearcore::config::load_config(
             &home,
             near_chain_configs::GenesisValidationMode::UnsafeFast,
@@ -49,12 +66,12 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let flat_trie = FlatNodesTrie::new(shard_uid, store.clone(), state_root);
+        let flat_trie = FlatNodesTrie::new(shard_uid, store.clone(), state_root, flat_lookup_mode.clone());
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let costs_config = ExtCostsConfig::test();
         eprintln!(
-            "Start SWEAT with {} test keys and {} warmup keys",
+            "Start SWEAT: {} test keys, {} warmup keys, flat lookup mode: {flat_lookup_mode:?}",
             self.request_count, self.warmup_count
         );
         flush_disk_cache();
@@ -95,8 +112,8 @@ impl TestSweatCommand {
                     * trie_nodes_count.mem_reads;
         }
         eprintln!(
-            "Read {} keys: trie elapsed {total_elapsed_trie:?}, flat elapsed {total_elapsed_flat:?}",
-            request_keys.len(),
+            "Read {} keys: trie elapsed {total_elapsed_trie:?}, flat elapsed {total_elapsed_flat:?} (ratio {})",
+            request_keys.len(), total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
         );
         let nodes = trie.get_trie_nodes_count().checked_sub(&nodes_before).unwrap();
         eprintln!("Node reads: {nodes:?}, total gas: {}TGas", gas / 10e12 as u64);
