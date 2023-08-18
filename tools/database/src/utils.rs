@@ -4,6 +4,7 @@ use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{ShardLayout, get_block_shard_uid};
 use near_store::flat::store_helper;
 use near_store::{ShardUId, Store, DBCol};
+use strum::IntoEnumIterator;
 
 pub(crate) fn open_rocksdb(
     home: &Path,
@@ -29,6 +30,12 @@ pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
         .unwrap()
         .unwrap();
     chunk.state_root().clone()
+}
+
+pub fn resolve_column(col: &str) -> Option<DBCol> {
+    DBCol::iter()
+        .filter(|db_col| <&str>::from(db_col) == col)
+        .next()
 }
 
 pub fn flat_head(store: &Store) -> CryptoHash {

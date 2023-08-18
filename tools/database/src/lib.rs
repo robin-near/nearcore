@@ -8,3 +8,4 @@ mod state_perf;
 mod utils;
 mod test_sweat;
 mod flat_nodes;
+mod column_stats;

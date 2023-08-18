@@ -475,13 +475,16 @@ fn rocksdb_read_options() -> ReadOptions {
 fn rocksdb_block_based_options(
     block_size: bytesize::ByteSize,
     cache_size: bytesize::ByteSize,
+    cache_index_and_filter_blocks: bool,
 ) -> BlockBasedOptions {
     let mut block_opts = BlockBasedOptions::default();
     block_opts.set_block_size(block_size.as_u64().try_into().unwrap());
     // We create block_cache for each of 47 columns, so the total cache size is 32 * 47 = 1504mb
     block_opts.set_block_cache(&Cache::new_lru_cache(cache_size.as_u64().try_into().unwrap()));
-    block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-    block_opts.set_cache_index_and_filter_blocks(true);
+    if cache_index_and_filter_blocks {
+        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+    }
+    block_opts.set_cache_index_and_filter_blocks(cache_index_and_filter_blocks);
     block_opts.set_bloom_filter(10.0, true);
     block_opts
 }
@@ -494,6 +497,10 @@ fn rocksdb_column_options(col: DBCol, store_config: &StoreConfig, temp: Temperat
     opts.set_block_based_table_factory(&rocksdb_block_based_options(
         store_config.block_size,
         cache_size,
+        match col {
+            DBCol::SmallState | DBCol::FlatNodes => false,
+            _ => true
+        }
     ));
 
     // Note that this function changes a lot of rustdb parameters including:
