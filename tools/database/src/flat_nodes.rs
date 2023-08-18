@@ -420,7 +420,6 @@ pub struct FlatNodesTrie {
 
 #[derive(Debug, Clone)]
 pub enum LookupMode {
-    Disabled,
     SmallState,
     FlatNodes,
     FlatNodesWithPrefetcher{
@@ -475,7 +474,6 @@ impl FlatNodesTrie {
             nodes.db_reads += 1;
             let read_start = Instant::now();
             let node_bytes = match self.mode {
-                LookupMode::Disabled => panic!("lookup is disabled"),
                 LookupMode::SmallState => {
                 self.store
                     .get(

@@ -1,5 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use clap::Parser;
+use indicatif::ProgressIterator;
 use near_primitives::config::{ExtCosts, ExtCostsConfig};
 use near_primitives::state::FlatStateValue;
 use near_primitives::trie_key::trie_key_parsers::parse_data_key_from_contract_data_key;
@@ -40,17 +41,19 @@ impl TestSweatCommand {
         if self.request_count > MAX_REQUEST_COUNT || self.warmup_count > MAX_REQUEST_COUNT {
             panic!("max request count is {MAX_REQUEST_COUNT}");
         }
-        let flat_lookup_mode = match self.flat_lookup_mode.as_ref() {
-            Some(str) => match str.as_str() {
-                "small_state" => LookupMode::SmallState,
-                "flat_nodes" => LookupMode::FlatNodes,
-                "flat_nodes_prefetch" => LookupMode::FlatNodesWithPrefetcher {
-                    prefetcher_threads: self.prefetch_threads,
-                },
-                other => panic!("invalid flat_lookup_mode {other}"),
-            },
-            None => LookupMode::Disabled,
-        };
+        let flat_lookup_mode = self.flat_lookup_mode.as_ref().map(|str| match str.as_str() {
+            "small_state" => LookupMode::SmallState,
+            "flat_nodes" => LookupMode::FlatNodes,
+            "flat_nodes_prefetch" => {
+                LookupMode::FlatNodesWithPrefetcher { prefetcher_threads: self.prefetch_threads }
+            }
+            other => panic!("invalid flat_lookup_mode {other}"),
+        });
+        eprintln!(
+            "Start SWEAT: {} test keys, {} warmup keys, flat lookup mode: {flat_lookup_mode:?}",
+            self.request_count, self.warmup_count
+        );
+
         let near_config = nearcore::config::load_config(
             &home,
             near_chain_configs::GenesisValidationMode::UnsafeFast,
@@ -66,25 +69,23 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let flat_trie = FlatNodesTrie::new(shard_uid, store.clone(), state_root, flat_lookup_mode.clone());
+        let flat_trie = flat_lookup_mode
+            .map(|mode| FlatNodesTrie::new(shard_uid, store.clone(), state_root, mode));
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let costs_config = ExtCostsConfig::test();
-        eprintln!(
-            "Start SWEAT: {} test keys, {} warmup keys, flat lookup mode: {flat_lookup_mode:?}",
-            self.request_count, self.warmup_count
-        );
         flush_disk_cache();
         let all_keys = generate_sweat_request_keys(&rocksdb);
         let (request_keys, rest_keys) = all_keys.split_at(self.request_count);
-        warm_up_tries(trie, &flat_trie, rest_keys.split_at(self.warmup_count).0);
+        warm_up_tries(trie, flat_trie.as_ref(), rest_keys.split_at(self.warmup_count).0);
         let nodes_before = trie.get_trie_nodes_count();
         let mut total_elapsed_trie = Duration::ZERO;
         let mut total_elapsed_flat = Duration::ZERO;
         let mut all_db_reads_elapsed_flat = Vec::new();
         let mut all_nodes_sizes_flat = Vec::new();
         let mut gas: Gas = 0;
-        for key in request_keys {
+        eprintln!("Executing get_ref for {} keys", request_keys.len());
+        for key in request_keys.iter().progress() {
             // read trie
             let trie_nodes_before = trie.get_trie_nodes_count();
             let start_trie = Instant::now();
@@ -94,13 +95,15 @@ impl TestSweatCommand {
             let trie_nodes_count =
                 trie.get_trie_nodes_count().checked_sub(&trie_nodes_before).unwrap();
             // read flat
-            let start_flat = Instant::now();
-            let flat_data = flat_trie.get_ref(key);
-            total_elapsed_flat += start_flat.elapsed();
-            all_db_reads_elapsed_flat.extend_from_slice(&flat_data.elapsed_db_reads);
-            all_nodes_sizes_flat.extend_from_slice(&flat_data.nodes_sizes);
-            assert_eq!(flat_data.value_ref, trie_value_ref);
-            assert_eq!(flat_data.nodes_count, trie_nodes_count);
+            if let Some(flat_trie) = flat_trie.as_ref() {
+                let start_flat = Instant::now();
+                let flat_data = flat_trie.get_ref(key);
+                total_elapsed_flat += start_flat.elapsed();
+                all_db_reads_elapsed_flat.extend_from_slice(&flat_data.elapsed_db_reads);
+                all_nodes_sizes_flat.extend_from_slice(&flat_data.nodes_sizes);
+                assert_eq!(flat_data.value_ref, trie_value_ref);
+                assert_eq!(flat_data.nodes_count, trie_nodes_count);
+            }
             // Update gas
             let contract_key =
                 parse_data_key_from_contract_data_key(&key, &sweat_account_id()).unwrap();
@@ -111,38 +114,43 @@ impl TestSweatCommand {
                 + costs_config.gas_cost(ExtCosts::read_cached_trie_node)
                     * trie_nodes_count.mem_reads;
         }
-        eprintln!(
-            "Read {} keys: trie elapsed {total_elapsed_trie:?}, flat elapsed {total_elapsed_flat:?} (ratio {})",
-            request_keys.len(), total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
-        );
         let nodes = trie.get_trie_nodes_count().checked_sub(&nodes_before).unwrap();
         eprintln!("Node reads: {nodes:?}, total gas: {}TGas", gas / 10e12 as u64);
+        eprintln!("Elapsed trie: {total_elapsed_trie:?}");
+        if flat_trie.is_some() {
+            eprintln!(
+                "Elapsed flat: {total_elapsed_flat:?} ({:.2}x)",
+                total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
+            );
 
-        all_db_reads_elapsed_flat.sort();
-        eprintln!(
-            "flat db reads avg = {:?}",
-            all_db_reads_elapsed_flat.iter().sum::<Duration>()
-                / all_db_reads_elapsed_flat.len() as u32
-        );
-        let rocksdb_cache_hit_cnt =
-            all_db_reads_elapsed_flat.iter().filter(|&d| *d < Duration::from_micros(100)).count();
-        eprintln!(
-            "flat db reads cache hit ratio {}",
-            rocksdb_cache_hit_cnt as f64 / all_db_reads_elapsed_flat.len() as f64
-        );
-        for p in [0.5, 0.75, 0.9, 0.95, 0.99, 0.999] {
-            let i = (p * all_db_reads_elapsed_flat.len() as f64) as usize;
-            eprintln!("flat db reads p{p} = {:?}", all_db_reads_elapsed_flat[i]);
-        }
+            all_db_reads_elapsed_flat.sort();
+            eprintln!(
+                "flat db reads avg = {:?}",
+                all_db_reads_elapsed_flat.iter().sum::<Duration>()
+                    / all_db_reads_elapsed_flat.len() as u32
+            );
+            let rocksdb_cache_hit_cnt = all_db_reads_elapsed_flat
+                .iter()
+                .filter(|&d| *d < Duration::from_micros(100))
+                .count();
+            eprintln!(
+                "flat db reads cache hit ratio {}",
+                rocksdb_cache_hit_cnt as f64 / all_db_reads_elapsed_flat.len() as f64
+            );
+            for p in [0.5, 0.75, 0.9, 0.95, 0.99, 0.999] {
+                let i = (p * all_db_reads_elapsed_flat.len() as f64) as usize;
+                eprintln!("flat db reads p{p} = {:?}", all_db_reads_elapsed_flat[i]);
+            }
 
-        all_nodes_sizes_flat.sort();
-        eprintln!(
-            "node size avg = {:?}",
-            all_nodes_sizes_flat.iter().sum::<usize>() / all_nodes_sizes_flat.len()
-        );
-        for p in [0.1, 0.25, 0.5, 0.75, 0.9, 0.95] {
-            let i = (p * all_nodes_sizes_flat.len() as f64) as usize;
-            eprintln!("node size p{p} = {:?}", all_nodes_sizes_flat[i]);
+            all_nodes_sizes_flat.sort();
+            eprintln!(
+                "node size avg = {:?}",
+                all_nodes_sizes_flat.iter().sum::<usize>() / all_nodes_sizes_flat.len()
+            );
+            for p in [0.1, 0.25, 0.5, 0.75, 0.9, 0.95] {
+                let i = (p * all_nodes_sizes_flat.len() as f64) as usize;
+                eprintln!("node size p{p} = {:?}", all_nodes_sizes_flat[i]);
+            }
         }
 
         eprintln!("Finished SWEAT test");
@@ -150,22 +158,20 @@ impl TestSweatCommand {
     }
 }
 
-fn warm_up_tries(trie: &Trie, flat_trie: &FlatNodesTrie, keys: &[Vec<u8>]) {
-    eprintln!("Start tries warmup");
+fn warm_up_tries(trie: &Trie, flat_trie: Option<&FlatNodesTrie>, keys: &[Vec<u8>]) {
+    eprintln!("Start tries warmup with {} keys", keys.len());
     let trie_start = Instant::now();
     for key in keys {
         trie.get_ref(&key, near_store::KeyLookupMode::Trie).unwrap();
     }
-    let elapsed_trie = trie_start.elapsed();
-    let flat_start = Instant::now();
-    for key in keys {
-        flat_trie.get_ref(&key);
+    eprintln!("Elapsed trie: {:?}", trie_start.elapsed());
+    if let Some(flat_trie) = flat_trie {
+        let flat_start = Instant::now();
+        for key in keys {
+            flat_trie.get_ref(&key);
+        }
+        eprintln!("Elapsed flat: {:?}", flat_start.elapsed());
     }
-    let elapsed_flat = flat_start.elapsed();
-    eprintln!(
-        "Finished warmup with {} keys: trie {elapsed_trie:?}, flat: {elapsed_flat:?}",
-        keys.len()
-    );
 }
 
 #[allow(dead_code)]
