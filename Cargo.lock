@@ -6598,6 +6598,7 @@ dependencies = [
  "chrono",
  "clap 4.2.4",
  "cloud-storage",
+ "hex",
  "insta",
  "itertools",
  "near-chain",

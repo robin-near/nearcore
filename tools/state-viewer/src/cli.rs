@@ -1,5 +1,6 @@
 use crate::commands::*;
 use crate::contract_accounts::ContractAccountFilter;
+use crate::load_trie::LoadTrieCmd;
 use crate::rocksdb_stats::get_rocksdb_stats;
 use crate::trie_iteration_benchmark::TrieIterationBenchmarkCmd;
 use borsh::BorshSerialize;
@@ -90,6 +91,7 @@ pub enum StateViewerSubCommand {
     /// View trie structure.
     #[clap(alias = "view_trie")]
     ViewTrie(ViewTrieCmd),
+    LoadTrie(LoadTrieCmd),
 }
 
 impl StateViewerSubCommand {
@@ -146,6 +148,7 @@ impl StateViewerSubCommand {
             StateViewerSubCommand::ViewChain(cmd) => cmd.run(near_config, store),
             StateViewerSubCommand::ViewTrie(cmd) => cmd.run(store),
             StateViewerSubCommand::TrieIterationBenchmark(cmd) => cmd.run(near_config, store),
+            StateViewerSubCommand::LoadTrie(cmd) => cmd.run(near_config, store),
         }
     }
 }

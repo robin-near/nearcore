@@ -9,7 +9,7 @@ use near_primitives::state::ValueRef;
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RawTrieNodeWithSize {
     pub node: RawTrieNode,
-    pub(super) memory_usage: u64,
+    pub memory_usage: u64,
 }
 
 /// Trie node.
