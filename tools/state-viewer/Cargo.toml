@@ -16,6 +16,7 @@ borsh.workspace = true
 chrono.workspace = true
 clap.workspace = true
 cloud-storage.workspace = true
+hex.workspace = true
 itertools.workspace = true
 once_cell.workspace = true
 rand.workspace = true
