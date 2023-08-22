@@ -280,12 +280,12 @@ impl BuilderStack {
             );
             let first_child_path = calculate_first_child_path(&path, &raw_node);
             assert!(
-                first_child_path.len() <= top.placeholder_length.unwrap(),
+                first_child_path.len() <= top.child_path_length(),
                 "Raw node has path length {} greater than placeholder length {}",
                 first_child_path.len(),
-                top.placeholder_length.unwrap()
+                top.child_path_length()
             );
-            let longer = if first_child_path.len() < top.placeholder_length.unwrap() {
+            let longer = if first_child_path.len() < top.child_path_length() {
                 Some(top.split_placeholder(first_child_path))
             } else {
                 None
