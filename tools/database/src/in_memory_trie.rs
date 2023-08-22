@@ -137,7 +137,19 @@ impl InMemoryTrieNodeBuilder {
                     );
                     InMemoryTrieNodeKindLite::Branch(self.children)
                 }
-                _ => panic!("Invalid trie node"),
+                (Some(leaf), None) => {
+                    assert_eq!(
+                        self.next_child_index,
+                        16,
+                        "{:?}: Expected 16 children, found {}",
+                        self.hash_and_size.unwrap().0,
+                        self.next_child_index
+                    );
+                    InMemoryTrieNodeKindLite::BranchWithLeaf {
+                        children: self.children,
+                        value: leaf,
+                    }
+                }
             },
         })
     }
