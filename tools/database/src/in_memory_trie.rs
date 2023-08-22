@@ -217,10 +217,12 @@ impl Debug for InMemoryTrieNodeBuilder {
             write!(f, "placeholder({}) ", placeholder_length)?;
         } else {
             if let Some(extension) = &self.extension {
-                write!(f, "extension({:?}) ", extension)?;
+                let mut nibble = FlatNodeNibbles::new();
+                nibble.append_encoded_slice(&extension);
+                write!(f, "extension({:?}) ", nibble)?;
             }
             if let Some(leaf) = &self.leaf {
-                write!(f, "leaf({:?}) ", leaf)?;
+                write!(f, "leaf")?;
             }
             if self.expected_children.len() > 1 {
                 write!(f, "branch({})", self.next_child_index)?;
