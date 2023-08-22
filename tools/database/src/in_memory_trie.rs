@@ -204,6 +204,7 @@ impl InMemoryTrieNodeBuilder {
         assert!(self.placeholder_length.is_some());
         assert!(self.child_path_length() > child_path.len());
         let new_placeholder_len = self.child_path_length() - child_path.len();
+        *self.placeholder_length.as_mut().unwrap() -= new_placeholder_len;
         let mut new_builder = InMemoryTrieNodeBuilder::placeholder(child_path, new_placeholder_len);
         new_builder.pending_children = std::mem::take(&mut self.pending_children);
         new_builder
@@ -212,20 +213,20 @@ impl InMemoryTrieNodeBuilder {
 
 impl Debug for InMemoryTrieNodeBuilder {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} ", self.path)?;
+        write!(f, "{:?}", self.path)?;
         if let Some(placeholder_length) = self.placeholder_length {
-            write!(f, "placeholder({}) ", placeholder_length)?;
+            write!(f, " placeholder({})", placeholder_length)?;
         } else {
             if let Some(extension) = &self.extension {
                 let mut nibble = FlatNodeNibbles::new();
                 nibble.append_encoded_slice(&extension);
-                write!(f, "extension({:?}) ", nibble)?;
+                write!(f, " extension({:?})", nibble)?;
             }
             if let Some(leaf) = &self.leaf {
-                write!(f, "leaf")?;
+                write!(f, " leaf")?;
             }
             if self.expected_children.len() > 1 {
-                write!(f, "branch({})", self.next_child_index)?;
+                write!(f, " branch({})", self.next_child_index)?;
             }
         }
         Ok(())
