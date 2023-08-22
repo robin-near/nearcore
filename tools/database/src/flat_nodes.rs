@@ -140,6 +140,15 @@ impl FlatNodeNibbles {
     pub fn is_prefix_of(&self, other: &Self) -> bool {
         self.len <= other.len && (0..self.len).all(|i| self.nibble_at(i) == other.nibble_at(i))
     }
+
+    pub fn prefix(&self, len: usize) -> FlatNodeNibbles {
+        assert!(len <= self.len);
+        let mut ret = FlatNodeNibbles::new();
+        for i in 0..len {
+            ret.push(self.nibble_at(i));
+        }
+        ret
+    }
 }
 
 impl Debug for FlatNodeNibbles {

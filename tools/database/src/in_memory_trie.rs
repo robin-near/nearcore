@@ -296,13 +296,21 @@ impl BuilderStack {
             }
         } else {
             let child_path_length = top.child_path_length();
-            if child_path_length == path.len() {
+            if child_path_length <= path.len() {
+                if child_path_length < path.len() {
+                    // We need a new placeholder in between, and then we can add the node.
+                    self.stack.push(InMemoryTrieNodeBuilder::placeholder(
+                        path.prefix(child_path_length),
+                        path.len() - child_path_length,
+                    ));
+                }
                 self.stack.push(InMemoryTrieNodeBuilder::from_raw_node(path, raw_node));
                 assert!(
                     top_part.is_empty(),
                     "Top part should be empty when inserting a new node at the right path"
                 );
             } else {
+                // The node is a placeholder that represented more than 1 node, so split it.
                 assert!(top.placeholder_length.is_some(), "Top of the stack should be a placeholder when inserting a node into the middle of the path");
                 let mut longer = top.split_placeholder(path);
                 longer.set_raw_node(raw_node);
