@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -155,6 +156,10 @@ impl InMemoryTrieNodeBuilder {
     }
 
     pub fn add_child(&mut self, child: Box<InMemoryTrieNodeLite>) {
+        if self.placeholder_length.is_some() {
+            self.pending_children.push(child);
+            return;
+        }
         assert!(
             self.next_child_index < self.expected_children.len(),
             "Too many children; expected {}, actual index {}",
@@ -205,6 +210,26 @@ impl InMemoryTrieNodeBuilder {
     }
 }
 
+impl Debug for InMemoryTrieNodeBuilder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} ", self.path)?;
+        if let Some(placeholder_length) = self.placeholder_length {
+            write!(f, "placeholder({}) ", placeholder_length)?;
+        } else {
+            if let Some(extension) = &self.extension {
+                write!(f, "extension({:?}) ", extension)?;
+            }
+            if let Some(leaf) = &self.leaf {
+                write!(f, "leaf({:?}) ", leaf)?;
+            }
+            if self.expected_children.len() > 1 {
+                write!(f, "branch({})", self.next_child_index)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn calculate_first_child_path(
     parent: &FlatNodeNibbles,
     raw_node: &RawTrieNodeWithSize,
@@ -240,7 +265,7 @@ impl BuilderStack {
 
     pub fn print(&self) {
         for (i, builder) in self.stack.iter().enumerate() {
-            println!("{}: {:?} {:?}", i, builder.path, builder.placeholder_length);
+            println!("{}: {:?}", i, builder);
         }
     }
 
@@ -373,6 +398,7 @@ impl InMemoryTrieBuilderFromFlatNodes {
             let item = item?;
             let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
             let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
+            println!("Adding node: {:?}", key);
             node_stack.add_node(key, node);
 
             nodes_iterated += 1;
