@@ -3,6 +3,7 @@ use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::column_stats::ColumnStatsCommand;
 use crate::compact::RunCompactionCommand;
 use crate::flat_nodes::CreateFlatNodesCommand;
+use crate::in_memory_trie::InMemoryTrieCmd;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
@@ -43,6 +44,7 @@ enum SubCommand {
     CreateFlatNodes(CreateFlatNodesCommand),
 
     ColumnStats(ColumnStatsCommand),
+    InMemoryTrie(InMemoryTrieCmd),
 }
 
 impl DatabaseCommand {
@@ -64,6 +66,14 @@ impl DatabaseCommand {
             SubCommand::TestSweat(cmd) => cmd.run(home),
             SubCommand::CreateFlatNodes(cmd) => cmd.run(home),
             SubCommand::ColumnStats(cmd) => cmd.run(home),
+            SubCommand::InMemoryTrie(cmd) => {
+                let near_config = nearcore::config::load_config(
+                    &home,
+                    near_chain_configs::GenesisValidationMode::UnsafeFast,
+                )
+                .unwrap_or_else(|e| panic!("Error loading config: {:#}", e));
+                cmd.run(near_config, home)
+            }
         }
     }
 }

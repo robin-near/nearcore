@@ -3688,6 +3688,7 @@ dependencies = [
  "crossbeam",
  "indicatif",
  "near-chain-configs",
+ "near-epoch-manager",
  "near-primitives",
  "near-store",
  "nearcore",

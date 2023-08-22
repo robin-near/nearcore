@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::Path;
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -41,7 +41,7 @@ impl CreateFlatNodesCommand {
 }
 
 #[derive(Clone, PartialEq, Eq, Default)]
-struct FlatNodeNibbles {
+pub struct FlatNodeNibbles {
     data: Vec<u8>,
     len: usize,
 }
@@ -49,15 +49,15 @@ struct FlatNodeNibbles {
 impl FlatNodeNibbles {
     const ODD_SIZE_FLAG: u8 = 1;
 
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { data: Vec::new(), len: 0 }
     }
 
-    fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         Self { data: bytes.to_vec(), len: bytes.len() * 2 }
     }
 
-    fn nibble_at(&self, i: usize) -> u8 {
+    pub fn nibble_at(&self, i: usize) -> u8 {
         assert!(i < self.len);
         let byte = self.data[i / 2];
         if i % 2 == 0 {
@@ -67,11 +67,11 @@ impl FlatNodeNibbles {
         }
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.len
     }
 
-    fn push(&mut self, nibble: u8) {
+    pub fn push(&mut self, nibble: u8) {
         assert!(nibble < 16);
         if self.len % 2 == 0 {
             self.data.push(nibble << 4);
@@ -81,33 +81,33 @@ impl FlatNodeNibbles {
         self.len += 1;
     }
 
-    fn with_push(&self, nibble: u8) -> Self {
+    pub fn with_push(&self, nibble: u8) -> Self {
         let mut ret = self.clone();
         ret.push(nibble);
         ret
     }
 
-    fn append_slice(&mut self, nibbles: &NibbleSlice) {
+    pub fn append_slice(&mut self, nibbles: &NibbleSlice) {
         for v in nibbles.iter() {
             self.push(v);
         }
     }
 
-    fn append_encoded_slice(&mut self, encoded_nibble_slice: &[u8]) {
+    pub fn append_encoded_slice(&mut self, encoded_nibble_slice: &[u8]) {
         self.append_slice(&NibbleSlice::from_encoded(encoded_nibble_slice).0);
     }
 
-    fn with_append_encoded_slice(&self, encoded_nibble_slice: &[u8]) -> Self {
+    pub fn with_append_encoded_slice(&self, encoded_nibble_slice: &[u8]) -> Self {
         let mut ret = self.clone();
         ret.append_encoded_slice(encoded_nibble_slice);
         ret
     }
 
-    fn starts_with(&self, other: &Self) -> bool {
+    pub fn starts_with(&self, other: &Self) -> bool {
         self.len >= other.len && (0..other.len).all(|i| self.nibble_at(i) == other.nibble_at(i))
     }
 
-    fn encode_key(&self) -> Vec<u8> {
+    pub fn encode_key(&self) -> Vec<u8> {
         let is_odd_size = self.len % 2 == 1;
         let mut ret = Vec::with_capacity(self.data.len() + if is_odd_size { 0 } else { 1 });
         ret.extend_from_slice(&self.data);
@@ -134,26 +134,24 @@ struct PrefetcherRequestState(Arc<(Mutex<PrefetcherRequestStateData>, Condvar)>)
 
 struct Prefetcher {
     state: PrefetcherRequestState,
-    handles: Vec<JoinHandle<()>>
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl Prefetcher {
     fn new(store: Store, shard_uid: ShardUId, threads: usize) -> Self {
-        let state = PrefetcherRequestState(
-            Arc::new((Mutex::new(PrefetcherRequestStateData::default()), Condvar::new())
-        ));
+        let state = PrefetcherRequestState(Arc::new((
+            Mutex::new(PrefetcherRequestStateData::default()),
+            Condvar::new(),
+        )));
         let mut handles = Vec::new();
         for _ in 0..threads {
             handles.push(Self::start_prefetch_thread(store.clone(), shard_uid, state.clone()));
         }
-        Self {
-            state,
-            handles,
-        }
+        Self { state, handles }
     }
 
     pub fn create_request(&self, key: FlatNodeNibbles) {
-        let mut guard = self.state.0.0.lock().unwrap();
+        let mut guard = self.state.0 .0.lock().unwrap();
         guard.entries.clear();
         guard.nibbles = key;
         guard.next_len = None;
@@ -162,51 +160,55 @@ impl Prefetcher {
 
     pub fn get_node(&self, cur_path: &FlatNodeNibbles) -> Vec<u8> {
         let cur_len = cur_path.len();
-        let mut guard = self.state.0.0.lock().unwrap();
+        let mut guard = self.state.0 .0.lock().unwrap();
         if let Some(next_len) = guard.next_len {
             if next_len < cur_len {
                 guard.next_len = Some(cur_len);
             }
         } else {
             guard.next_len = Some(cur_len);
-            self.state.0.1.notify_all();
-            guard = self.state.0.1.wait(guard).unwrap();
+            self.state.0 .1.notify_all();
+            guard = self.state.0 .1.wait(guard).unwrap();
         }
         loop {
             if let Some(node) = guard.entries.remove(&cur_len) {
                 return node;
             }
-            guard = self.state.0.1.wait(guard).unwrap();
+            guard = self.state.0 .1.wait(guard).unwrap();
         }
     }
 
-    fn start_prefetch_thread(store: Store, shard_uid: ShardUId, state: PrefetcherRequestState) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || {
-            loop {
-                let mut guard = state.0.0.lock().unwrap();
-                if guard.done {
-                    break;
+    fn start_prefetch_thread(
+        store: Store,
+        shard_uid: ShardUId,
+        state: PrefetcherRequestState,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || loop {
+            let mut guard = state.0 .0.lock().unwrap();
+            if guard.done {
+                break;
+            }
+            let max_len = guard.nibbles.len();
+            if guard.next_len.is_some_and(|next_len| next_len <= max_len) {
+                let mut prefix = FlatNodeNibbles::new();
+                let cur_len = guard.next_len.unwrap();
+                for i in 0..cur_len {
+                    prefix.push(guard.nibbles.nibble_at(i));
                 }
-                let max_len = guard.nibbles.len();
-                if guard.next_len.is_some_and(|next_len| next_len <= max_len) {
-                    let mut prefix = FlatNodeNibbles::new();
-                    let cur_len = guard.next_len.unwrap();
-                    for i in 0..cur_len {
-                        prefix.push(guard.nibbles.nibble_at(i));
+                let request_id = guard.request_id;
+                guard.next_len = Some(cur_len + 1);
+                std::mem::drop(guard);
+                if let Some(node) =
+                    store_helper::get_flat_node(&store, shard_uid, &prefix.encode_key()).unwrap()
+                {
+                    let mut data = state.0 .0.lock().unwrap();
+                    if request_id == data.request_id {
+                        data.entries.insert(cur_len, node);
+                        state.0 .1.notify_all();
                     }
-                    let request_id = guard.request_id;
-                    guard.next_len = Some(cur_len + 1);
-                    std::mem::drop(guard);
-                    if let Some(node) = store_helper::get_flat_node(&store, shard_uid, &prefix.encode_key()).unwrap() {
-                        let mut data = state.0.0.lock().unwrap();
-                        if request_id == data.request_id {
-                            data.entries.insert(cur_len, node);
-                            state.0.1.notify_all();
-                        }
-                    }
-                } else {
-                    std::mem::drop(state.0.1.wait(guard).unwrap());
                 }
+            } else {
+                std::mem::drop(state.0 .1.wait(guard).unwrap());
             }
         })
     }
@@ -214,10 +216,10 @@ impl Prefetcher {
 
 impl Drop for Prefetcher {
     fn drop(&mut self) {
-        let mut guard = self.state.0.0.lock().unwrap();
+        let mut guard = self.state.0 .0.lock().unwrap();
         guard.done = true;
         std::mem::drop(guard);
-        self.state.0.1.notify_all();
+        self.state.0 .1.notify_all();
         for handle in std::mem::take(&mut self.handles) {
             handle.join().unwrap();
         }
@@ -422,14 +424,12 @@ pub struct FlatNodesTrie {
 pub enum LookupMode {
     SmallState,
     FlatNodes,
-    FlatNodesWithPrefetcher{
-        prefetcher_threads: usize,
-    }
+    FlatNodesWithPrefetcher { prefetcher_threads: usize },
 }
 
 impl FlatNodesTrie {
     pub fn new(shard_uid: ShardUId, store: Store, root: CryptoHash, mode: LookupMode) -> Self {
-        let prefetcher = if let LookupMode::FlatNodesWithPrefetcher{ prefetcher_threads } = mode {
+        let prefetcher = if let LookupMode::FlatNodesWithPrefetcher { prefetcher_threads } = mode {
             Some(Prefetcher::new(store.clone(), shard_uid, prefetcher_threads))
         } else {
             None
@@ -474,20 +474,18 @@ impl FlatNodesTrie {
             nodes.db_reads += 1;
             let read_start = Instant::now();
             let node_bytes = match self.mode {
-                LookupMode::SmallState => {
-                self.store
+                LookupMode::SmallState => self
+                    .store
                     .get(
                         near_store::DBCol::SmallState,
                         &TrieCachingStorage::get_key_from_shard_uid_and_hash(self.shard_uid, &hash),
                     )
                     .unwrap()
                     .unwrap()
-                    .to_vec()
-
-                },
+                    .to_vec(),
                 LookupMode::FlatNodes => {
                     store_helper::get_flat_node(&self.store, self.shard_uid, &key).unwrap().unwrap()
-                },
+                }
                 LookupMode::FlatNodesWithPrefetcher { prefetcher_threads: _ } => {
                     self.prefetcher.as_ref().unwrap().get_node(path)
                 }
@@ -629,7 +627,12 @@ mod tests {
         let trie = trie_update.trie();
         create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
         eprintln!("flat nodes created");
-        let flat_trie = FlatNodesTrie::new(shard_uid, shard_tries.get_store(), state_root);
+        let flat_trie = FlatNodesTrie::new(
+            shard_uid,
+            shard_tries.get_store(),
+            state_root,
+            crate::flat_nodes::LookupMode::FlatNodes,
+        );
         for key in keys.iter() {
             let flat_data = flat_trie.get_ref(key);
             let nodes_before = trie.get_trie_nodes_count();
