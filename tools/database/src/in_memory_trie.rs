@@ -401,11 +401,11 @@ impl InMemoryTrieBuilderFromFlatNodes {
             let item = item?;
             let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
             let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
-            println!("Adding node: {:?}", key);
+            // println!("Adding node: {:?}", key);
             node_stack.add_node(key, node);
 
             nodes_iterated += 1;
-            if true {
+            if last_print.elapsed() > Duration::from_secs(10) {
                 println!("Loaded {} nodes, current stack:", nodes_iterated,);
                 node_stack.print();
                 last_print = Instant::now();
