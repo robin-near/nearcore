@@ -127,8 +127,9 @@ impl InMemoryTrieNodeBuilder {
             child.hash
         );
         self.children[self.next_child_index] = Some(child);
+        self.next_child_index += 1;
         while self.next_child_index < self.expected_children.len()
-            && self.expected_children[self.next_child_index].is_some()
+            && self.expected_children[self.next_child_index].is_none()
         {
             self.next_child_index += 1;
         }
