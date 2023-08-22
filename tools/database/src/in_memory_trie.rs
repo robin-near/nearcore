@@ -8,7 +8,7 @@ use near_primitives::block_header::BlockHeader;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::state::ValueRef;
 use near_primitives::types::ShardId;
-use near_store::{DBCol, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
+use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
 use nearcore::NearConfig;
 
 use crate::flat_nodes::FlatNodeNibbles;
@@ -28,34 +28,56 @@ enum InMemoryTrieNodeKindLite {
 }
 
 struct InMemoryTrieNodeBuilder {
-    hash: CryptoHash,
-    size: u64,
+    path: FlatNodeNibbles,
+    hash_and_size: Option<(CryptoHash, u64)>,
     leaf: Option<ValueRef>,
     extension: Option<Box<[u8]>>,
     children: [Option<Box<InMemoryTrieNodeLite>>; 16],
     expected_children: Vec<Option<CryptoHash>>,
     next_child_index: usize,
+    placeholder_length: Option<usize>,
+    pending_children: Vec<Box<InMemoryTrieNodeLite>>,
 }
 
 impl InMemoryTrieNodeBuilder {
-    pub fn from_raw(node: RawTrieNodeWithSize) -> InMemoryTrieNodeBuilder {
-        let mut builder = InMemoryTrieNodeBuilder {
-            hash: hash(&node.try_to_vec().unwrap()),
-            size: node.memory_usage,
+    pub fn placeholder(
+        path: FlatNodeNibbles,
+        placeholder_length: usize,
+    ) -> InMemoryTrieNodeBuilder {
+        InMemoryTrieNodeBuilder {
+            path,
+            hash_and_size: None,
             leaf: None,
             extension: None,
             children: Default::default(),
             expected_children: Vec::new(),
             next_child_index: 0,
-        };
+            placeholder_length: Some(placeholder_length),
+            pending_children: Vec::new(),
+        }
+    }
+
+    pub fn from_raw_node(
+        path: FlatNodeNibbles,
+        node: RawTrieNodeWithSize,
+    ) -> InMemoryTrieNodeBuilder {
+        let mut builder = InMemoryTrieNodeBuilder::placeholder(path, 0);
+        builder.set_raw_node(node);
+        builder
+    }
+
+    pub fn set_raw_node(&mut self, node: RawTrieNodeWithSize) {
+        assert!(self.placeholder_length.is_some());
+        self.placeholder_length = None;
+        self.hash_and_size = Some((hash(&node.try_to_vec().unwrap()), node.memory_usage));
         match node.node {
             RawTrieNode::Leaf(extension, leaf) => {
-                builder.extension = Some(extension.into_boxed_slice());
-                builder.leaf = Some(leaf);
+                self.extension = Some(extension.into_boxed_slice());
+                self.leaf = Some(leaf);
             }
             RawTrieNode::Extension(extension, node) => {
-                builder.extension = Some(extension.into_boxed_slice());
-                builder.expected_children.push(Some(node));
+                self.extension = Some(extension.into_boxed_slice());
+                self.expected_children.push(Some(node));
             }
             RawTrieNode::BranchNoValue(children) => {
                 let mut first_child_index = None;
@@ -63,36 +85,42 @@ impl InMemoryTrieNodeBuilder {
                     if child.is_some() && first_child_index.is_none() {
                         first_child_index = Some(i);
                     }
-                    builder.expected_children.push(*child);
+                    self.expected_children.push(*child);
                 }
-                builder.next_child_index = first_child_index.unwrap_or(16);
+                self.next_child_index = first_child_index.unwrap_or(16);
             }
             RawTrieNode::BranchWithValue(leaf, children) => {
-                builder.leaf = Some(leaf);
+                self.leaf = Some(leaf);
                 let mut first_child_index = None;
                 for (i, child) in children.0.iter().enumerate() {
                     if child.is_some() && first_child_index.is_none() {
                         first_child_index = Some(i);
                     }
-                    builder.expected_children.push(*child);
+                    self.expected_children.push(*child);
                 }
-                builder.next_child_index = first_child_index.unwrap_or(16);
+                self.next_child_index = first_child_index.unwrap_or(16);
             }
         }
-        builder
+        let children = std::mem::take(&mut self.pending_children);
+        for child in children {
+            self.add_child(child);
+        }
     }
 
     pub fn build(mut self) -> Box<InMemoryTrieNodeLite> {
+        assert!(self.placeholder_length.is_none());
         Box::new(InMemoryTrieNodeLite {
-            hash: self.hash,
-            size: self.size,
+            hash: self.hash_and_size.unwrap().0,
+            size: self.hash_and_size.unwrap().1,
             kind: match (self.leaf, self.extension) {
                 (Some(leaf), Some(extension)) => InMemoryTrieNodeKindLite::Leaf(extension, leaf),
                 (None, Some(extension)) => {
                     assert_eq!(
-                        self.next_child_index, 1,
+                        self.next_child_index,
+                        1,
                         "{:?}: Expected 1 child, found {}",
-                        self.hash, self.next_child_index
+                        self.hash_and_size.unwrap().0,
+                        self.next_child_index
                     );
                     InMemoryTrieNodeKindLite::Extension(
                         extension,
@@ -101,9 +129,11 @@ impl InMemoryTrieNodeBuilder {
                 }
                 (None, None) => {
                     assert_eq!(
-                        self.next_child_index, 16,
+                        self.next_child_index,
+                        16,
                         "{:?}: Expected 16 children, found {}",
-                        self.hash, self.next_child_index
+                        self.hash_and_size.unwrap().0,
+                        self.next_child_index
                     );
                     InMemoryTrieNodeKindLite::Branch(self.children)
                 }
@@ -140,6 +170,159 @@ impl InMemoryTrieNodeBuilder {
     pub fn is_complete(&self) -> bool {
         self.next_child_index == self.expected_children.len()
     }
+
+    pub fn child_path_length(&self) -> usize {
+        if let Some(len) = self.placeholder_length {
+            self.path.len() + len
+        } else {
+            if let Some(ext) = &self.extension {
+                self.path.len() + NibbleSlice::from_encoded(ext.as_ref()).0.len()
+            } else {
+                self.path.len() + 1
+            }
+        }
+    }
+
+    pub fn split_placeholder(&mut self, child_path: FlatNodeNibbles) -> InMemoryTrieNodeBuilder {
+        assert!(self.placeholder_length.is_some());
+        assert!(self.child_path_length() > child_path.len());
+        let new_placeholder_len = self.child_path_length() - child_path.len();
+        let mut new_builder = InMemoryTrieNodeBuilder::placeholder(child_path, new_placeholder_len);
+        new_builder.pending_children = std::mem::take(&mut self.pending_children);
+        new_builder
+    }
+}
+
+fn calculate_first_child_path(
+    parent: &FlatNodeNibbles,
+    raw_node: &RawTrieNodeWithSize,
+) -> FlatNodeNibbles {
+    let mut result = parent.clone();
+    match &raw_node.node {
+        RawTrieNode::Leaf(extension, _) | RawTrieNode::Extension(extension, _) => {
+            result.append_encoded_slice(&extension)
+        }
+        RawTrieNode::BranchNoValue(children) | RawTrieNode::BranchWithValue(_, children) => {
+            let index = children
+                .0
+                .iter()
+                .enumerate()
+                .find(|(_, child)| child.is_some())
+                .map(|(i, _)| i)
+                .expect("Branch has no children");
+            result.push(index as u8);
+        }
+    }
+    result
+}
+
+struct BuilderStack {
+    stack: Vec<InMemoryTrieNodeBuilder>,
+    root: Option<Box<InMemoryTrieNodeLite>>,
+}
+
+impl BuilderStack {
+    pub fn new() -> BuilderStack {
+        BuilderStack { stack: Vec::new(), root: None }
+    }
+
+    pub fn print(&self) {
+        for (i, builder) in self.stack.iter().enumerate() {
+            println!("{}: {:?} {:?}", i, builder.path, builder.placeholder_length);
+        }
+    }
+
+    pub fn add_node(&mut self, path: FlatNodeNibbles, raw_node: RawTrieNodeWithSize) {
+        while !self.stack.is_empty() {
+            let top = self.stack.last().unwrap();
+            if top.path.is_prefix_of(&path) {
+                break;
+            } else if !path.is_prefix_of(&top.path) {
+                self.pop();
+            } else {
+                break;
+            }
+        }
+
+        // Let's separate out the parts of the stack that are longer than the path
+        // later we'll put them back.
+        let mut top_part = Vec::new();
+        while !self.stack.is_empty() {
+            let top = self.stack.last().unwrap();
+            if path.is_prefix_of(&top.path) && &path != &top.path {
+                top_part.push(self.stack.pop().unwrap());
+            } else {
+                break;
+            }
+        }
+
+        // Now look at the top of the stack. There are three cases:
+        //  1. The top of the stack is exactly the desired path, just return that.
+        //  2. The top of the stack is not the desired path, but the desired path
+        //     is exactly what should be placed on top of the stack. In this case,
+        //     we add a new node to the stack and return that.
+        //  3. The top of the stack is not the desired path, and the desired path
+        //     is shorter than what should be placed on the stack. In this case,
+        //     we need to split the top of the stack into two nodes.
+        let top = self.stack.last_mut().unwrap();
+        if &path == &top.path {
+            assert!(
+                top.placeholder_length.is_some(),
+                "Top of the stack should be a placeholder when inserting a node at that exact path"
+            );
+            let first_child_path = calculate_first_child_path(&path, &raw_node);
+            assert!(
+                first_child_path.len() <= top.placeholder_length.unwrap(),
+                "Raw node has path length {} greater than placeholder length {}",
+                first_child_path.len(),
+                top.placeholder_length.unwrap()
+            );
+            let longer = if first_child_path.len() < top.placeholder_length.unwrap() {
+                Some(top.split_placeholder(first_child_path))
+            } else {
+                None
+            };
+            top.set_raw_node(raw_node);
+            if let Some(longer) = longer {
+                self.stack.push(longer);
+            }
+        } else {
+            let child_path_length = top.child_path_length();
+            if child_path_length == path.len() {
+                self.stack.push(InMemoryTrieNodeBuilder::from_raw_node(path, raw_node));
+                assert!(
+                    top_part.is_empty(),
+                    "Top part should be empty when inserting a new node at the right path"
+                );
+            } else {
+                assert!(top.placeholder_length.is_some(), "Top of the stack should be a placeholder when inserting a node into the middle of the path");
+                let mut longer = top.split_placeholder(path);
+                longer.set_raw_node(raw_node);
+                self.stack.push(longer);
+            }
+        };
+        for top in top_part.into_iter().rev() {
+            self.stack.push(top);
+        }
+    }
+
+    fn pop(&mut self) {
+        let top = self.stack.pop().unwrap();
+        let built = top.build();
+        if self.stack.is_empty() {
+            assert!(self.root.is_none(), "Root already set");
+            self.root = Some(built);
+        } else {
+            self.stack.last_mut().unwrap().add_child(built);
+        }
+    }
+
+    pub fn finalize(mut self) -> Box<InMemoryTrieNodeLite> {
+        while !self.stack.is_empty() {
+            self.pop();
+        }
+        self.root.unwrap()
+    }
 }
 
 struct InMemoryTrieBuilderFromFlatNodes {}
@@ -155,52 +338,26 @@ impl InMemoryTrieBuilderFromFlatNodes {
         shard_uid: ShardUId,
         state_root: CryptoHash,
     ) -> anyhow::Result<Box<InMemoryTrieNodeLite>> {
-        let mut node_stack = Vec::<InMemoryTrieNodeBuilder>::new();
-        let mut root: Option<Box<InMemoryTrieNodeLite>> = None;
-        let mut flatten = |node_stack: &mut Vec<InMemoryTrieNodeBuilder>,
-                           root: &mut Option<Box<InMemoryTrieNodeLite>>| {
-            while !node_stack.is_empty() && node_stack.last().unwrap().is_complete() {
-                let child = node_stack.pop().unwrap().build();
-                if node_stack.is_empty() {
-                    assert!(root.is_none(), "Root already set");
-                    *root = Some(child);
-                    break;
-                } else {
-                    node_stack.last_mut().unwrap().add_child(child);
-                }
-            }
-        };
+        let mut node_stack = BuilderStack::new();
         let mut last_print = Instant::now();
         let mut nodes_iterated = 0;
         for item in store.iter_prefix(DBCol::FlatNodes, &shard_uid.try_to_vec().unwrap()) {
             let item = item?;
-            // let key = FlatNodeNibbles::from_bytes(item.0.as_ref()[8..]);
+            let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
             let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
-            let builder = InMemoryTrieNodeBuilder::from_raw(node);
-            flatten(&mut node_stack, &mut root);
-            if node_stack.is_empty() && builder.hash != state_root {
-                anyhow::bail!(
-                    "Root hash mismatch: expected {:?}, found {:?}",
-                    state_root,
-                    builder.hash
-                );
-            }
-            node_stack.push(builder);
+            node_stack.add_node(key, node);
 
             nodes_iterated += 1;
-            if Instant::now() - last_print > Duration::from_secs(5) {
-                println!(
-                    "Loaded {} nodes, current stack depth {}",
-                    nodes_iterated,
-                    node_stack.len(),
-                );
+            if true {
+                println!("Loaded {} nodes, current stack:", nodes_iterated,);
+                node_stack.print();
                 last_print = Instant::now();
             }
         }
-        flatten(&mut node_stack, &mut root);
-        assert!(node_stack.is_empty(), "Node stack not empty");
+        let root = node_stack.finalize();
         println!("Loaded {} nodes", nodes_iterated);
-        Ok(root.unwrap())
+        assert_eq!(root.hash, state_root);
+        Ok(root)
     }
 }
 

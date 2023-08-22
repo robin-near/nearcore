@@ -118,6 +118,39 @@ impl FlatNodeNibbles {
         }
         ret
     }
+
+    pub fn from_encoded_key(encoded_key: &[u8]) -> Self {
+        if *encoded_key.last().unwrap() == 0 {
+            Self {
+                data: encoded_key[0..encoded_key.len() - 1].to_vec(),
+                len: (encoded_key.len() - 1) * 2,
+            }
+        } else {
+            Self {
+                data: {
+                    let mut data = encoded_key.to_vec();
+                    *data.last_mut().unwrap() -= Self::ODD_SIZE_FLAG;
+                    data
+                },
+                len: encoded_key.len() * 2 - 1,
+            }
+        }
+    }
+
+    pub fn is_prefix_of(&self, other: &Self) -> bool {
+        self.len <= other.len && (0..self.len).all(|i| self.nibble_at(i) == other.nibble_at(i))
+    }
+}
+
+impl Debug for FlatNodeNibbles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        const HEX: &[u8] = b"0123456789abcdef";
+        for i in 0..self.len {
+            s += &char::from(HEX[self.nibble_at(i) as usize]).to_string();
+        }
+        write!(f, "{}", s)
+    }
 }
 
 #[derive(Default)]
@@ -223,16 +256,6 @@ impl Drop for Prefetcher {
         for handle in std::mem::take(&mut self.handles) {
             handle.join().unwrap();
         }
-    }
-}
-
-impl Debug for FlatNodeNibbles {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut list = f.debug_list();
-        for i in 0..self.len {
-            list.entry(&self.nibble_at(i));
-        }
-        list.finish()
     }
 }
 
