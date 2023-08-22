@@ -256,6 +256,14 @@ impl BuilderStack {
             }
         }
 
+        if self.stack.is_empty() {
+            // this is the root node.
+            assert!(top_part.is_empty());
+            assert_eq!(path.len(), 0);
+            self.stack.push(InMemoryTrieNodeBuilder::from_raw_node(path, raw_node));
+            return;
+        }
+
         // Now look at the top of the stack. There are three cases:
         //  1. The top of the stack is exactly the desired path, just return that.
         //  2. The top of the stack is not the desired path, but the desired path
