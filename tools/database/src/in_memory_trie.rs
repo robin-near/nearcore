@@ -122,9 +122,11 @@ impl InMemoryTrieNodeBuilder {
         assert_eq!(
             self.expected_children[self.next_child_index],
             Some(child.hash),
-            "Expected child {:?}, found {:?}",
+            "Expected child {:?} at index {}, found {:?}. Expected children: {:?}",
             self.expected_children[self.next_child_index],
-            child.hash
+            self.next_child_index,
+            child.hash,
+            self.expected_children
         );
         self.children[self.next_child_index] = Some(child);
         self.next_child_index += 1;
