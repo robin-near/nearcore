@@ -1,4 +1,7 @@
+use std::borrow::Borrow;
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
+use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,17 +18,17 @@ use nearcore::NearConfig;
 use crate::flat_nodes::FlatNodeNibbles;
 use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
 
-struct InMemoryTrieNodeLite {
-    hash: CryptoHash,
-    size: u64,
-    kind: InMemoryTrieNodeKindLite,
+pub struct InMemoryTrieNodeLite {
+    pub hash: CryptoHash,
+    pub size: u64,
+    pub kind: InMemoryTrieNodeKindLite,
 }
 
-enum InMemoryTrieNodeKindLite {
-    Leaf(Box<[u8]>, ValueRef),
-    Extension(Box<[u8]>, Box<InMemoryTrieNodeLite>),
-    Branch([Option<Box<InMemoryTrieNodeLite>>; 16]),
-    BranchWithLeaf { children: [Option<Box<InMemoryTrieNodeLite>>; 16], value: ValueRef },
+pub enum InMemoryTrieNodeKindLite {
+    Leaf { extension: Box<[u8]>, value: ValueRef },
+    Extension { extension: Box<[u8]>, child: Arc<InMemoryTrieNodeLite> },
+    Branch([Option<Arc<InMemoryTrieNodeLite>>; 16]),
+    BranchWithLeaf { children: [Option<Arc<InMemoryTrieNodeLite>>; 16], value: ValueRef },
 }
 
 struct InMemoryTrieNodeBuilder {
@@ -33,11 +36,60 @@ struct InMemoryTrieNodeBuilder {
     hash_and_size: Option<(CryptoHash, u64)>,
     leaf: Option<ValueRef>,
     extension: Option<Box<[u8]>>,
-    children: [Option<Box<InMemoryTrieNodeLite>>; 16],
+    children: [Option<Arc<InMemoryTrieNodeLite>>; 16],
     expected_children: Vec<Option<CryptoHash>>,
     next_child_index: usize,
     placeholder_length: Option<usize>,
-    pending_children: Vec<Box<InMemoryTrieNodeLite>>,
+    pending_children: Vec<Arc<InMemoryTrieNodeLite>>,
+}
+
+#[derive(Clone)]
+struct InMemoryTrieNodeRef(Arc<InMemoryTrieNodeLite>);
+
+impl Hash for InMemoryTrieNodeRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash.hash(state);
+    }
+}
+
+impl Borrow<CryptoHash> for InMemoryTrieNodeRef {
+    fn borrow(&self) -> &CryptoHash {
+        &self.0.hash
+    }
+}
+
+impl PartialEq for InMemoryTrieNodeRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.hash == other.0.hash
+    }
+}
+
+impl Eq for InMemoryTrieNodeRef {}
+
+pub struct InMemoryTrieNodeSet {
+    nodes: HashSet<InMemoryTrieNodeRef>,
+}
+
+impl InMemoryTrieNodeSet {
+    pub fn new() -> Self {
+        Self { nodes: HashSet::new() }
+    }
+
+    pub fn insert_with_dedup(
+        &mut self,
+        node: Arc<InMemoryTrieNodeLite>,
+    ) -> Arc<InMemoryTrieNodeLite> {
+        if let Some(existing) = self.nodes.get(&node.hash) {
+            existing.clone().0
+        } else {
+            self.nodes.insert(InMemoryTrieNodeRef(node.clone()));
+            node
+        }
+    }
+
+    pub fn insert_if_not_exists(&mut self, node: Arc<InMemoryTrieNodeLite>) -> bool {
+        self.nodes.insert(InMemoryTrieNodeRef(node))
+    }
 }
 
 impl InMemoryTrieNodeBuilder {
@@ -108,13 +160,15 @@ impl InMemoryTrieNodeBuilder {
         }
     }
 
-    pub fn build(mut self) -> Box<InMemoryTrieNodeLite> {
+    pub fn build(mut self) -> Arc<InMemoryTrieNodeLite> {
         assert!(self.placeholder_length.is_none());
-        Box::new(InMemoryTrieNodeLite {
+        Arc::new(InMemoryTrieNodeLite {
             hash: self.hash_and_size.unwrap().0,
             size: self.hash_and_size.unwrap().1,
             kind: match (self.leaf, self.extension) {
-                (Some(leaf), Some(extension)) => InMemoryTrieNodeKindLite::Leaf(extension, leaf),
+                (Some(value), Some(extension)) => {
+                    InMemoryTrieNodeKindLite::Leaf { extension, value }
+                }
                 (None, Some(extension)) => {
                     assert_eq!(
                         self.next_child_index,
@@ -123,10 +177,10 @@ impl InMemoryTrieNodeBuilder {
                         self.hash_and_size.unwrap().0,
                         self.next_child_index
                     );
-                    InMemoryTrieNodeKindLite::Extension(
+                    InMemoryTrieNodeKindLite::Extension {
                         extension,
-                        std::mem::take(&mut self.children[0]).unwrap(),
-                    )
+                        child: std::mem::take(&mut self.children[0]).unwrap(),
+                    }
                 }
                 (None, None) => {
                     assert_eq!(
@@ -138,7 +192,7 @@ impl InMemoryTrieNodeBuilder {
                     );
                     InMemoryTrieNodeKindLite::Branch(self.children)
                 }
-                (Some(leaf), None) => {
+                (Some(value), None) => {
                     assert_eq!(
                         self.next_child_index,
                         16,
@@ -146,16 +200,13 @@ impl InMemoryTrieNodeBuilder {
                         self.hash_and_size.unwrap().0,
                         self.next_child_index
                     );
-                    InMemoryTrieNodeKindLite::BranchWithLeaf {
-                        children: self.children,
-                        value: leaf,
-                    }
+                    InMemoryTrieNodeKindLite::BranchWithLeaf { children: self.children, value }
                 }
             },
         })
     }
 
-    pub fn add_child(&mut self, child: Box<InMemoryTrieNodeLite>) {
+    pub fn add_child(&mut self, child: Arc<InMemoryTrieNodeLite>) {
         if self.placeholder_length.is_some() {
             self.pending_children.push(child);
             return;
@@ -222,7 +273,7 @@ impl Debug for InMemoryTrieNodeBuilder {
                 nibble.append_encoded_slice(&extension);
                 write!(f, " extension({:?})", nibble)?;
             }
-            if let Some(leaf) = &self.leaf {
+            if self.leaf.is_some() {
                 write!(f, " leaf")?;
             }
             if self.expected_children.len() > 1 {
@@ -258,12 +309,13 @@ fn calculate_first_child_path(
 
 struct BuilderStack {
     stack: Vec<InMemoryTrieNodeBuilder>,
-    root: Option<Box<InMemoryTrieNodeLite>>,
+    root: Option<Arc<InMemoryTrieNodeLite>>,
+    set: InMemoryTrieNodeSet,
 }
 
 impl BuilderStack {
     pub fn new() -> BuilderStack {
-        BuilderStack { stack: Vec::new(), root: None }
+        BuilderStack { stack: Vec::new(), root: None, set: InMemoryTrieNodeSet::new() }
     }
 
     pub fn print(&self) {
@@ -364,7 +416,7 @@ impl BuilderStack {
 
     fn pop(&mut self) {
         let top = self.stack.pop().unwrap();
-        let built = top.build();
+        let built = self.set.insert_with_dedup(top.build());
         if self.stack.is_empty() {
             assert!(self.root.is_none(), "Root already set");
             self.root = Some(built);
@@ -373,49 +425,49 @@ impl BuilderStack {
         }
     }
 
-    pub fn finalize(mut self) -> Box<InMemoryTrieNodeLite> {
+    pub fn finalize(mut self) -> LoadedInMemoryTrie {
         while !self.stack.is_empty() {
             self.pop();
         }
-        self.root.unwrap()
+        LoadedInMemoryTrie { root: self.root.unwrap(), set: self.set }
     }
 }
 
-struct InMemoryTrieBuilderFromFlatNodes {}
+pub struct LoadedInMemoryTrie {
+    pub root: Arc<InMemoryTrieNodeLite>,
+    pub set: InMemoryTrieNodeSet,
+}
 
-impl InMemoryTrieBuilderFromFlatNodes {
-    pub fn new() -> InMemoryTrieBuilderFromFlatNodes {
-        InMemoryTrieBuilderFromFlatNodes {}
-    }
+pub fn load_trie_in_memory(
+    store: &Store,
+    shard_uid: ShardUId,
+    state_root: CryptoHash,
+) -> anyhow::Result<LoadedInMemoryTrie> {
+    let mut node_stack = BuilderStack::new();
+    let mut last_print = Instant::now();
+    let mut nodes_iterated = 0;
+    for item in store.iter_prefix(DBCol::FlatNodes, &shard_uid.try_to_vec().unwrap()) {
+        let item = item?;
+        let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
+        let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
+        // println!("Adding node: {:?} -> {:?}", key, node);
+        node_stack.add_node(key, node);
 
-    pub fn load_trie(
-        &self,
-        store: &Store,
-        shard_uid: ShardUId,
-        state_root: CryptoHash,
-    ) -> anyhow::Result<Box<InMemoryTrieNodeLite>> {
-        let mut node_stack = BuilderStack::new();
-        let mut last_print = Instant::now();
-        let mut nodes_iterated = 0;
-        for item in store.iter_prefix(DBCol::FlatNodes, &shard_uid.try_to_vec().unwrap()) {
-            let item = item?;
-            let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
-            let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
-            // println!("Adding node: {:?}", key);
-            node_stack.add_node(key, node);
-
-            nodes_iterated += 1;
-            if last_print.elapsed() > Duration::from_secs(10) {
-                println!("Loaded {} nodes, current stack:", nodes_iterated,);
-                node_stack.print();
-                last_print = Instant::now();
-            }
+        nodes_iterated += 1;
+        if last_print.elapsed() > Duration::from_secs(10) {
+            println!(
+                "Loaded {} nodes ({} after dedup), current stack:",
+                nodes_iterated,
+                node_stack.set.nodes.len()
+            );
+            node_stack.print();
+            last_print = Instant::now();
         }
-        let root = node_stack.finalize();
-        println!("Loaded {} nodes", nodes_iterated);
-        assert_eq!(root.hash, state_root);
-        Ok(root)
     }
+    let trie = node_stack.finalize();
+    println!("Loaded {} nodes ({} after dedup)", nodes_iterated, trie.set.nodes.len());
+    assert_eq!(trie.root.hash, state_root);
+    Ok(trie)
 }
 
 #[derive(clap::Parser)]
@@ -440,11 +492,100 @@ impl InMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let mut builder = InMemoryTrieBuilderFromFlatNodes::new();
-        let trie = builder.load_trie(&store, shard_uid, state_root)?;
+        let trie = load_trie_in_memory(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use near_store::test_utils::{create_tries, test_populate_trie};
+    use near_store::{ShardUId, Trie, TrieUpdate};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    use crate::flat_nodes::creator::create_flat_nodes;
+    use crate::in_memory_trie_loading::load_trie_in_memory;
+    use crate::in_memory_trie_lookup::InMemoryTrie;
+
+    fn check(keys: Vec<Vec<u8>>) {
+        let description =
+            if keys.len() <= 20 { format!("{keys:?}") } else { format!("{} keys", keys.len()) };
+        eprintln!("TEST CASE {description}");
+        let shard_tries = create_tries();
+        let shard_uid = ShardUId::single_shard();
+        let state_root = test_populate_trie(
+            &shard_tries,
+            &Trie::EMPTY_ROOT,
+            shard_uid,
+            keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect(),
+        );
+
+        create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
+        eprintln!("flat nodes created");
+        let loaded_in_memory_trie =
+            load_trie_in_memory(&shard_tries.get_store(), shard_uid, state_root).unwrap();
+        eprintln!("In memory trie loaded");
+
+        let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
+        trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
+        let trie = trie_update.trie();
+        let in_memory_trie = InMemoryTrie::new(
+            shard_uid,
+            shard_tries.get_store(),
+            loaded_in_memory_trie.root.clone(),
+        );
+        for key in keys.iter() {
+            let actual_value_ref = in_memory_trie.get_ref(key);
+            let expected_value_ref = trie.get_ref(key, near_store::KeyLookupMode::Trie).unwrap();
+            assert_eq!(actual_value_ref, expected_value_ref);
+            assert_eq!(in_memory_trie.get_nodes_count(), trie.get_trie_nodes_count());
+        }
+    }
+
+    fn check_random(max_key_len: usize, max_keys_count: usize, test_count: usize) {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..test_count {
+            let key_cnt = rng.gen_range(1..=max_keys_count);
+            let mut keys = Vec::new();
+            for _ in 0..key_cnt {
+                let mut key = Vec::new();
+                let key_len = rng.gen_range(0..=max_key_len);
+                for _ in 0..key_len {
+                    let byte: u8 = rng.gen();
+                    key.push(byte);
+                }
+                keys.push(key);
+            }
+            check(keys);
+        }
+    }
+
+    #[test]
+    fn flat_nodes_basic() {
+        check(vec![vec![0, 1], vec![1, 0]]);
+    }
+
+    #[test]
+    fn flat_nodes_rand_small() {
+        check_random(3, 20, 10);
+    }
+
+    #[test]
+    fn flat_nodes_rand_many_keys() {
+        check_random(5, 1000, 10);
+    }
+
+    #[test]
+    fn flat_nodes_rand_long_keys() {
+        check_random(20, 100, 10);
+    }
+
+    #[test]
+    fn flat_nodes_rand_large_data() {
+        check_random(32, 100000, 1);
     }
 }

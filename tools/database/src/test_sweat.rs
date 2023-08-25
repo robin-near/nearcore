@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::flat_nodes::{FlatNodesTrie, LookupMode};
+use crate::in_memory_trie_loading::load_trie_in_memory;
+use crate::in_memory_trie_lookup::InMemoryTrie;
 use crate::utils::{flat_head_state_root, flush_disk_cache, open_rocksdb, sweat_shard};
 
 #[derive(Parser)]
@@ -69,8 +71,16 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let flat_trie = flat_lookup_mode
-            .map(|mode| FlatNodesTrie::new(shard_uid, store.clone(), state_root, mode));
+        let (flat_trie, in_memory_trie) = match flat_lookup_mode {
+            Some(LookupMode::InMemory) => {
+                let loaded = load_trie_in_memory(&store, shard_uid, state_root)?;
+                (None, Some(InMemoryTrie::new(shard_uid, store.clone(), loaded.root.clone())))
+            }
+            Some(mode) => {
+                (Some(FlatNodesTrie::new(shard_uid, store.clone(), state_root, mode)), None)
+            }
+            None => (None, None),
+        };
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let costs_config = ExtCostsConfig::test();
@@ -103,6 +113,12 @@ impl TestSweatCommand {
                 all_nodes_sizes_flat.extend_from_slice(&flat_data.nodes_sizes);
                 assert_eq!(flat_data.value_ref, trie_value_ref);
                 assert_eq!(flat_data.nodes_count, trie_nodes_count);
+            }
+            if let Some(in_memory_trie) = in_memory_trie.as_ref() {
+                let start_in_memory = Instant::now();
+                let in_memory_data = in_memory_trie.get_ref(key);
+                total_elapsed_flat += start_in_memory.elapsed();
+                assert_eq!(in_memory_data, trie_value_ref);
             }
             // Update gas
             let contract_key =
@@ -151,6 +167,12 @@ impl TestSweatCommand {
                 let i = (p * all_nodes_sizes_flat.len() as f64) as usize;
                 eprintln!("node size p{p} = {:?}", all_nodes_sizes_flat[i]);
             }
+        }
+        if in_memory_trie.is_some() {
+            eprintln!(
+                "Elapsed in-memory: {total_elapsed_flat:?} ({:.2}x)",
+                total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
+            );
         }
 
         eprintln!("Finished SWEAT test");

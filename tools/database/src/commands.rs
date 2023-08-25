@@ -3,7 +3,7 @@ use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::column_stats::ColumnStatsCommand;
 use crate::compact::RunCompactionCommand;
 use crate::flat_nodes::CreateFlatNodesCommand;
-use crate::in_memory_trie::InMemoryTrieCmd;
+use crate::in_memory_trie_loading::InMemoryTrieCmd;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;

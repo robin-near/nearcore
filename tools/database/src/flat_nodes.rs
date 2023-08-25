@@ -268,7 +268,7 @@ impl Drop for Prefetcher {
     }
 }
 
-mod creator {
+pub mod creator {
     use borsh::BorshDeserialize;
     use crossbeam::channel;
     use near_primitives::hash::CryptoHash;
@@ -457,6 +457,7 @@ pub enum LookupMode {
     SmallState,
     FlatNodes,
     FlatNodesWithPrefetcher { prefetcher_threads: usize },
+    InMemory,
 }
 
 impl FlatNodesTrie {
@@ -521,6 +522,7 @@ impl FlatNodesTrie {
                 LookupMode::FlatNodesWithPrefetcher { prefetcher_threads: _ } => {
                     self.prefetcher.as_ref().unwrap().get_node(path)
                 }
+                LookupMode::InMemory => unreachable!(),
             };
             self.elapsed_db_reads.borrow_mut().push(read_start.elapsed());
             self.nodes_sizes.borrow_mut().push(node_bytes.len());
