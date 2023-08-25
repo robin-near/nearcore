@@ -49,6 +49,7 @@ impl TestSweatCommand {
             "flat_nodes_prefetch" => {
                 LookupMode::FlatNodesWithPrefetcher { prefetcher_threads: self.prefetch_threads }
             }
+            "in_memory" => LookupMode::InMemory,
             other => panic!("invalid flat_lookup_mode {other}"),
         });
         eprintln!(
