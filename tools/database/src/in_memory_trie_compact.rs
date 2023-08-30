@@ -435,6 +435,35 @@ impl TrieNodeRef {
             removing_from.nodes.remove(self);
         }
     }
+
+    pub fn increment_stats(&self, stats: &mut SizesStats) {
+        unsafe {
+            let kind = *self.data.offset(4);
+            match kind {
+                0 => {
+                    let header = &*(self.data as *const LeafHeader);
+                    stats.leaf_node_count += 1;
+                    stats.extension_total_bytes += header.extension_len as usize;
+                }
+                1 => {
+                    let header = &*(self.data as *const ExtensionHeader);
+                    stats.extension_node_count += 1;
+                    stats.extension_total_bytes += header.extension_len as usize;
+                }
+                2 => {
+                    let header = &*(self.data as *const BranchHeader);
+                    stats.branch_node_count += 1;
+                    stats.children_ptr_count += u16::count_ones(header.mask) as usize;
+                }
+                3 => {
+                    let header = &*(self.data as *const BranchWithValueHeader);
+                    stats.branch_nodes_with_value_count += 1;
+                    stats.children_ptr_count += u16::count_ones(header.mask) as usize;
+                }
+                _ => unreachable!("invalid trie node kind"),
+            }
+        }
+    }
 }
 
 struct InMemoryTrieNodeBuilder {
@@ -488,16 +517,16 @@ impl TrieNodeAllocSet {
         Self { nodes: HashSet::new() }
     }
 
-    pub fn insert_with_dedup(&mut self, node: TrieNodeAlloc) -> TrieNodeRef {
+    pub fn insert_with_dedup(&mut self, node: TrieNodeAlloc) -> (TrieNodeRef, bool) {
         if let Some(existing) = self.nodes.get(&node) {
             let result = existing.get_ref();
             result.add_ref();
-            result
+            (result, false)
         } else {
             let result = node.get_ref().clone();
             result.add_ref();
             self.nodes.insert(node);
-            result
+            (result, true)
         }
     }
 }
@@ -727,11 +756,27 @@ struct BuilderStack {
     stack: Vec<InMemoryTrieNodeBuilder>,
     root: Option<TrieNodeRef>,
     set: TrieNodeAllocSet,
+    sizes: SizesStats,
+}
+
+#[derive(Default, Debug)]
+pub struct SizesStats {
+    leaf_node_count: usize,
+    extension_node_count: usize,
+    branch_node_count: usize,
+    branch_nodes_with_value_count: usize,
+    children_ptr_count: usize,
+    extension_total_bytes: usize,
 }
 
 impl BuilderStack {
     pub fn new() -> BuilderStack {
-        BuilderStack { stack: Vec::new(), root: None, set: TrieNodeAllocSet::new() }
+        BuilderStack {
+            stack: Vec::new(),
+            root: None,
+            set: TrieNodeAllocSet::new(),
+            sizes: SizesStats::default(),
+        }
     }
 
     pub fn print(&self) {
@@ -832,7 +877,10 @@ impl BuilderStack {
 
     fn pop(&mut self) {
         let top = self.stack.pop().unwrap();
-        let built = self.set.insert_with_dedup(top.build());
+        let (built, is_new) = self.set.insert_with_dedup(top.build());
+        if is_new {
+            built.increment_stats(&mut self.sizes);
+        }
         if self.stack.is_empty() {
             assert!(self.root.is_none(), "Root already set");
             self.root = Some(built);
@@ -845,13 +893,14 @@ impl BuilderStack {
         while !self.stack.is_empty() {
             self.pop();
         }
-        LoadedInMemoryTrie { root: self.root.unwrap(), set: self.set }
+        LoadedInMemoryTrie { root: self.root.unwrap(), set: self.set, sizes: self.sizes }
     }
 }
 
 pub struct LoadedInMemoryTrie {
     pub root: TrieNodeRef,
     pub set: TrieNodeAllocSet,
+    pub sizes: SizesStats,
 }
 
 impl Drop for LoadedInMemoryTrie {
@@ -865,6 +914,7 @@ pub fn load_trie_in_memory(
     shard_uid: ShardUId,
     state_root: CryptoHash,
 ) -> anyhow::Result<LoadedInMemoryTrie> {
+    let start_time = Instant::now();
     let mut node_stack = BuilderStack::new();
     let mut last_print = Instant::now();
     let mut nodes_iterated = 0;
@@ -878,16 +928,23 @@ pub fn load_trie_in_memory(
         nodes_iterated += 1;
         if last_print.elapsed() > Duration::from_secs(10) {
             println!(
-                "Loaded {} nodes ({} after dedup), current stack:",
+                "Loaded {} nodes ({} after dedup), stats: {:?}, current stack:",
                 nodes_iterated,
-                node_stack.set.nodes.len()
+                node_stack.set.nodes.len(),
+                node_stack.sizes,
             );
             node_stack.print();
             last_print = Instant::now();
         }
     }
     let trie = node_stack.finalize();
-    println!("Loaded {} nodes ({} after dedup)", nodes_iterated, trie.set.nodes.len());
+    println!(
+        "Loaded {} nodes ({} after dedup), took {:?}; stats: {:?}",
+        nodes_iterated,
+        trie.set.nodes.len(),
+        start_time.elapsed(),
+        trie.sizes
+    );
     assert_eq!(trie.root.hash(), state_root);
     Ok(trie)
 }
