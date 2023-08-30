@@ -237,7 +237,7 @@ impl Drop for TrieNodeAlloc {
         let data = self.data.data;
         unsafe {
             let refcount = *(data as *const u32);
-            assert_eq!(refcount, 0);
+            assert_eq!(refcount, 0, "Dropping TrieNodeAlloc {:p} with non-zero refcount", data);
             let alloc_size = self.data.alloc_size();
             drop(Box::from_raw(
                 std::slice::from_raw_parts_mut(data as *mut u8, alloc_size) as *mut [u8]
@@ -436,6 +436,47 @@ impl TrieNodeRef {
         }
     }
 
+    pub fn deref_children(&self) {
+        unsafe {
+            let kind = *self.data.offset(4);
+            match kind {
+                0 => {}
+                1 => {
+                    let header = &*(self.data as *const ExtensionHeader);
+                    assert!(
+                        !header.child.deref(),
+                        "deref_children should only be called when children have multiple refs"
+                    );
+                }
+                2 => {
+                    let header = &*(self.data as *const BranchHeader);
+                    let ptr = self.data.offset(mem::size_of::<BranchHeader>() as isize);
+                    let mut j = 0;
+                    for i in 0..16 {
+                        if header.mask & (1 << i) != 0 {
+                            let child = &*(ptr.offset(8 * j) as *const TrieNodeRef);
+                            assert!(!child.deref(), "deref_children should only be called when children have multiple refs");
+                            j += 1;
+                        }
+                    }
+                }
+                3 => {
+                    let header = &*(self.data as *const BranchWithValueHeader);
+                    let ptr = self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
+                    let mut j = 0;
+                    for i in 0..16 {
+                        if header.mask & (1 << i) != 0 {
+                            let child = &*(ptr.offset(8 * j) as *const TrieNodeRef);
+                            assert!(!child.deref(), "deref_children should only be called when children have multiple refs");
+                            j += 1;
+                        }
+                    }
+                }
+                _ => unreachable!("invalid trie node kind"),
+            }
+        }
+    }
+
     pub fn increment_stats(&self, stats: &mut SizesStats) {
         unsafe {
             let kind = *self.data.offset(4);
@@ -560,6 +601,7 @@ impl TrieNodeAllocSet {
         if let Some(existing) = self.nodes.get(&node) {
             let result = existing.get_ref();
             result.add_ref();
+            node.get_ref().deref_children();
             (result, false)
         } else {
             let result = node.get_ref().clone();
@@ -1028,7 +1070,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use crate::flat_nodes::creator::create_flat_nodes;
-    use crate::in_memory_trie_compact::{load_trie_in_memory, ParsedTrieNodePtr};
+    use crate::in_memory_trie_compact::{load_trie_in_memory_compact, ParsedTrieNodePtr};
     use crate::in_memory_trie_lookup::InMemoryTrieCompact;
 
     use super::{ParsedTrieNode, TrieNodeAlloc};
@@ -1044,6 +1086,7 @@ mod tests {
             &Trie::EMPTY_ROOT,
             shard_uid,
             keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect(),
+            // keys.iter().map(|key| (key.to_vec(), Some(b"abcde".to_vec()))).collect(),
         );
 
         create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
@@ -1108,7 +1151,7 @@ mod tests {
 
     #[test]
     fn flat_nodes_rand_large_data() {
-        check_random(32, 100000, 1);
+        check_random(32, 100000, 10);
     }
 
     #[test]

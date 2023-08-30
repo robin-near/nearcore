@@ -317,16 +317,16 @@ pub mod creator {
                 path.encode_key(),
                 Some(&node),
             );
-            self.store_update
-                .set_ser(
-                    near_store::DBCol::SmallState,
-                    &TrieCachingStorage::get_key_from_shard_uid_and_hash(
-                        self.shard_uid,
-                        &CryptoHash::hash_borsh(&node),
-                    ),
-                    &node,
-                )
-                .unwrap();
+            // self.store_update
+            //     .set_ser(
+            //         near_store::DBCol::SmallState,
+            //         &TrieCachingStorage::get_key_from_shard_uid_and_hash(
+            //             self.shard_uid,
+            //             &CryptoHash::hash_borsh(&node),
+            //         ),
+            //         &node,
+            //     )
+            //     .unwrap();
             self.pending_update += 1;
             if self.pending_update == UPDATES_COMMIT_SIZE {
                 self.commit_update();
