@@ -486,13 +486,52 @@ impl Hash for TrieNodeAlloc {
 
 impl Hash for TrieNodeRef {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.hash().hash(state);
+        unsafe {
+            if *self.data.offset(4) == 0 {
+                let header = &*(self.data as *const LeafHeader);
+                header.value_hash.hash(state);
+                std::slice::from_raw_parts(
+                    self.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    header.extension_len as usize,
+                )
+                .hash(state);
+            } else {
+                self.hash().hash(state);
+            }
+        }
     }
 }
 
 impl PartialEq for TrieNodeRef {
     fn eq(&self, other: &Self) -> bool {
-        self.hash() == other.hash()
+        unsafe {
+            let self_kind = *self.data.offset(4);
+            let other_kind = *other.data.offset(4);
+            if self_kind != other_kind {
+                return false;
+            }
+            if self_kind == 0 {
+                let self_header = &*(self.data as *const LeafHeader);
+                let other_header = &*(other.data as *const LeafHeader);
+                if self_header.extension_len != other_header.extension_len {
+                    return false;
+                }
+                if self_header.value_hash != other_header.value_hash {
+                    return false;
+                }
+                let self_extension = std::slice::from_raw_parts(
+                    self.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    self_header.extension_len as usize,
+                );
+                let other_extension = std::slice::from_raw_parts(
+                    other.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    other_header.extension_len as usize,
+                );
+                self_extension == other_extension
+            } else {
+                self.hash() == other.hash()
+            }
+        }
     }
 }
 
@@ -909,7 +948,7 @@ impl Drop for LoadedInMemoryTrie {
     }
 }
 
-pub fn load_trie_in_memory(
+pub fn load_trie_in_memory_compact(
     store: &Store,
     shard_uid: ShardUId,
     state_root: CryptoHash,
@@ -971,7 +1010,7 @@ impl CompactInMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let _trie = load_trie_in_memory(&store, shard_uid, state_root)?;
+        let _trie = load_trie_in_memory_compact(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
@@ -1010,7 +1049,7 @@ mod tests {
         create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
         eprintln!("flat nodes created");
         let loaded_in_memory_trie =
-            load_trie_in_memory(&shard_tries.get_store(), shard_uid, state_root).unwrap();
+            load_trie_in_memory_compact(&shard_tries.get_store(), shard_uid, state_root).unwrap();
         eprintln!("In memory trie loaded");
 
         let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
@@ -1146,3 +1185,17 @@ mod tests {
         drop(encoded);
     }
 }
+
+/*
+shard 0:
+Loaded 59844482 nodes (58323289 after dedup), took 256.838155903s; stats: SizesStats { leaf_node_count: 33756917, extension_node_count: 5601563, branch_node_count: 18964284, branch_nodes_with_value_count: 525, children_ptr_count: 53825576, extension_total_bytes: 2336231902 }
+
+shard 1:
+Loaded 59555105 nodes (47203012 after dedup), took 269.64264202s; stats: SizesStats { leaf_node_count: 29864388, extension_node_count: 4441354, branch_node_count: 12897265, branch_nodes_with_value_count: 5, children_ptr_count: 49567403, extension_total_bytes: 661292598 }
+
+Shard 2:
+Loaded 45629386 nodes (40310944 after dedup), took 221.615275672s; stats: SizesStats { leaf_node_count: 23220366, extension_node_count: 4438550, branch_node_count: 12630852, branch_nodes_with_value_count: 21176, children_ptr_count: 38695536, extension_total_bytes: 1249793288 }
+
+Shard 3:
+Loaded 119170182 nodes (104589211 after dedup), took 528.250730273s; stats: SizesStats { leaf_node_count: 69794452, extension_node_count: 8612669, branch_node_count: 26168152, branch_nodes_with_value_count: 13938, children_ptr_count: 102318714, extension_total_bytes: 1910740734 }
+*/

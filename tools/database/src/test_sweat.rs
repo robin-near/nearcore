@@ -17,8 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::flat_nodes::{FlatNodesTrie, LookupMode};
+use crate::in_memory_trie_compact::{self, load_trie_in_memory_compact};
 use crate::in_memory_trie_loading::load_trie_in_memory;
-use crate::in_memory_trie_lookup::InMemoryTrie;
+use crate::in_memory_trie_lookup::{InMemoryTrie, InMemoryTrieCompact};
 use crate::utils::{flat_head_state_root, flush_disk_cache, open_rocksdb, sweat_shard};
 
 #[derive(Parser)]
@@ -72,15 +73,29 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let (flat_trie, in_memory_trie) = match flat_lookup_mode {
+        let mut in_memory_trie_compact_loaded = None;
+        let (flat_trie, in_memory_trie, in_memory_trie_compact) = match flat_lookup_mode {
             Some(LookupMode::InMemory) => {
                 let loaded = load_trie_in_memory(&store, shard_uid, state_root)?;
-                (None, Some(InMemoryTrie::new(shard_uid, store.clone(), loaded.root.clone())))
+                (None, Some(InMemoryTrie::new(shard_uid, store.clone(), loaded.root.clone())), None)
+            }
+            Some(LookupMode::InMemoryCompact) => {
+                in_memory_trie_compact_loaded =
+                    Some(load_trie_in_memory_compact(&store, shard_uid, state_root)?);
+                (
+                    None,
+                    None,
+                    Some(InMemoryTrieCompact::new(
+                        shard_uid,
+                        store.clone(),
+                        in_memory_trie_compact_loaded.as_ref().unwrap().root,
+                    )),
+                )
             }
             Some(mode) => {
-                (Some(FlatNodesTrie::new(shard_uid, store.clone(), state_root, mode)), None)
+                (Some(FlatNodesTrie::new(shard_uid, store.clone(), state_root, mode)), None, None)
             }
-            None => (None, None),
+            None => (None, None, None),
         };
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
@@ -118,6 +133,12 @@ impl TestSweatCommand {
             if let Some(in_memory_trie) = in_memory_trie.as_ref() {
                 let start_in_memory = Instant::now();
                 let in_memory_data = in_memory_trie.get_ref(key);
+                total_elapsed_flat += start_in_memory.elapsed();
+                assert_eq!(in_memory_data, trie_value_ref);
+            }
+            if let Some(in_memory_trie_compact) = in_memory_trie_compact.as_ref() {
+                let start_in_memory = Instant::now();
+                let in_memory_data = in_memory_trie_compact.get_ref(key);
                 total_elapsed_flat += start_in_memory.elapsed();
                 assert_eq!(in_memory_data, trie_value_ref);
             }
@@ -172,6 +193,12 @@ impl TestSweatCommand {
         if in_memory_trie.is_some() {
             eprintln!(
                 "Elapsed in-memory: {total_elapsed_flat:?} ({:.2}x)",
+                total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
+            );
+        }
+        if in_memory_trie_compact.is_some() {
+            eprintln!(
+                "Elapsed in-memory compact: {total_elapsed_flat:?} ({:.2}x)",
                 total_elapsed_trie.as_secs_f64() / total_elapsed_flat.as_secs_f64()
             );
         }

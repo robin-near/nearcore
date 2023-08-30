@@ -458,6 +458,7 @@ pub enum LookupMode {
     FlatNodes,
     FlatNodesWithPrefetcher { prefetcher_threads: usize },
     InMemory,
+    InMemoryCompact,
 }
 
 impl FlatNodesTrie {
@@ -523,6 +524,7 @@ impl FlatNodesTrie {
                     self.prefetcher.as_ref().unwrap().get_node(path)
                 }
                 LookupMode::InMemory => unreachable!(),
+                LookupMode::InMemoryCompact => unreachable!(),
             };
             self.elapsed_db_reads.borrow_mut().push(read_start.elapsed());
             self.nodes_sizes.borrow_mut().push(node_bytes.len());
