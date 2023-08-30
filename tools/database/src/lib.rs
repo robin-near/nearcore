@@ -4,6 +4,7 @@ mod column_stats;
 pub mod commands;
 mod compact;
 pub mod flat_nodes;
+mod in_memory_trie_compact;
 mod in_memory_trie_loading;
 mod in_memory_trie_lookup;
 mod make_snapshot;
