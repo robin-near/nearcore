@@ -15,6 +15,7 @@ use near_primitives::state::ValueRef;
 use near_primitives::types::ShardId;
 use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
 use nearcore::NearConfig;
+use rand::RngCore;
 
 use crate::flat_nodes::FlatNodeNibbles;
 use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
@@ -317,6 +318,10 @@ impl TrieNodeRef {
             },
             _ => unreachable!("invalid trie node kind"),
         }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        unsafe { *self.data.offset(4) == 0 }
     }
 
     pub fn hash(&self) -> CryptoHash {
@@ -743,15 +748,19 @@ impl InMemoryTrieNodeBuilder {
             self.expected_children.len(),
             self.next_child_index
         );
-        assert_eq!(
-            self.expected_children[self.next_child_index],
-            Some(child.hash()),
-            "Expected child {:?} at index {}, found {:?}. Expected children: {:?}",
-            self.expected_children[self.next_child_index],
-            self.next_child_index,
-            child.hash(),
-            self.expected_children
-        );
+        if !child.is_leaf() || rand::thread_rng().next_u32() % 100 == 0 {
+            // This is just a sanity check, but it's expensive for leaves due to computation of
+            // hashes, so we do that only occasionally.
+            assert_eq!(
+                self.expected_children[self.next_child_index],
+                Some(child.hash()),
+                "Expected child {:?} at index {}, found {:?}. Expected children: {:?}",
+                self.expected_children[self.next_child_index],
+                self.next_child_index,
+                child.hash(),
+                self.expected_children
+            );
+        }
         self.children[self.next_child_index] = Some(child.into());
         self.next_child_index += 1;
         while self.next_child_index < self.expected_children.len()
