@@ -324,6 +324,10 @@ impl TrieNodeRef {
         unsafe { *self.data.offset(4) == 0 }
     }
 
+    pub fn node_type(&self) -> u8 {
+        unsafe { *self.data.offset(4) }
+    }
+
     pub fn hash(&self) -> CryptoHash {
         let kind = unsafe { *self.data.offset(4) };
         if kind == 0 {
@@ -857,6 +861,7 @@ pub struct SizesStats {
     branch_nodes_with_value_count: usize,
     children_ptr_count: usize,
     extension_total_bytes: usize,
+    dedupd_nodes_by_type: [usize; 4],
 }
 
 impl BuilderStack {
@@ -970,6 +975,8 @@ impl BuilderStack {
         let (built, is_new) = self.set.insert_with_dedup(top.build());
         if is_new {
             built.increment_stats(&mut self.sizes);
+        } else {
+            self.sizes.dedupd_nodes_by_type[built.node_type() as usize] += 1;
         }
         if self.stack.is_empty() {
             assert!(self.root.is_none(), "Root already set");
