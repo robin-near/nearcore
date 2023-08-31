@@ -1248,13 +1248,17 @@ mod tests {
 /*
 shard 0:
 Loaded 59844482 nodes (58323289 after dedup), took 256.838155903s; stats: SizesStats { leaf_node_count: 33756917, extension_node_count: 5601563, branch_node_count: 18964284, branch_nodes_with_value_count: 525, children_ptr_count: 53825576, extension_total_bytes: 2336231902 }
+dedupd_nodes_by_type: [1340969, 66694, 113485, 45]
 
 shard 1:
 Loaded 59555105 nodes (47203012 after dedup), took 269.64264202s; stats: SizesStats { leaf_node_count: 29864388, extension_node_count: 4441354, branch_node_count: 12897265, branch_nodes_with_value_count: 5, children_ptr_count: 49567403, extension_total_bytes: 661292598 }
+dedupd_nodes_by_type: [10332897, 289876, 1729320, 0]
 
 Shard 2:
 Loaded 45629386 nodes (40310944 after dedup), took 221.615275672s; stats: SizesStats { leaf_node_count: 23220366, extension_node_count: 4438550, branch_node_count: 12630852, branch_nodes_with_value_count: 21176, children_ptr_count: 38695536, extension_total_bytes: 1249793288 }
+dedupd_nodes_by_type: [4246839, 338421, 732061, 1121]
 
 Shard 3:
 Loaded 119170182 nodes (104589211 after dedup), took 528.250730273s; stats: SizesStats { leaf_node_count: 69794452, extension_node_count: 8612669, branch_node_count: 26168152, branch_nodes_with_value_count: 13938, children_ptr_count: 102318714, extension_total_bytes: 1910740734 }
+dedupd_nodes_by_type: [11288153, 1345560, 1947063, 195]
 */
