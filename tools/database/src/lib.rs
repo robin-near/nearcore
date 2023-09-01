@@ -10,5 +10,5 @@ mod in_memory_trie_lookup;
 mod make_snapshot;
 mod run_migrations;
 mod state_perf;
-mod test_sweat;
+// mod test_sweat;
 mod utils;

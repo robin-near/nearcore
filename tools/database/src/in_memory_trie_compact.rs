@@ -11,8 +11,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_epoch_manager::EpochManager;
 use near_primitives::block_header::BlockHeader;
 use near_primitives::hash::{hash, CryptoHash};
-use near_primitives::state::ValueRef;
+use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::types::ShardId;
+use near_store::flat::store_helper::decode_flat_state_db_key;
 use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
 use nearcore::NearConfig;
 use rand::RngCore;
@@ -25,27 +26,10 @@ pub struct TrieNodeAlloc {
     data: TrieNodeRef,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[repr(C, packed(1))]
 pub struct TrieNodeRef {
     data: *const u8,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub struct ParsedTrieNodePtr {
-    data: *const u8,
-}
-
-impl From<TrieNodeRef> for ParsedTrieNodePtr {
-    fn from(node: TrieNodeRef) -> Self {
-        Self { data: node.data }
-    }
-}
-
-impl From<ParsedTrieNodePtr> for TrieNodeRef {
-    fn from(node: ParsedTrieNodePtr) -> Self {
-        Self { data: node.data }
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -58,17 +42,17 @@ pub enum ParsedTrieNode {
         hash: CryptoHash,
         memory_usage: u64,
         extension: Box<[u8]>,
-        child: ParsedTrieNodePtr,
+        child: TrieNodeRef,
     },
     Branch {
         hash: CryptoHash,
         memory_usage: u64,
-        children: [Option<ParsedTrieNodePtr>; 16],
+        children: [Option<TrieNodeRef>; 16],
     },
     BranchWithValue {
         hash: CryptoHash,
         memory_usage: u64,
-        children: [Option<ParsedTrieNodePtr>; 16],
+        children: [Option<TrieNodeRef>; 16],
         value: ValueRef,
     },
 }
@@ -153,7 +137,7 @@ impl TrieNodeAlloc {
                         kind: 1,
                         hash,
                         memory_usage,
-                        child: child.into(),
+                        child,
                         extension_len: extension.len() as u16,
                     };
                     std::ptr::copy_nonoverlapping(
@@ -184,7 +168,7 @@ impl TrieNodeAlloc {
                     let mut j = 0;
                     for i in 0..16 {
                         if let Some(child) = children[i] {
-                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child.into();
+                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child;
                             j += 1;
                         }
                     }
@@ -217,7 +201,7 @@ impl TrieNodeAlloc {
                     let mut j = 0;
                     for i in 0..16 {
                         if let Some(child) = children[i] {
-                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child.into();
+                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child;
                             j += 1;
                         }
                     }
@@ -230,6 +214,16 @@ impl TrieNodeAlloc {
 
     pub fn get_ref(&self) -> TrieNodeRef {
         self.data
+    }
+
+    pub fn into_raw(self) -> TrieNodeRef {
+        let data = self.data.data;
+        mem::forget(self);
+        TrieNodeRef { data }
+    }
+
+    pub fn from_raw(node: TrieNodeRef) -> TrieNodeAlloc {
+        TrieNodeAlloc { data: node }
     }
 }
 
@@ -278,17 +272,17 @@ impl TrieNodeRef {
                     hash: header.hash,
                     memory_usage: header.memory_usage,
                     extension: extension.to_vec().into_boxed_slice(),
-                    child: header.child.into(),
+                    child: header.child,
                 }
             },
             2 => unsafe {
                 let header = &*(self.data as *const BranchHeader);
                 let ptr = self.data.offset(mem::size_of::<BranchHeader>() as isize);
-                let mut children: [Option<ParsedTrieNodePtr>; 16] = [None; 16];
+                let mut children: [Option<TrieNodeRef>; 16] = [None; 16];
                 let mut j = 0;
                 for i in 0..16 {
                     if header.mask & (1 << i) != 0 {
-                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)).into());
+                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)));
                         j += 1;
                     }
                 }
@@ -301,11 +295,11 @@ impl TrieNodeRef {
             3 => unsafe {
                 let header = &*(self.data as *const BranchWithValueHeader);
                 let ptr = self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
-                let mut children: [Option<ParsedTrieNodePtr>; 16] = [None; 16];
+                let mut children: [Option<TrieNodeRef>; 16] = [None; 16];
                 let mut j = 0;
                 for i in 0..16 {
                     if header.mask & (1 << i) != 0 {
-                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)).into());
+                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)));
                         j += 1;
                     }
                 }
@@ -516,53 +510,38 @@ impl TrieNodeRef {
     }
 }
 
-struct InMemoryTrieNodeBuilder {
-    path: FlatNodeNibbles,
-    hash_and_size: Option<(CryptoHash, u64)>,
-    leaf: Option<ValueRef>,
-    extension: Option<Box<[u8]>>,
-    children: [Option<ParsedTrieNodePtr>; 16],
-    expected_children: Vec<Option<CryptoHash>>,
-    next_child_index: usize,
-    placeholder_length: Option<usize>,
-    pending_children: Vec<ParsedTrieNodePtr>,
-}
-
 impl Hash for TrieNodeAlloc {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        Hash::hash(&self.get_ref(), state);
-    }
-}
-
-impl Hash for TrieNodeRef {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let data = self.data.data;
         unsafe {
-            if *self.data.offset(4) == 0 {
-                let header = &*(self.data as *const LeafHeader);
+            if *data.offset(4) == 0 {
+                let header = &*(data as *const LeafHeader);
                 header.value_hash.hash(state);
                 std::slice::from_raw_parts(
-                    self.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    data.offset(mem::size_of::<LeafHeader>() as isize),
                     header.extension_len as usize,
                 )
                 .hash(state);
             } else {
-                self.hash().hash(state);
+                self.data.hash().hash(state);
             }
         }
     }
 }
 
-impl PartialEq for TrieNodeRef {
+impl PartialEq for TrieNodeAlloc {
     fn eq(&self, other: &Self) -> bool {
+        let self_data = self.data.data;
+        let other_data = other.data.data;
         unsafe {
-            let self_kind = *self.data.offset(4);
-            let other_kind = *other.data.offset(4);
+            let self_kind = *self_data.offset(4);
+            let other_kind = *other_data.offset(4);
             if self_kind != other_kind {
                 return false;
             }
             if self_kind == 0 {
-                let self_header = &*(self.data as *const LeafHeader);
-                let other_header = &*(other.data as *const LeafHeader);
+                let self_header = &*(self_data as *const LeafHeader);
+                let other_header = &*(other_data as *const LeafHeader);
                 if self_header.extension_len != other_header.extension_len {
                     return false;
                 }
@@ -570,28 +549,18 @@ impl PartialEq for TrieNodeRef {
                     return false;
                 }
                 let self_extension = std::slice::from_raw_parts(
-                    self.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    self_data.offset(mem::size_of::<LeafHeader>() as isize),
                     self_header.extension_len as usize,
                 );
                 let other_extension = std::slice::from_raw_parts(
-                    other.data.offset(mem::size_of::<LeafHeader>() as isize),
+                    other_data.offset(mem::size_of::<LeafHeader>() as isize),
                     other_header.extension_len as usize,
                 );
                 self_extension == other_extension
             } else {
-                self.hash() == other.hash()
+                self.data.hash() == other.data.hash()
             }
         }
-    }
-}
-
-impl Eq for TrieNodeRef {}
-
-impl PartialEq for TrieNodeAlloc {
-    fn eq(&self, other: &Self) -> bool {
-        let a: &TrieNodeRef = self.borrow();
-        let b: &TrieNodeRef = other.borrow();
-        a == b
     }
 }
 
@@ -621,238 +590,6 @@ impl TrieNodeAllocSet {
     }
 }
 
-impl InMemoryTrieNodeBuilder {
-    pub fn placeholder(
-        path: FlatNodeNibbles,
-        placeholder_length: usize,
-    ) -> InMemoryTrieNodeBuilder {
-        InMemoryTrieNodeBuilder {
-            path,
-            hash_and_size: None,
-            leaf: None,
-            extension: None,
-            children: Default::default(),
-            expected_children: Vec::new(),
-            next_child_index: 0,
-            placeholder_length: Some(placeholder_length),
-            pending_children: Vec::new(),
-        }
-    }
-
-    pub fn from_raw_node(
-        path: FlatNodeNibbles,
-        node: RawTrieNodeWithSize,
-    ) -> InMemoryTrieNodeBuilder {
-        let mut builder = InMemoryTrieNodeBuilder::placeholder(path, 0);
-        builder.set_raw_node(node);
-        builder
-    }
-
-    pub fn set_raw_node(&mut self, node: RawTrieNodeWithSize) {
-        assert!(self.placeholder_length.is_some());
-        self.placeholder_length = None;
-        self.hash_and_size = Some((hash(&node.try_to_vec().unwrap()), node.memory_usage));
-        match node.node {
-            RawTrieNode::Leaf(extension, leaf) => {
-                self.extension = Some(extension.into_boxed_slice());
-                self.leaf = Some(leaf);
-            }
-            RawTrieNode::Extension(extension, node) => {
-                self.extension = Some(extension.into_boxed_slice());
-                self.expected_children.push(Some(node));
-            }
-            RawTrieNode::BranchNoValue(children) => {
-                let mut first_child_index = None;
-                for (i, child) in children.0.iter().enumerate() {
-                    if child.is_some() && first_child_index.is_none() {
-                        first_child_index = Some(i);
-                    }
-                    self.expected_children.push(*child);
-                }
-                self.next_child_index = first_child_index.unwrap_or(16);
-            }
-            RawTrieNode::BranchWithValue(leaf, children) => {
-                self.leaf = Some(leaf);
-                let mut first_child_index = None;
-                for (i, child) in children.0.iter().enumerate() {
-                    if child.is_some() && first_child_index.is_none() {
-                        first_child_index = Some(i);
-                    }
-                    self.expected_children.push(*child);
-                }
-                self.next_child_index = first_child_index.unwrap_or(16);
-            }
-        }
-        let children = std::mem::take(&mut self.pending_children);
-        for child in children {
-            self.add_child(child.into());
-        }
-    }
-
-    pub fn build(mut self) -> TrieNodeAlloc {
-        assert!(self.placeholder_length.is_none());
-        let parsed_node = match (self.leaf, self.extension) {
-            (Some(value), Some(extension)) => ParsedTrieNode::Leaf { value, extension },
-            (None, Some(extension)) => {
-                assert_eq!(
-                    self.next_child_index,
-                    1,
-                    "{:?}: Expected 1 child, found {}",
-                    self.hash_and_size.unwrap().0,
-                    self.next_child_index
-                );
-                ParsedTrieNode::Extension {
-                    extension,
-                    hash: self.hash_and_size.unwrap().0,
-                    memory_usage: self.hash_and_size.unwrap().1,
-                    child: std::mem::take(&mut self.children[0]).unwrap(),
-                }
-            }
-            (None, None) => {
-                assert_eq!(
-                    self.next_child_index,
-                    16,
-                    "{:?}: Expected 16 children, found {}",
-                    self.hash_and_size.unwrap().0,
-                    self.next_child_index
-                );
-                ParsedTrieNode::Branch {
-                    hash: self.hash_and_size.unwrap().0,
-                    memory_usage: self.hash_and_size.unwrap().1,
-                    children: std::mem::take(&mut self.children),
-                }
-            }
-            (Some(value), None) => {
-                assert_eq!(
-                    self.next_child_index,
-                    16,
-                    "{:?}: Expected 16 children, found {}",
-                    self.hash_and_size.unwrap().0,
-                    self.next_child_index
-                );
-                ParsedTrieNode::BranchWithValue {
-                    hash: self.hash_and_size.unwrap().0,
-                    memory_usage: self.hash_and_size.unwrap().1,
-                    children: std::mem::take(&mut self.children),
-                    value,
-                }
-            }
-        };
-        TrieNodeAlloc::new_from_parsed(parsed_node)
-    }
-
-    pub fn add_child(&mut self, child: TrieNodeRef) {
-        if self.placeholder_length.is_some() {
-            self.pending_children.push(child.into());
-            return;
-        }
-        assert!(
-            self.next_child_index < self.expected_children.len(),
-            "Too many children; expected {}, actual index {}",
-            self.expected_children.len(),
-            self.next_child_index
-        );
-        if !child.is_leaf() || rand::thread_rng().next_u32() % 100 == 0 {
-            // This is just a sanity check, but it's expensive for leaves due to computation of
-            // hashes, so we do that only occasionally.
-            assert_eq!(
-                self.expected_children[self.next_child_index],
-                Some(child.hash()),
-                "Expected child {:?} at index {}, found {:?}. Expected children: {:?}",
-                self.expected_children[self.next_child_index],
-                self.next_child_index,
-                child.hash(),
-                self.expected_children
-            );
-        }
-        self.children[self.next_child_index] = Some(child.into());
-        self.next_child_index += 1;
-        while self.next_child_index < self.expected_children.len()
-            && self.expected_children[self.next_child_index].is_none()
-        {
-            self.next_child_index += 1;
-        }
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.next_child_index == self.expected_children.len()
-    }
-
-    pub fn child_path_length(&self) -> usize {
-        if let Some(len) = self.placeholder_length {
-            self.path.len() + len
-        } else {
-            if let Some(ext) = &self.extension {
-                self.path.len() + NibbleSlice::from_encoded(ext.as_ref()).0.len()
-            } else {
-                self.path.len() + 1
-            }
-        }
-    }
-
-    pub fn split_placeholder(&mut self, child_path: FlatNodeNibbles) -> InMemoryTrieNodeBuilder {
-        assert!(self.placeholder_length.is_some());
-        assert!(self.child_path_length() > child_path.len());
-        let new_placeholder_len = self.child_path_length() - child_path.len();
-        *self.placeholder_length.as_mut().unwrap() -= new_placeholder_len;
-        let mut new_builder = InMemoryTrieNodeBuilder::placeholder(child_path, new_placeholder_len);
-        new_builder.pending_children = std::mem::take(&mut self.pending_children);
-        new_builder
-    }
-}
-
-impl Debug for InMemoryTrieNodeBuilder {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.path)?;
-        if let Some(placeholder_length) = self.placeholder_length {
-            write!(f, " placeholder({})", placeholder_length)?;
-        } else {
-            if let Some(extension) = &self.extension {
-                let mut nibble = FlatNodeNibbles::new();
-                nibble.append_encoded_slice(&extension);
-                write!(f, " extension({:?})", nibble)?;
-            }
-            if self.leaf.is_some() {
-                write!(f, " leaf")?;
-            }
-            if self.expected_children.len() > 1 {
-                write!(f, " branch({})", self.next_child_index)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn calculate_first_child_path(
-    parent: &FlatNodeNibbles,
-    raw_node: &RawTrieNodeWithSize,
-) -> FlatNodeNibbles {
-    let mut result = parent.clone();
-    match &raw_node.node {
-        RawTrieNode::Leaf(extension, _) | RawTrieNode::Extension(extension, _) => {
-            result.append_encoded_slice(&extension)
-        }
-        RawTrieNode::BranchNoValue(children) | RawTrieNode::BranchWithValue(_, children) => {
-            let index = children
-                .0
-                .iter()
-                .enumerate()
-                .find(|(_, child)| child.is_some())
-                .map(|(i, _)| i)
-                .expect("Branch has no children");
-            result.push(index as u8);
-        }
-    }
-    result
-}
-
-struct BuilderStack {
-    stack: Vec<InMemoryTrieNodeBuilder>,
-    root: Option<TrieNodeRef>,
-    set: TrieNodeAllocSet,
-    sizes: SizesStats,
-}
-
 #[derive(Default, Debug)]
 pub struct SizesStats {
     leaf_node_count: usize,
@@ -862,136 +599,6 @@ pub struct SizesStats {
     children_ptr_count: usize,
     extension_total_bytes: usize,
     dedupd_nodes_by_type: [usize; 4],
-}
-
-impl BuilderStack {
-    pub fn new() -> BuilderStack {
-        BuilderStack {
-            stack: Vec::new(),
-            root: None,
-            set: TrieNodeAllocSet::new(),
-            sizes: SizesStats::default(),
-        }
-    }
-
-    pub fn print(&self) {
-        for (i, builder) in self.stack.iter().enumerate() {
-            println!("{}: {:?}", i, builder);
-        }
-    }
-
-    pub fn add_node(&mut self, path: FlatNodeNibbles, raw_node: RawTrieNodeWithSize) {
-        while !self.stack.is_empty() {
-            let top = self.stack.last().unwrap();
-            if top.path.is_prefix_of(&path) {
-                break;
-            } else if !path.is_prefix_of(&top.path) {
-                self.pop();
-            } else {
-                break;
-            }
-        }
-
-        // Let's separate out the parts of the stack that are longer than the path
-        // later we'll put them back.
-        let mut top_part = Vec::new();
-        while !self.stack.is_empty() {
-            let top = self.stack.last().unwrap();
-            if path.is_prefix_of(&top.path) && &path != &top.path {
-                top_part.push(self.stack.pop().unwrap());
-            } else {
-                break;
-            }
-        }
-
-        if self.stack.is_empty() {
-            // this is the root node.
-            assert!(top_part.is_empty());
-            assert_eq!(path.len(), 0);
-            self.stack.push(InMemoryTrieNodeBuilder::from_raw_node(path, raw_node));
-            return;
-        }
-
-        // Now look at the top of the stack. There are three cases:
-        //  1. The top of the stack is exactly the desired path, just return that.
-        //  2. The top of the stack is not the desired path, but the desired path
-        //     is exactly what should be placed on top of the stack. In this case,
-        //     we add a new node to the stack and return that.
-        //  3. The top of the stack is not the desired path, and the desired path
-        //     is shorter than what should be placed on the stack. In this case,
-        //     we need to split the top of the stack into two nodes.
-        let top = self.stack.last_mut().unwrap();
-        if &path == &top.path {
-            assert!(
-                top.placeholder_length.is_some(),
-                "Top of the stack should be a placeholder when inserting a node at that exact path"
-            );
-            let first_child_path = calculate_first_child_path(&path, &raw_node);
-            assert!(
-                first_child_path.len() <= top.child_path_length(),
-                "Raw node has path length {} greater than placeholder length {}",
-                first_child_path.len(),
-                top.child_path_length()
-            );
-            let longer = if first_child_path.len() < top.child_path_length() {
-                Some(top.split_placeholder(first_child_path))
-            } else {
-                None
-            };
-            top.set_raw_node(raw_node);
-            if let Some(longer) = longer {
-                self.stack.push(longer);
-            }
-        } else {
-            let child_path_length = top.child_path_length();
-            if child_path_length <= path.len() {
-                if child_path_length < path.len() {
-                    // We need a new placeholder in between, and then we can add the node.
-                    self.stack.push(InMemoryTrieNodeBuilder::placeholder(
-                        path.prefix(child_path_length),
-                        path.len() - child_path_length,
-                    ));
-                }
-                self.stack.push(InMemoryTrieNodeBuilder::from_raw_node(path, raw_node));
-                assert!(
-                    top_part.is_empty(),
-                    "Top part should be empty when inserting a new node at the right path"
-                );
-            } else {
-                // The node is a placeholder that represented more than 1 node, so split it.
-                assert!(top.placeholder_length.is_some(), "Top of the stack should be a placeholder when inserting a node into the middle of the path");
-                let mut longer = top.split_placeholder(path);
-                longer.set_raw_node(raw_node);
-                self.stack.push(longer);
-            }
-        };
-        for top in top_part.into_iter().rev() {
-            self.stack.push(top);
-        }
-    }
-
-    fn pop(&mut self) {
-        let top = self.stack.pop().unwrap();
-        let (built, is_new) = self.set.insert_with_dedup(top.build());
-        if is_new {
-            built.increment_stats(&mut self.sizes);
-        } else {
-            self.sizes.dedupd_nodes_by_type[built.node_type() as usize] += 1;
-        }
-        if self.stack.is_empty() {
-            assert!(self.root.is_none(), "Root already set");
-            self.root = Some(built);
-        } else {
-            self.stack.last_mut().unwrap().add_child(built);
-        }
-    }
-
-    pub fn finalize(mut self) -> LoadedInMemoryTrie {
-        while !self.stack.is_empty() {
-            self.pop();
-        }
-        LoadedInMemoryTrie { root: self.root.unwrap(), set: self.set, sizes: self.sizes }
-    }
 }
 
 pub struct LoadedInMemoryTrie {
@@ -1006,44 +613,244 @@ impl Drop for LoadedInMemoryTrie {
     }
 }
 
-pub fn load_trie_in_memory_compact(
-    store: &Store,
-    shard_uid: ShardUId,
-    state_root: CryptoHash,
-) -> anyhow::Result<LoadedInMemoryTrie> {
-    let start_time = Instant::now();
-    let mut node_stack = BuilderStack::new();
-    let mut last_print = Instant::now();
-    let mut nodes_iterated = 0;
-    for item in store.iter_prefix(DBCol::FlatNodes, &shard_uid.try_to_vec().unwrap()) {
-        let item = item?;
-        let key = FlatNodeNibbles::from_encoded_key(&item.0.as_ref()[8..]);
-        let node = RawTrieNodeWithSize::try_from_slice(item.1.as_ref())?;
-        // println!("Adding node: {:?} -> {:?}", key, node);
-        node_stack.add_node(key, node);
+struct TrieConstructionState {
+    segments: Vec<TrieConstructionSegment>,
+}
 
-        nodes_iterated += 1;
-        if last_print.elapsed() > Duration::from_secs(10) {
-            println!(
-                "Loaded {} nodes ({} after dedup), stats: {:?}, current stack:",
-                nodes_iterated,
-                node_stack.set.nodes.len(),
-                node_stack.sizes,
-            );
-            node_stack.print();
-            last_print = Instant::now();
+impl Debug for TrieConstructionState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TrieConstructionState {{\n")?;
+        for segment in &self.segments {
+            write!(f, "  {:?}\n", segment)?;
+        }
+        write!(f, "}}")
+    }
+}
+
+struct TrieConstructionSegment {
+    is_branch: bool,
+    trail: Vec<u8>,
+    leaf: Option<FlatStateValue>,
+    children: Vec<(u8, TrieNodeRef)>,
+    child: Option<TrieNodeRef>,
+}
+
+impl Debug for TrieConstructionSegment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TrieConstructionSegment {{\n")?;
+        write!(f, "  is_branch: {:?}\n", self.is_branch)?;
+        write!(f, "  trail: {:?}\n", NibbleSlice::from_encoded(&self.trail).0)?;
+        write!(f, "  leaf: {:?}\n", self.leaf)?;
+        write!(f, "  children: {:?}\n", self.children)?;
+        write!(f, "  child: {:?}\n", self.child)?;
+        write!(f, "}}")
+    }
+}
+
+impl TrieConstructionSegment {
+    pub fn new_branch(initial_trail: u8) -> Self {
+        Self {
+            is_branch: true,
+            trail: vec![0x10 + initial_trail],
+            leaf: None,
+            children: Vec::new(),
+            child: None,
         }
     }
-    let trie = node_stack.finalize();
-    println!(
-        "Loaded {} nodes ({} after dedup), took {:?}; stats: {:?}",
-        nodes_iterated,
-        trie.set.nodes.len(),
-        start_time.elapsed(),
-        trie.sizes
-    );
-    assert_eq!(trie.root.hash(), state_root);
-    Ok(trie)
+
+    pub fn new_extension(trail: Vec<u8>) -> Self {
+        let nibbles = NibbleSlice::from_encoded(&trail);
+        assert!(nibbles.1 || nibbles.0.len() > 0);
+        Self { is_branch: false, trail, leaf: None, children: Vec::new(), child: None }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.leaf.is_some() && !self.is_branch
+    }
+
+    pub fn into_node(self) -> TrieNodeRef {
+        let parsed_node: ParsedTrieNode = if self.is_branch {
+            assert!(!self.children.is_empty());
+            assert!(self.child.is_none());
+            let mut children: [Option<TrieNodeRef>; 16] = [None; 16];
+            for (i, child) in self.children.into_iter() {
+                children[i as usize] = Some(child);
+            }
+            if let Some(leaf) = self.leaf {
+                ParsedTrieNode::BranchWithValue {
+                    hash: CryptoHash::default(),
+                    memory_usage: 0,
+                    children,
+                    value: leaf.to_value_ref(),
+                }
+            } else {
+                ParsedTrieNode::Branch { hash: CryptoHash::default(), memory_usage: 0, children }
+            }
+        } else if let Some(leaf) = self.leaf {
+            assert!(self.child.is_none());
+            assert!(self.children.is_empty());
+            ParsedTrieNode::Leaf {
+                value: leaf.to_value_ref(),
+                extension: self.trail.into_boxed_slice(),
+            }
+        } else {
+            assert!(self.child.is_some());
+            assert!(self.children.is_empty());
+            ParsedTrieNode::Extension {
+                hash: CryptoHash::default(),
+                memory_usage: 0,
+                extension: self.trail.into_boxed_slice(),
+                child: self.child.unwrap(),
+            }
+        };
+        TrieNodeAlloc::new_from_parsed(parsed_node).into_raw()
+    }
+}
+
+impl TrieConstructionState {
+    pub fn new() -> Self {
+        Self { segments: vec![] }
+    }
+
+    fn pop_segment(&mut self) {
+        let segment = self.segments.pop().unwrap();
+        let node = segment.into_node();
+        let parent = self.segments.last_mut().unwrap();
+        if parent.is_branch {
+            parent.children.push((NibbleSlice::from_encoded(&parent.trail).0.at(0), node));
+        } else {
+            assert!(parent.child.is_none());
+            parent.child = Some(node);
+        }
+    }
+
+    fn add_leaf(&mut self, key: &[u8], value: FlatStateValue) {
+        // println!("State before adding leaf {:?}: {:?}", key, self);
+        let mut nibbles = NibbleSlice::new(key);
+        let mut i = 0;
+        while i < self.segments.len() {
+            // println!("    Sweeping index {} nibble path {:?}", i, nibbles);
+            // We can't be inserting a prefix into the existing path because that
+            // would violate ordering.
+            assert!(nibbles.len() > 0);
+
+            let segment = &self.segments[i];
+            let (extension_nibbles, _) = NibbleSlice::from_encoded(&segment.trail);
+            let common_prefix_len = nibbles.common_prefix(&extension_nibbles);
+            if common_prefix_len == extension_nibbles.len() {
+                nibbles = nibbles.mid(common_prefix_len);
+                i += 1;
+                continue;
+            }
+
+            // pop off all the extra; they have no chance to be relevant to the
+            // leaf we're inserting.
+            while i < self.segments.len() - 1 {
+                self.pop_segment();
+            }
+
+            // If we have a common prefix, split that first.
+            if common_prefix_len > 0 {
+                // println!("      Splitting extension path in the middle");
+                let mut segment = self.segments.pop().unwrap();
+                assert!(!segment.is_branch);
+                let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
+                assert_eq!(was_leaf, segment.is_leaf());
+                assert_eq!(was_leaf, segment.child.is_none());
+
+                let top_segment = TrieConstructionSegment::new_extension(
+                    extension_nibbles.encoded_leftmost(common_prefix_len, false).to_vec(),
+                );
+                segment.trail = extension_nibbles.mid(common_prefix_len).encoded(was_leaf).to_vec();
+                self.segments.push(top_segment);
+                self.segments.push(segment);
+                nibbles = nibbles.mid(common_prefix_len);
+            }
+
+            // Now, we know that the last segment has no overlap with the leaf.
+            if self.segments.last().unwrap().is_branch {
+                // If it's a branch then just add another branch.
+                self.segments.last_mut().unwrap().trail =
+                    nibbles.encoded_leftmost(1, false).to_vec();
+                nibbles = nibbles.mid(1);
+                break;
+            } else {
+                // Otherwise we need to split the extension.
+                let segment = self.segments.pop().unwrap();
+                let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
+                assert_eq!(was_leaf, segment.is_leaf());
+                assert_eq!(was_leaf, segment.child.is_none());
+
+                let mut top_segment = TrieConstructionSegment::new_branch(extension_nibbles.at(0));
+                if extension_nibbles.len() > 1 {
+                    let mut bottom_segment = TrieConstructionSegment::new_extension(
+                        extension_nibbles.mid(1).encoded(was_leaf).to_vec(),
+                    );
+                    bottom_segment.leaf = segment.leaf;
+                    bottom_segment.child = segment.child;
+                    self.segments.push(top_segment);
+                    self.segments.push(bottom_segment);
+                    self.pop_segment();
+                } else if was_leaf {
+                    let mut bottom_segment = TrieConstructionSegment::new_extension(
+                        extension_nibbles.mid(extension_nibbles.len()).encoded(true).to_vec(),
+                    );
+                    bottom_segment.leaf = segment.leaf;
+                    self.segments.push(top_segment);
+                    self.segments.push(bottom_segment);
+                    self.pop_segment();
+                } else {
+                    top_segment.children.push((extension_nibbles.at(0), segment.child.unwrap()));
+                    self.segments.push(top_segment);
+                }
+                self.segments.last_mut().unwrap().trail =
+                    nibbles.encoded_leftmost(1, false).to_vec();
+                nibbles = nibbles.mid(1);
+                break;
+            }
+        }
+        // When we exit the loop, either we exited because we ran out of segments
+        // (in which case this leaf has the previous leaf as a prefix) or we
+        // exited in the middle and we've just added a new branch.
+        // println!("      Adding nibbles {:?} in the end", nibbles);
+        if !self.segments.is_empty() && self.segments.last().unwrap().is_leaf() {
+            // This is the case where we ran out of segments.
+            assert!(nibbles.len() > 0);
+            // We need to turn the leaf node into an extension node, add a branch node
+            // to store the previous leaf, and add the new leaf in.
+            let segment = self.segments.pop().unwrap();
+            let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
+            assert!(was_leaf);
+            if extension_nibbles.len() > 0 {
+                // Only make an extension segment if it was a leaf with an extension.
+                let top_segment = TrieConstructionSegment::new_extension(
+                    extension_nibbles.encoded(false).to_vec(),
+                );
+                self.segments.push(top_segment);
+            }
+            let mut mid_segment = TrieConstructionSegment::new_branch(nibbles.at(0));
+            mid_segment.leaf = segment.leaf;
+            let mut bottom_segment =
+                TrieConstructionSegment::new_extension(nibbles.mid(1).encoded(true).to_vec());
+            bottom_segment.leaf = Some(value);
+            self.segments.push(mid_segment);
+            self.segments.push(bottom_segment);
+        } else {
+            // Otherwise we're at one branch of a branch node (or we're at root),
+            // so just add the leaf.
+            let mut segment =
+                TrieConstructionSegment::new_extension(nibbles.encoded(true).to_vec());
+            segment.leaf = Some(value);
+            self.segments.push(segment);
+        }
+    }
+
+    pub fn finalize(mut self) -> TrieNodeRef {
+        while self.segments.len() > 1 {
+            self.pop_segment();
+        }
+        self.segments.into_iter().next().unwrap().into_node()
+    }
 }
 
 #[derive(clap::Parser)]
@@ -1068,7 +875,7 @@ impl CompactInMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let _trie = load_trie_in_memory_compact(&store, shard_uid, state_root)?;
+        let _trie = load_trie_from_flat_state(&store, shard_uid)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
@@ -1076,20 +883,84 @@ impl CompactInMemoryTrieCmd {
     }
 }
 
+fn print_trie(node: TrieNodeRef, indent: usize) {
+    let parsed = node.parse();
+    match parsed {
+        ParsedTrieNode::Leaf { value, extension } => {
+            println!(
+                "{}Leaf {:?} {:?}",
+                " ".repeat(indent),
+                NibbleSlice::from_encoded(&extension).0,
+                value,
+            );
+        }
+        ParsedTrieNode::Extension { hash, memory_usage, extension, child } => {
+            println!(
+                "{}Extension {:?}",
+                " ".repeat(indent),
+                NibbleSlice::from_encoded(&extension).0,
+            );
+            print_trie(child, indent + 2);
+        }
+        ParsedTrieNode::Branch { hash, memory_usage, children } => {
+            println!("{}Branch", " ".repeat(indent));
+            for (i, child) in children.into_iter().enumerate() {
+                if let Some(child) = child {
+                    println!("{}  {:x}: ", " ".repeat(indent), i);
+                    print_trie(child, indent + 4);
+                }
+            }
+        }
+        ParsedTrieNode::BranchWithValue { hash, memory_usage, children, value } => {
+            println!("{}BranchWithValue {:?}", " ".repeat(indent), value);
+            for (i, child) in children.into_iter().enumerate() {
+                if let Some(child) = child {
+                    println!("{}  {:x}: ", " ".repeat(indent), i);
+                    print_trie(child, indent + 4);
+                }
+            }
+        }
+    }
+}
+
+fn load_trie_from_flat_state(store: &Store, shard_uid: ShardUId) -> anyhow::Result<TrieNodeRef> {
+    let mut recon = TrieConstructionState::new();
+    for item in
+        store.iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
+    {
+        let (key, value) = item?;
+        let (_, key) = decode_flat_state_db_key(&key)?;
+        recon.add_leaf(&key, value);
+    }
+    Ok(recon.finalize())
+}
+
 #[cfg(test)]
 mod tests {
-    use near_primitives::hash::hash;
+    use near_primitives::hash::{hash, CryptoHash};
     use near_primitives::state::ValueRef;
-    use near_store::test_utils::{create_tries, test_populate_trie};
-    use near_store::{ShardUId, Trie, TrieUpdate};
+    use near_store::test_utils::{
+        create_tries, simplify_changes, test_populate_flat_storage, test_populate_trie,
+    };
+    use near_store::{NibbleSlice, ShardUId, Trie, TrieUpdate};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
-    use crate::flat_nodes::creator::create_flat_nodes;
-    use crate::in_memory_trie_compact::{load_trie_in_memory_compact, ParsedTrieNodePtr};
+    use crate::in_memory_trie_compact::{load_trie_from_flat_state, print_trie, TrieNodeRef};
     use crate::in_memory_trie_lookup::InMemoryTrieCompact;
 
-    use super::{ParsedTrieNode, TrieNodeAlloc};
+    use super::{FlatStateValue, ParsedTrieNode, TrieConstructionState, TrieNodeAlloc};
+
+    #[test]
+    fn test_basic_reconstruction() {
+        let mut rec = TrieConstructionState::new();
+        rec.add_leaf(b"aaaaa", FlatStateValue::Inlined(b"a".to_vec()));
+        rec.add_leaf(b"aaaab", FlatStateValue::Inlined(b"b".to_vec()));
+        rec.add_leaf(b"ab", FlatStateValue::Inlined(b"c".to_vec()));
+        rec.add_leaf(b"abffff", FlatStateValue::Inlined(b"c".to_vec()));
+        let node = rec.finalize();
+        print_trie(node, 0);
+    }
 
     fn check(keys: Vec<Vec<u8>>) {
         let description =
@@ -1097,32 +968,35 @@ mod tests {
         eprintln!("TEST CASE {description}");
         let shard_tries = create_tries();
         let shard_uid = ShardUId::single_shard();
-        let state_root = test_populate_trie(
+        let changes = keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect::<Vec<_>>();
+        let changes = simplify_changes(&changes);
+        test_populate_flat_storage(
             &shard_tries,
-            &Trie::EMPTY_ROOT,
             shard_uid,
-            keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect(),
-            // keys.iter().map(|key| (key.to_vec(), Some(b"abcde".to_vec()))).collect(),
+            &CryptoHash::default(),
+            &CryptoHash::default(),
+            &changes,
         );
+        let state_root =
+            test_populate_trie(&shard_tries, &Trie::EMPTY_ROOT, shard_uid, changes.clone());
 
-        create_flat_nodes(shard_tries.get_store(), shard_uid, &state_root);
-        eprintln!("flat nodes created");
-        let loaded_in_memory_trie =
-            load_trie_in_memory_compact(&shard_tries.get_store(), shard_uid, state_root).unwrap();
+        eprintln!("Trie and flat storage populated");
+        // let loaded_in_memory_trie =
+        //     load_trie_in_memory_compact(&shard_tries.get_store(), shard_uid, state_root).unwrap();
+        let in_memory_trie_root =
+            load_trie_from_flat_state(&shard_tries.get_store(), shard_uid).unwrap();
+        // print_trie(in_memory_trie_root, 0);
         eprintln!("In memory trie loaded");
 
         let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
-        let in_memory_trie = InMemoryTrieCompact::new(
-            shard_uid,
-            shard_tries.get_store(),
-            loaded_in_memory_trie.root.clone(),
-        );
+        let in_memory_trie =
+            InMemoryTrieCompact::new(shard_uid, shard_tries.get_store(), in_memory_trie_root);
         for key in keys.iter() {
             let actual_value_ref = in_memory_trie.get_ref(key);
             let expected_value_ref = trie.get_ref(key, near_store::KeyLookupMode::Trie).unwrap();
-            assert_eq!(actual_value_ref, expected_value_ref);
+            assert_eq!(actual_value_ref, expected_value_ref, "{:?}", NibbleSlice::new(key));
             assert_eq!(in_memory_trie.get_nodes_count(), trie.get_trie_nodes_count());
         }
     }
@@ -1184,7 +1058,7 @@ mod tests {
             hash: hash(b"abcde"),
             memory_usage: 12345,
             extension: Box::new([5, 6, 7, 8, 9]),
-            child: ParsedTrieNodePtr { data: 0x123456789a as *const u8 },
+            child: TrieNodeRef { data: 0x123456789a as *const u8 },
         };
         let encoded = TrieNodeAlloc::new_from_parsed(parsed.clone());
         assert_eq!(encoded.get_ref().parse(), parsed);
@@ -1196,20 +1070,20 @@ mod tests {
             children: [
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a01 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a01 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a02 as *const u8 }),
-                Some(ParsedTrieNodePtr { data: 0x123456789a03 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a02 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a03 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a04 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a04 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a05 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a05 as *const u8 }),
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a06 as *const u8 }),
-                Some(ParsedTrieNodePtr { data: 0x123456789a07 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a06 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a07 as *const u8 }),
             ],
         };
         let encoded = TrieNodeAlloc::new_from_parsed(parsed.clone());
@@ -1222,20 +1096,20 @@ mod tests {
             children: [
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a01 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a01 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a02 as *const u8 }),
-                Some(ParsedTrieNodePtr { data: 0x123456789a03 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a02 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a03 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a04 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a04 as *const u8 }),
                 None,
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a05 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a05 as *const u8 }),
                 None,
-                Some(ParsedTrieNodePtr { data: 0x123456789a06 as *const u8 }),
-                Some(ParsedTrieNodePtr { data: 0x123456789a07 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a06 as *const u8 }),
+                Some(TrieNodeRef { data: 0x123456789a07 as *const u8 }),
             ],
             value: ValueRef { hash: hash(b"abcdef"), length: 123 },
         };

@@ -8,7 +8,7 @@ use crate::in_memory_trie_loading::InMemoryTrieCmd;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
-use crate::test_sweat::TestSweatCommand;
+// use crate::test_sweat::TestSweatCommand;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -40,8 +40,7 @@ enum SubCommand {
     /// Uses RocksDB data specified via --home argument.
     StatePerf(StatePerfCommand),
 
-    TestSweat(TestSweatCommand),
-
+    // TestSweat(TestSweatCommand),
     CreateFlatNodes(CreateFlatNodesCommand),
 
     ColumnStats(ColumnStatsCommand),
@@ -65,7 +64,7 @@ impl DatabaseCommand {
             }
             SubCommand::RunMigrations(cmd) => cmd.run(home),
             SubCommand::StatePerf(cmd) => cmd.run(home),
-            SubCommand::TestSweat(cmd) => cmd.run(home),
+            // SubCommand::TestSweat(cmd) => cmd.run(home),
             SubCommand::CreateFlatNodes(cmd) => cmd.run(home),
             SubCommand::ColumnStats(cmd) => cmd.run(home),
             SubCommand::InMemoryTrie(cmd) => {
