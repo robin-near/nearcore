@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use indicatif::ProgressIterator;
 use near_epoch_manager::EpochManager;
 use near_primitives::block_header::BlockHeader;
 use near_primitives::hash::{hash, CryptoHash};
@@ -924,9 +925,11 @@ fn print_trie(node: TrieNodeRef, indent: usize) {
 }
 
 fn load_trie_from_flat_state(store: &Store, shard_uid: ShardUId) -> anyhow::Result<TrieNodeRef> {
+    println!("Loading trie from flat state...");
     let mut recon = TrieConstructionState::new();
-    for item in
-        store.iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
+    for item in store
+        .iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
+        .progress()
     {
         let (key, value) = item?;
         let (_, key) = decode_flat_state_db_key(&key)?;
