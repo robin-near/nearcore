@@ -79,7 +79,7 @@ pub enum KeyLookupMode {
     Trie,
 }
 
-const TRIE_COSTS: TrieCosts = TrieCosts { byte_of_key: 2, byte_of_value: 1, node_cost: 50 };
+pub const TRIE_COSTS: TrieCosts = TrieCosts { byte_of_key: 2, byte_of_value: 1, node_cost: 50 };
 
 #[derive(Clone, Hash)]
 enum NodeHandle {

@@ -4,19 +4,21 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::mem;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use borsh::BorshSerialize;
-use indicatif::ProgressIterator;
 use near_epoch_manager::EpochManager;
 use near_primitives::block_header::BlockHeader;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::types::ShardId;
 use near_store::flat::store_helper::decode_flat_state_db_key;
+use near_store::trie::{Children, TRIE_COSTS};
 use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
 use nearcore::NearConfig;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
 
@@ -112,7 +114,7 @@ impl TrieNodeAlloc {
 
     fn value_extra_bytes_length(value: &FlatStateValue) -> usize {
         match value {
-            FlatStateValue::Ref(value_ref) => 32,
+            FlatStateValue::Ref(_) => 32,
             FlatStateValue::Inlined(v) => v.len(),
         }
     }
@@ -387,7 +389,7 @@ impl TrieNodeRef {
             };
             hash(&raw_node_with_size.try_to_vec().unwrap())
         } else {
-            unsafe { *(self.data.offset(4 + 1) as *const CryptoHash) }
+            unsafe { (&*(self.data as *const BranchHeader)).hash }
         }
     }
 
@@ -395,9 +397,9 @@ impl TrieNodeRef {
         let kind = unsafe { *self.data.offset(4) };
         if kind == 0 {
             let header = unsafe { &*(self.data as *const LeafHeader) };
-            50 + header.extension_len as u64 * 2 + header.value_len as u64 * 1 + 50
+            50 + header.extension_len as u64 * 2 + (header.value_len & 0x7fffffff) as u64 * 1 + 50
         } else {
-            unsafe { *(self.data.offset(4 + 2) as *const u64) }
+            unsafe { (&*(self.data as *const BranchHeader)).memory_usage }
         }
     }
 
@@ -921,7 +923,7 @@ impl CompactInMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let _trie = load_trie_from_flat_state(&store, shard_uid)?;
+        let _trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
@@ -942,14 +944,16 @@ fn print_trie(node: TrieNodeRef, indent: usize) {
         }
         ParsedTrieNode::Extension { hash, memory_usage, extension, child } => {
             println!(
-                "{}Extension {:?}",
+                "{}Extension {:?} {:?} mem={}",
                 " ".repeat(indent),
                 NibbleSlice::from_encoded(&extension).0,
+                hash,
+                memory_usage,
             );
             print_trie(child, indent + 2);
         }
         ParsedTrieNode::Branch { hash, memory_usage, children } => {
-            println!("{}Branch", " ".repeat(indent));
+            println!("{}Branch {:?} mem={}", " ".repeat(indent), hash, memory_usage);
             for (i, child) in children.into_iter().enumerate() {
                 if let Some(child) = child {
                     println!("{}  {:x}: ", " ".repeat(indent), i);
@@ -958,7 +962,13 @@ fn print_trie(node: TrieNodeRef, indent: usize) {
             }
         }
         ParsedTrieNode::BranchWithValue { hash, memory_usage, children, value } => {
-            println!("{}BranchWithValue {:?}", " ".repeat(indent), value);
+            println!(
+                "{}BranchWithValue {:?} {:?} mem={}",
+                " ".repeat(indent),
+                value,
+                hash,
+                memory_usage
+            );
             for (i, child) in children.into_iter().enumerate() {
                 if let Some(child) = child {
                     println!("{}  {:x}: ", " ".repeat(indent), i);
@@ -969,8 +979,13 @@ fn print_trie(node: TrieNodeRef, indent: usize) {
     }
 }
 
-fn load_trie_from_flat_state(store: &Store, shard_uid: ShardUId) -> anyhow::Result<TrieNodeRef> {
+fn load_trie_from_flat_state(
+    store: &Store,
+    shard_uid: ShardUId,
+    state_root: CryptoHash,
+) -> anyhow::Result<TrieNodeRef> {
     println!("Loading trie from flat state...");
+    let mut load_start = Instant::now();
     let mut recon = TrieConstructionState::new();
     let mut loaded = 0;
     for item in
@@ -983,19 +998,198 @@ fn load_trie_from_flat_state(store: &Store, shard_uid: ShardUId) -> anyhow::Resu
         if loaded % 1000000 == 0 {
             println!(
                 "[{:?}] Loaded {} keys, current key: {}",
-                Instant::now(),
+                load_start.elapsed(),
                 loaded,
                 hex::encode(&key)
             );
         }
     }
-    Ok(recon.finalize())
+    let root = recon.finalize();
+
+    println!(
+        "[{:?}] Loaded {} keys; computing hash and memory usage...",
+        load_start.elapsed(),
+        loaded
+    );
+    let mut subtrees = Vec::new();
+    let (_, total_nodes) =
+        root.compute_subtree_node_count_and_mark_boundary_subtrees(10, &mut subtrees);
+    println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
+    subtrees.into_par_iter().for_each(|subtree| {
+        subtree.compute_hash_and_memory_usage_recursively();
+    });
+    println!(
+        "[{:?}] Done computing hash and memory usage for subtrees; now computing root hash",
+        load_start.elapsed()
+    );
+    root.compute_hash_and_memory_usage_recursively();
+    assert_eq!(root.hash(), state_root);
+    println!("[{:?}] Trie loading complete", load_start.elapsed());
+    Ok(root)
+}
+
+unsafe impl Send for TrieNodeRef {}
+unsafe impl Sync for TrieNodeRef {}
+
+impl TrieNodeRef {
+    unsafe fn children(&self) -> &[TrieNodeRef] {
+        match self.node_type() {
+            0 => std::slice::from_raw_parts(NonNull::dangling().as_ptr(), 0),
+            1 => {
+                let header = &*(self.data as *const ExtensionHeader);
+                std::slice::from_ref(&header.child)
+            }
+            2 => {
+                let header = &*(self.data as *const BranchHeader);
+                let num_children = header.mask.count_ones();
+                std::slice::from_raw_parts(
+                    self.data.offset(mem::size_of::<BranchHeader>() as isize) as *const TrieNodeRef,
+                    num_children as usize,
+                )
+            }
+            3 => {
+                let header = &*(self.data as *const BranchWithValueHeader);
+                let num_children = header.mask.count_ones();
+                std::slice::from_raw_parts(
+                    self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize)
+                        as *const TrieNodeRef,
+                    num_children as usize,
+                )
+            }
+            _ => unreachable!("Invalid node type"),
+        }
+    }
+
+    pub fn compute_subtree_node_count_and_mark_boundary_subtrees(
+        &self,
+        threshold: usize,
+        trees: &mut Vec<TrieNodeRef>,
+    ) -> (BoundaryNodeType, usize) {
+        unsafe {
+            let children = self.children();
+            let mut total = 1;
+            let mut any_children_above_or_at_boundary = false;
+            let mut children_below_boundary = Vec::new();
+
+            for child in children {
+                let (child_boundary_type, child_count) =
+                    child.compute_subtree_node_count_and_mark_boundary_subtrees(threshold, trees);
+                match child_boundary_type {
+                    BoundaryNodeType::AboveOrAtBoundary => {
+                        any_children_above_or_at_boundary = true;
+                    }
+                    BoundaryNodeType::BelowBoundary => {
+                        children_below_boundary.push(*child);
+                    }
+                }
+                total += child_count;
+            }
+            if any_children_above_or_at_boundary {
+                for child in children_below_boundary {
+                    trees.push(child);
+                }
+            } else if total >= threshold {
+                trees.push(*self);
+            }
+            if total >= threshold {
+                (BoundaryNodeType::AboveOrAtBoundary, total)
+            } else {
+                (BoundaryNodeType::BelowBoundary, total)
+            }
+        }
+    }
+
+    fn to_raw_trie_node_with_size(&self) -> RawTrieNodeWithSize {
+        unsafe {
+            match self.node_type() {
+                0 => {
+                    unreachable!("We don't do this for leaf nodes.")
+                }
+                1 => {
+                    let header = &*(self.data as *const ExtensionHeader);
+                    let extension = std::slice::from_raw_parts(
+                        self.data.offset(mem::size_of::<ExtensionHeader>() as isize),
+                        header.extension_len as usize,
+                    );
+                    let raw_node = RawTrieNode::Extension(extension.to_vec(), header.child.hash());
+                    RawTrieNodeWithSize {
+                        node: raw_node,
+                        memory_usage: header.child.memory_usage()
+                            + TRIE_COSTS.node_cost
+                            + TRIE_COSTS.byte_of_key * extension.len() as u64,
+                    }
+                }
+                2 => {
+                    let header = &*(self.data as *const BranchHeader);
+                    let mut children: [Option<CryptoHash>; 16] = [None; 16];
+                    let mut ptr = self.data.offset(mem::size_of::<BranchHeader>() as isize);
+                    let mut total_memory_usage = TRIE_COSTS.node_cost;
+                    for i in 0..16 {
+                        if header.mask & (1 << i) != 0 {
+                            let child = *(ptr as *const TrieNodeRef);
+                            children[i] = Some(child.hash());
+                            total_memory_usage += child.memory_usage();
+                            ptr = ptr.offset(8);
+                        }
+                    }
+                    let raw_node = RawTrieNode::BranchNoValue(Children(children));
+                    RawTrieNodeWithSize { node: raw_node, memory_usage: total_memory_usage }
+                }
+                3 => {
+                    let header = &*(self.data as *const BranchWithValueHeader);
+                    let mut children: [Option<CryptoHash>; 16] = [None; 16];
+                    let mut ptr =
+                        self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
+                    let mut total_memory_usage = TRIE_COSTS.node_cost;
+                    for i in 0..16 {
+                        if header.mask & (1 << i) != 0 {
+                            let child = *(ptr as *const TrieNodeRef);
+                            children[i] = Some(child.hash());
+                            total_memory_usage += child.memory_usage();
+                            ptr = ptr.offset(8);
+                        }
+                    }
+                    let value = Self::parse_value(header.value_len, ptr).to_value_ref();
+                    total_memory_usage +=
+                        TRIE_COSTS.node_cost + TRIE_COSTS.byte_of_value * value.length as u64;
+                    let raw_node = RawTrieNode::BranchWithValue(value, Children(children));
+                    RawTrieNodeWithSize { node: raw_node, memory_usage: total_memory_usage }
+                }
+                _ => unreachable!("Invalid node type"),
+            }
+        }
+    }
+
+    pub fn compute_hash_and_memory_usage_recursively(&self) {
+        unsafe {
+            if self.is_leaf() {
+                return;
+            }
+            let fake_header = &mut *(self.data as *mut BranchHeader);
+            if fake_header.memory_usage > 0 {
+                // already computed.
+                return;
+            }
+
+            for child in self.children() {
+                child.compute_hash_and_memory_usage_recursively();
+            }
+            let raw_node_with_size = self.to_raw_trie_node_with_size();
+            // the header has same layout as other non-leaf headers for hash and memory usage
+            fake_header.hash = hash(&raw_node_with_size.try_to_vec().unwrap());
+            fake_header.memory_usage = raw_node_with_size.memory_usage;
+        }
+    }
+}
+
+pub enum BoundaryNodeType {
+    AboveOrAtBoundary,
+    BelowBoundary,
 }
 
 #[cfg(test)]
 mod tests {
     use near_primitives::hash::{hash, CryptoHash};
-    use near_primitives::state::ValueRef;
     use near_store::test_utils::{
         create_tries, simplify_changes, test_populate_flat_storage, test_populate_trie,
     };
@@ -1041,7 +1235,7 @@ mod tests {
         // let loaded_in_memory_trie =
         //     load_trie_in_memory_compact(&shard_tries.get_store(), shard_uid, state_root).unwrap();
         let in_memory_trie_root =
-            load_trie_from_flat_state(&shard_tries.get_store(), shard_uid).unwrap();
+            load_trie_from_flat_state(&shard_tries.get_store(), shard_uid, state_root).unwrap();
         // print_trie(in_memory_trie_root, 0);
         eprintln!("In memory trie loaded");
 
@@ -1102,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn cheack_encoding() {
+    fn check_encoding() {
         let parsed = ParsedTrieNode::Leaf {
             value: FlatStateValue::inlined(b"abcdef"),
             extension: Box::new([1, 2, 3, 4, 5]),

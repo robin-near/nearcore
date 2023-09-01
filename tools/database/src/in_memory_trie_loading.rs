@@ -492,7 +492,7 @@ impl InMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let trie = load_trie_in_memory(&store, shard_uid, state_root)?;
+        let _trie = load_trie_in_memory(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
