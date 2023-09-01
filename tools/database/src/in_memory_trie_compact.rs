@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshSerialize;
 use indicatif::ProgressIterator;
 use near_epoch_manager::EpochManager;
 use near_primitives::block_header::BlockHeader;
@@ -17,9 +17,7 @@ use near_primitives::types::ShardId;
 use near_store::flat::store_helper::decode_flat_state_db_key;
 use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId, Store};
 use nearcore::NearConfig;
-use rand::RngCore;
 
-use crate::flat_nodes::FlatNodeNibbles;
 use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
 
 #[repr(C, packed(1))]
@@ -36,7 +34,7 @@ pub struct TrieNodeRef {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ParsedTrieNode {
     Leaf {
-        value: ValueRef,
+        value: FlatStateValue,
         extension: Box<[u8]>,
     },
     Extension {
@@ -54,7 +52,7 @@ pub enum ParsedTrieNode {
         hash: CryptoHash,
         memory_usage: u64,
         children: [Option<TrieNodeRef>; 16],
-        value: ValueRef,
+        value: FlatStateValue,
     },
 }
 
@@ -62,7 +60,6 @@ pub enum ParsedTrieNode {
 struct LeafHeader {
     refcount: u32,
     kind: u8,
-    value_hash: CryptoHash,
     value_len: u32,
     extension_len: u16,
 }
@@ -92,7 +89,6 @@ struct BranchWithValueHeader {
     kind: u8,
     hash: CryptoHash,
     memory_usage: u64,
-    value_hash: CryptoHash,
     value_len: u32,
     mask: u16,
 }
@@ -106,18 +102,45 @@ impl TrieNodeAlloc {
         }
         data.into_boxed_slice()
     }
+
+    fn encoded_value_length(value: &FlatStateValue) -> u32 {
+        match value {
+            FlatStateValue::Ref(value_ref) => value_ref.length,
+            FlatStateValue::Inlined(v) => 0x80000000 | v.len() as u32,
+        }
+    }
+
+    fn value_extra_bytes_length(value: &FlatStateValue) -> usize {
+        match value {
+            FlatStateValue::Ref(value_ref) => 32,
+            FlatStateValue::Inlined(v) => v.len(),
+        }
+    }
+
+    unsafe fn encode_value_data(value: &FlatStateValue, ptr: *mut u8) {
+        match value {
+            FlatStateValue::Ref(value_ref) => {
+                *(ptr as *mut CryptoHash) = value_ref.hash;
+            }
+            FlatStateValue::Inlined(data) => {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            }
+        }
+    }
+
     pub fn new_from_parsed(node: ParsedTrieNode) -> Self {
         let data = match node {
             ParsedTrieNode::Leaf { value, extension } => {
                 let data = Box::into_raw(Self::alloc_bytes(
-                    mem::size_of::<LeafHeader>() + extension.len(),
+                    mem::size_of::<LeafHeader>()
+                        + extension.len()
+                        + Self::value_extra_bytes_length(&value),
                 )) as *mut u8;
                 unsafe {
                     *(data as *mut LeafHeader) = LeafHeader {
                         refcount: 0,
                         kind: 0,
-                        value_hash: value.hash,
-                        value_len: value.length as u32,
+                        value_len: Self::encoded_value_length(&value),
                         extension_len: extension.len() as u16,
                     };
                     std::ptr::copy_nonoverlapping(
@@ -125,6 +148,12 @@ impl TrieNodeAlloc {
                         data.offset(mem::size_of::<LeafHeader>() as isize),
                         extension.len(),
                     );
+                    Self::encode_value_data(
+                        &value,
+                        data.offset(
+                            mem::size_of::<LeafHeader>() as isize + extension.len() as isize,
+                        ),
+                    )
                 }
                 data
             }
@@ -165,12 +194,11 @@ impl TrieNodeAlloc {
                     *(data as *mut BranchHeader) =
                         BranchHeader { refcount: 0, kind: 2, hash, memory_usage, mask };
 
-                    let ptr = data.offset(mem::size_of::<BranchHeader>() as isize);
-                    let mut j = 0;
+                    let mut ptr = data.offset(mem::size_of::<BranchHeader>() as isize);
                     for i in 0..16 {
                         if let Some(child) = children[i] {
-                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child;
-                            j += 1;
+                            *(ptr as *mut TrieNodeRef) = child;
+                            ptr = ptr.offset(8);
                         }
                     }
                 }
@@ -186,7 +214,9 @@ impl TrieNodeAlloc {
                     }
                 }
                 let data = Box::into_raw(Self::alloc_bytes(
-                    mem::size_of::<BranchWithValueHeader>() + 8 * count,
+                    mem::size_of::<BranchWithValueHeader>()
+                        + 8 * count
+                        + Self::value_extra_bytes_length(&value),
                 )) as *mut u8;
                 unsafe {
                     *(data as *mut BranchWithValueHeader) = BranchWithValueHeader {
@@ -194,18 +224,17 @@ impl TrieNodeAlloc {
                         kind: 3,
                         hash,
                         memory_usage,
-                        value_hash: value.hash,
-                        value_len: value.length as u32,
+                        value_len: Self::encoded_value_length(&value),
                         mask,
                     };
-                    let ptr = data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
-                    let mut j = 0;
+                    let mut ptr = data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
                     for i in 0..16 {
                         if let Some(child) = children[i] {
-                            *(ptr.offset(8 * j) as *mut TrieNodeRef) = child;
-                            j += 1;
+                            *(ptr as *mut TrieNodeRef) = child;
+                            ptr = ptr.offset(8);
                         }
                     }
+                    Self::encode_value_data(&value, ptr);
                 }
                 data
             }
@@ -249,6 +278,16 @@ impl Borrow<TrieNodeRef> for TrieNodeAlloc {
 }
 
 impl TrieNodeRef {
+    unsafe fn parse_value(length_encoded: u32, data_ptr: *const u8) -> FlatStateValue {
+        if length_encoded & 0x80000000 != 0 {
+            let length = length_encoded & 0x7fffffff;
+            FlatStateValue::inlined(std::slice::from_raw_parts(data_ptr, length as usize))
+        } else {
+            let hash = *(data_ptr as *const CryptoHash);
+            FlatStateValue::Ref(ValueRef { length: length_encoded, hash })
+        }
+    }
+
     pub fn parse(self) -> ParsedTrieNode {
         let kind = unsafe { *self.data.offset(4) };
         match kind {
@@ -259,7 +298,12 @@ impl TrieNodeRef {
                     header.extension_len as usize,
                 );
                 ParsedTrieNode::Leaf {
-                    value: ValueRef { hash: header.value_hash, length: header.value_len },
+                    value: Self::parse_value(
+                        header.value_len,
+                        self.data.offset(
+                            mem::size_of::<LeafHeader>() as isize + header.extension_len as isize,
+                        ),
+                    ),
                     extension: extension.to_vec().into_boxed_slice(),
                 }
             },
@@ -283,7 +327,7 @@ impl TrieNodeRef {
                 let mut j = 0;
                 for i in 0..16 {
                     if header.mask & (1 << i) != 0 {
-                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)));
+                        children[i] = Some(*(ptr.offset(8 * j) as *const TrieNodeRef));
                         j += 1;
                     }
                 }
@@ -295,20 +339,19 @@ impl TrieNodeRef {
             },
             3 => unsafe {
                 let header = &*(self.data as *const BranchWithValueHeader);
-                let ptr = self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
+                let mut ptr = self.data.offset(mem::size_of::<BranchWithValueHeader>() as isize);
                 let mut children: [Option<TrieNodeRef>; 16] = [None; 16];
-                let mut j = 0;
                 for i in 0..16 {
                     if header.mask & (1 << i) != 0 {
-                        children[i] = Some((*(ptr.offset(8 * j) as *const TrieNodeRef)));
-                        j += 1;
+                        children[i] = Some(*(ptr as *const TrieNodeRef));
+                        ptr = ptr.offset(8);
                     }
                 }
                 ParsedTrieNode::BranchWithValue {
                     hash: header.hash,
                     memory_usage: header.memory_usage,
                     children,
-                    value: ValueRef { hash: header.value_hash, length: header.value_len },
+                    value: Self::parse_value(header.value_len, ptr),
                 }
             },
             _ => unreachable!("invalid trie node kind"),
@@ -332,10 +375,13 @@ impl TrieNodeRef {
                     self.data.offset(mem::size_of::<LeafHeader>() as isize),
                     header.extension_len as usize,
                 );
-                let raw_node = RawTrieNode::Leaf(
-                    extension.to_vec(),
-                    ValueRef { hash: header.value_hash, length: header.value_len },
+                let value = Self::parse_value(
+                    header.value_len,
+                    self.data.offset(
+                        mem::size_of::<LeafHeader>() as isize + header.extension_len as isize,
+                    ),
                 );
+                let raw_node = RawTrieNode::Leaf(extension.to_vec(), value.to_value_ref());
                 let size = 50 + header.extension_len as u64 * 2 + header.value_len as u64 * 1 + 50;
                 RawTrieNodeWithSize { node: raw_node, memory_usage: size }
             };
@@ -509,6 +555,30 @@ impl TrieNodeRef {
             }
         }
     }
+
+    unsafe fn decode_leaf<'a>(&'a self) -> DecodedLeaf<'a> {
+        let data = self.data;
+        let header = &*(data as *const LeafHeader);
+        let extension = std::slice::from_raw_parts(
+            data.offset(mem::size_of::<LeafHeader>() as isize),
+            header.extension_len as usize,
+        );
+        let value_ptr =
+            data.offset(mem::size_of::<LeafHeader>() as isize + header.extension_len as isize);
+        let value_data = if header.value_len & 0x80000000 != 0 {
+            std::slice::from_raw_parts(value_ptr, (header.value_len & 0x7fffffff) as usize)
+        } else {
+            std::slice::from_raw_parts(value_ptr, 32)
+        };
+        DecodedLeaf { extension, value_len_encoded: header.value_len, value_data }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct DecodedLeaf<'a> {
+    extension: &'a [u8],
+    value_len_encoded: u32,
+    value_data: &'a [u8],
 }
 
 impl Hash for TrieNodeAlloc {
@@ -516,13 +586,7 @@ impl Hash for TrieNodeAlloc {
         let data = self.data.data;
         unsafe {
             if *data.offset(4) == 0 {
-                let header = &*(data as *const LeafHeader);
-                header.value_hash.hash(state);
-                std::slice::from_raw_parts(
-                    data.offset(mem::size_of::<LeafHeader>() as isize),
-                    header.extension_len as usize,
-                )
-                .hash(state);
+                self.data.decode_leaf().hash(state);
             } else {
                 self.data.hash().hash(state);
             }
@@ -541,23 +605,7 @@ impl PartialEq for TrieNodeAlloc {
                 return false;
             }
             if self_kind == 0 {
-                let self_header = &*(self_data as *const LeafHeader);
-                let other_header = &*(other_data as *const LeafHeader);
-                if self_header.extension_len != other_header.extension_len {
-                    return false;
-                }
-                if self_header.value_hash != other_header.value_hash {
-                    return false;
-                }
-                let self_extension = std::slice::from_raw_parts(
-                    self_data.offset(mem::size_of::<LeafHeader>() as isize),
-                    self_header.extension_len as usize,
-                );
-                let other_extension = std::slice::from_raw_parts(
-                    other_data.offset(mem::size_of::<LeafHeader>() as isize),
-                    other_header.extension_len as usize,
-                );
-                self_extension == other_extension
+                self.data.decode_leaf() == other.data.decode_leaf()
             } else {
                 self.data.hash() == other.data.hash()
             }
@@ -682,7 +730,7 @@ impl TrieConstructionSegment {
                     hash: CryptoHash::default(),
                     memory_usage: 0,
                     children,
-                    value: leaf.to_value_ref(),
+                    value: leaf,
                 }
             } else {
                 ParsedTrieNode::Branch { hash: CryptoHash::default(), memory_usage: 0, children }
@@ -690,10 +738,7 @@ impl TrieConstructionSegment {
         } else if let Some(leaf) = self.leaf {
             assert!(self.child.is_none());
             assert!(self.children.is_empty());
-            ParsedTrieNode::Leaf {
-                value: leaf.to_value_ref(),
-                extension: self.trail.into_boxed_slice(),
-            }
+            ParsedTrieNode::Leaf { value: leaf, extension: self.trail.into_boxed_slice() }
         } else {
             assert!(self.child.is_some());
             assert!(self.children.is_empty());
@@ -927,13 +972,22 @@ fn print_trie(node: TrieNodeRef, indent: usize) {
 fn load_trie_from_flat_state(store: &Store, shard_uid: ShardUId) -> anyhow::Result<TrieNodeRef> {
     println!("Loading trie from flat state...");
     let mut recon = TrieConstructionState::new();
-    for item in store
-        .iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
-        .progress()
+    let mut loaded = 0;
+    for item in
+        store.iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
     {
         let (key, value) = item?;
         let (_, key) = decode_flat_state_db_key(&key)?;
         recon.add_leaf(&key, value);
+        loaded += 1;
+        if loaded % 1000000 == 0 {
+            println!(
+                "[{:?}] Loaded {} keys, current key: {}",
+                Instant::now(),
+                loaded,
+                hex::encode(&key)
+            );
+        }
     }
     Ok(recon.finalize())
 }
@@ -997,7 +1051,7 @@ mod tests {
         let in_memory_trie =
             InMemoryTrieCompact::new(shard_uid, shard_tries.get_store(), in_memory_trie_root);
         for key in keys.iter() {
-            let actual_value_ref = in_memory_trie.get_ref(key);
+            let actual_value_ref = in_memory_trie.get_ref(key).map(|v| v.to_value_ref());
             let expected_value_ref = trie.get_ref(key, near_store::KeyLookupMode::Trie).unwrap();
             assert_eq!(actual_value_ref, expected_value_ref, "{:?}", NibbleSlice::new(key));
             assert_eq!(in_memory_trie.get_nodes_count(), trie.get_trie_nodes_count());
@@ -1048,9 +1102,9 @@ mod tests {
     }
 
     #[test]
-    fn check_encoding() {
+    fn cheack_encoding() {
         let parsed = ParsedTrieNode::Leaf {
-            value: ValueRef { hash: hash(b"abcde"), length: 123 },
+            value: FlatStateValue::inlined(b"abcdef"),
             extension: Box::new([1, 2, 3, 4, 5]),
         };
         let encoded = TrieNodeAlloc::new_from_parsed(parsed.clone());
@@ -1114,7 +1168,7 @@ mod tests {
                 Some(TrieNodeRef { data: 0x123456789a06 as *const u8 }),
                 Some(TrieNodeRef { data: 0x123456789a07 as *const u8 }),
             ],
-            value: ValueRef { hash: hash(b"abcdef"), length: 123 },
+            value: FlatStateValue::inlined(b"abcdef"),
         };
         let encoded = TrieNodeAlloc::new_from_parsed(parsed.clone());
         assert_eq!(encoded.get_ref().parse(), parsed);

@@ -1,8 +1,8 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use near_primitives::state::ValueRef;
+use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::types::TrieNodesCount;
 use near_store::{NibbleSlice, ShardUId, Store};
 
@@ -113,7 +113,7 @@ impl InMemoryTrieCompact {
         }
     }
 
-    pub fn get_ref(&self, path: &[u8]) -> Option<ValueRef> {
+    pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;
         loop {

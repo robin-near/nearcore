@@ -275,8 +275,7 @@ pub mod creator {
     use near_store::flat::store_helper;
     use near_store::trie::Children;
     use near_store::{
-        RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, StoreUpdate, TrieCachingStorage,
-        TrieDBStorage, TrieStorage,
+        RawTrieNode, RawTrieNodeWithSize, ShardUId, Store, StoreUpdate, TrieDBStorage, TrieStorage,
     };
 
     use super::FlatNodeNibbles;
