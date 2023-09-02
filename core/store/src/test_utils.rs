@@ -110,7 +110,12 @@ pub fn test_populate_flat_storage(
             shard_uid,
             key.clone(),
             value.as_ref().map(|value| {
-                FlatStateValue::Ref(ValueRef { hash: hash(value), length: value.len() as u32 })
+                if value.len() > 60 {
+                    // idk what the real threshold is, don't copy this.
+                    FlatStateValue::Ref(ValueRef { hash: hash(value), length: value.len() as u32 })
+                } else {
+                    FlatStateValue::Inlined(value.clone())
+                }
             }),
         );
     }

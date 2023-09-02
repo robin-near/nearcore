@@ -384,7 +384,10 @@ impl TrieNodeRef {
                     ),
                 );
                 let raw_node = RawTrieNode::Leaf(extension.to_vec(), value.to_value_ref());
-                let size = 50 + header.extension_len as u64 * 2 + header.value_len as u64 * 1 + 50;
+                let size = 50
+                    + header.extension_len as u64 * 2
+                    + (header.value_len & 0x7fffffff) as u64 * 1
+                    + 50;
                 RawTrieNodeWithSize { node: raw_node, memory_usage: size }
             };
             hash(&raw_node_with_size.try_to_vec().unwrap())
@@ -1011,13 +1014,13 @@ fn load_trie_from_flat_state(
         load_start.elapsed(),
         loaded
     );
-    // let mut subtrees = Vec::new();
-    // let (_, total_nodes) =
-    //     root.compute_subtree_node_count_and_mark_boundary_subtrees(10, &mut subtrees);
-    // println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
-    // subtrees.into_par_iter().for_each(|subtree| {
-    //     subtree.compute_hash_and_memory_usage_recursively();
-    // });
+    let mut subtrees = Vec::new();
+    let (_, total_nodes) =
+        root.compute_subtree_node_count_and_mark_boundary_subtrees(1000, &mut subtrees);
+    println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
+    subtrees.into_par_iter().for_each(|subtree| {
+        subtree.compute_hash_and_memory_usage_recursively();
+    });
     println!(
         "[{:?}] Done computing hash and memory usage for subtrees; now computing root hash",
         load_start.elapsed()
@@ -1288,6 +1291,11 @@ mod tests {
     #[test]
     fn flat_nodes_rand_long_keys() {
         check_random(20, 100, 10);
+    }
+
+    #[test]
+    fn flat_nodes_rand_long_long_keys() {
+        check_random(1000, 1000, 1);
     }
 
     #[test]
