@@ -1011,19 +1011,19 @@ fn load_trie_from_flat_state(
         load_start.elapsed(),
         loaded
     );
-    let mut subtrees = Vec::new();
-    let (_, total_nodes) =
-        root.compute_subtree_node_count_and_mark_boundary_subtrees(10, &mut subtrees);
-    println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
-    subtrees.into_par_iter().for_each(|subtree| {
-        subtree.compute_hash_and_memory_usage_recursively();
-    });
+    // let mut subtrees = Vec::new();
+    // let (_, total_nodes) =
+    //     root.compute_subtree_node_count_and_mark_boundary_subtrees(10, &mut subtrees);
+    // println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
+    // subtrees.into_par_iter().for_each(|subtree| {
+    //     subtree.compute_hash_and_memory_usage_recursively();
+    // });
     println!(
         "[{:?}] Done computing hash and memory usage for subtrees; now computing root hash",
         load_start.elapsed()
     );
     root.compute_hash_and_memory_usage_recursively();
-    assert_eq!(root.hash(), state_root);
+    assert_eq!(root.hash(), state_root, "[{:?] State root mismatch", load_start.elapsed());
     println!("[{:?}] Trie loading complete", load_start.elapsed());
     Ok(root)
 }
