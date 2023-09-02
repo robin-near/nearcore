@@ -1023,7 +1023,7 @@ fn load_trie_from_flat_state(
         load_start.elapsed()
     );
     root.compute_hash_and_memory_usage_recursively();
-    assert_eq!(root.hash(), state_root, "[{:?] State root mismatch", load_start.elapsed());
+    assert_eq!(root.hash(), state_root, "[{:?}] State root mismatch", load_start.elapsed());
     println!("[{:?}] Trie loading complete", load_start.elapsed());
     Ok(root)
 }
