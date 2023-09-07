@@ -1,9 +1,11 @@
 use std::path::Path;
 
+use borsh::BorshSerialize;
+use near_primitives::block::Block;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::{ShardLayout, get_block_shard_uid};
+use near_primitives::shard_layout::{get_block_shard_uid, ShardLayout};
 use near_store::flat::store_helper;
-use near_store::{ShardUId, Store, DBCol};
+use near_store::{DBCol, ShardUId, Store};
 use strum::IntoEnumIterator;
 
 pub(crate) fn open_rocksdb(
@@ -32,10 +34,14 @@ pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
     chunk.state_root().clone()
 }
 
+pub fn flat_head_prev_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    let head = flat_head(store);
+    let block = store.get_ser::<Block>(DBCol::Block, &head.try_to_vec().unwrap()).unwrap().unwrap();
+    block.chunks().get(shard_uid.shard_id as usize).unwrap().prev_state_root().clone()
+}
+
 pub fn resolve_column(col: &str) -> Option<DBCol> {
-    DBCol::iter()
-        .filter(|db_col| <&str>::from(db_col) == col)
-        .next()
+    DBCol::iter().filter(|db_col| <&str>::from(db_col) == col).next()
 }
 
 pub fn flat_head(store: &Store) -> CryptoHash {

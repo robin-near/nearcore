@@ -20,7 +20,7 @@ use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId,
 use nearcore::NearConfig;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
+use crate::utils::{flat_head, flat_head_prev_state_root, flat_head_state_root, open_rocksdb};
 
 #[repr(C, packed(1))]
 pub struct TrieNodeAlloc {
@@ -924,7 +924,7 @@ impl CompactInMemoryTrieCmd {
         let shard_layout = epoch_manager.get_shard_layout(block_header.epoch_id()).unwrap();
 
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
-        let state_root = flat_head_state_root(&store, &shard_uid);
+        let state_root = flat_head_prev_state_root(&store, &shard_uid);
 
         let _trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
