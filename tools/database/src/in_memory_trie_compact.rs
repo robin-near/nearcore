@@ -1026,8 +1026,46 @@ fn load_trie_from_flat_state(
         load_start.elapsed()
     );
     root.compute_hash_and_memory_usage_recursively();
-    assert_eq!(root.hash(), state_root, "[{:?}] State root mismatch", load_start.elapsed());
-    println!("[{:?}] Trie loading complete", load_start.elapsed());
+    if root.hash() != state_root {
+        println!("[{:?}] State root mismatch", load_start.elapsed());
+    }
+    println!("Begin verifying hash computation");
+
+    let mut i = 0;
+    root.iter_all_nodes_post_order(&[0], &mut |node, path| {
+        let hash = node.hash();
+        let result = store
+            .get(
+                DBCol::State,
+                &shard_uid
+                    .try_to_vec()
+                    .unwrap()
+                    .into_iter()
+                    .chain(hash.try_to_vec().unwrap().into_iter())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        if result.is_none() {
+            println!(
+                "Hash not found in DB: {:?} at path {:?}, node: {:?}",
+                hash,
+                NibbleSlice::from_encoded(path).0,
+                node.parse()
+            );
+        }
+        i += 1;
+        if i % 1000000 == 0 {
+            println!(
+                "[{:?}] Verified {} nodes, current path: {:?}",
+                load_start.elapsed(),
+                i,
+                NibbleSlice::from_encoded(path).0,
+            );
+        }
+    });
+
+    println!("[{:?}] Done loading trie from flat state", load_start.elapsed());
+
     Ok(root)
 }
 
@@ -1183,6 +1221,29 @@ impl TrieNodeRef {
             fake_header.memory_usage = raw_node_with_size.memory_usage;
         }
     }
+
+    pub fn iter_all_nodes_post_order(&self, path: &[u8], f: &mut impl FnMut(TrieNodeRef, &[u8])) {
+        let nibbles: NibbleSlice<'_> = NibbleSlice::from_encoded(&path).0;
+        match self.parse() {
+            ParsedTrieNode::Leaf { value, extension } => {}
+            ParsedTrieNode::Extension { hash, memory_usage, extension, child } => {
+                let child_path =
+                    nibbles.merge_encoded(&NibbleSlice::from_encoded(&extension).0, false);
+                child.iter_all_nodes_post_order(&child_path, f);
+            }
+            ParsedTrieNode::Branch { children, .. }
+            | ParsedTrieNode::BranchWithValue { children, .. } => {
+                for (i, child) in children.iter().enumerate() {
+                    if let Some(child) = child {
+                        let child_path =
+                            nibbles.merge_encoded(&NibbleSlice::new(&[0x10 + i as u8]), false);
+                        child.iter_all_nodes_post_order(&child_path, f);
+                    }
+                }
+            }
+        }
+        f(*self, path);
+    }
 }
 
 pub enum BoundaryNodeType {
@@ -1219,11 +1280,22 @@ mod tests {
     fn check(keys: Vec<Vec<u8>>) {
         let description =
             if keys.len() <= 20 { format!("{keys:?}") } else { format!("{} keys", keys.len()) };
-        eprintln!("TEST CASE {description}");
         let shard_tries = create_tries();
         let shard_uid = ShardUId::single_shard();
-        let changes = keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect::<Vec<_>>();
+        let changes = keys
+            .iter()
+            .map(|key| {
+                (
+                    vec![0, 9, 2, 5, 4, 6, 7, 8]
+                        .into_iter()
+                        .chain(key.to_vec().into_iter())
+                        .collect::<Vec<u8>>(),
+                    Some(key.to_vec()),
+                )
+            })
+            .collect::<Vec<_>>();
         let changes = simplify_changes(&changes);
+        // eprintln!("TEST CASE {changes:?}");
         test_populate_flat_storage(
             &shard_tries,
             shard_uid,

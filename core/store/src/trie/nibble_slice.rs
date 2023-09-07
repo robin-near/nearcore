@@ -159,6 +159,9 @@ impl<'a> NibbleSlice<'a> {
     }
 
     pub fn merge_encoded(&self, other: &Self, is_leaf: bool) -> ElasticArray36<u8> {
+        if self.is_empty() {
+            return other.encoded(is_leaf);
+        }
         let l = self.len() + other.len();
         let mut r = ElasticArray36::new();
         let mut i = l % 2;
