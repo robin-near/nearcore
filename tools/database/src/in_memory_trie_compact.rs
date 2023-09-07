@@ -1031,8 +1031,7 @@ fn load_trie_from_flat_state(
     }
     println!("Begin verifying hash computation");
 
-    let mut i = 0;
-    root.iter_all_nodes_post_order(&[0], &mut |node, path| {
+    root.iter_nodes_pre_order_selectively(&[0], &mut |node, path| -> bool {
         let hash = node.hash();
         let result = store
             .get(
@@ -1052,16 +1051,9 @@ fn load_trie_from_flat_state(
                 NibbleSlice::from_encoded(path).0,
                 node.parse()
             );
+            return true;
         }
-        i += 1;
-        if i % 1000000 == 0 {
-            println!(
-                "[{:?}] Verified {} nodes, current path: {:?}",
-                load_start.elapsed(),
-                i,
-                NibbleSlice::from_encoded(path).0,
-            );
-        }
+        return false;
     });
 
     println!("[{:?}] Done loading trie from flat state", load_start.elapsed());
@@ -1243,6 +1235,35 @@ impl TrieNodeRef {
             }
         }
         f(*self, path);
+    }
+
+    pub fn iter_nodes_pre_order_selectively(
+        &self,
+        path: &[u8],
+        f: &mut impl FnMut(TrieNodeRef, &[u8]) -> bool,
+    ) {
+        if !f(*self, path) {
+            return;
+        }
+        let nibbles: NibbleSlice<'_> = NibbleSlice::from_encoded(&path).0;
+        match self.parse() {
+            ParsedTrieNode::Leaf { value, extension } => {}
+            ParsedTrieNode::Extension { hash, memory_usage, extension, child } => {
+                let child_path =
+                    nibbles.merge_encoded(&NibbleSlice::from_encoded(&extension).0, false);
+                child.iter_nodes_pre_order_selectively(&child_path, f);
+            }
+            ParsedTrieNode::Branch { children, .. }
+            | ParsedTrieNode::BranchWithValue { children, .. } => {
+                for (i, child) in children.iter().enumerate() {
+                    if let Some(child) = child {
+                        let child_path =
+                            nibbles.merge_encoded(&NibbleSlice::new(&[0x10 + i as u8]), false);
+                        child.iter_nodes_pre_order_selectively(&child_path, f);
+                    }
+                }
+            }
+        }
     }
 }
 
