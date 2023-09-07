@@ -21,7 +21,7 @@ use near_store::{DBCol, NibbleSlice, RawTrieNode, RawTrieNodeWithSize, ShardUId,
 use nearcore::NearConfig;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use crate::utils::{flat_head, flat_head_prev_state_root, flat_head_state_root, open_rocksdb};
+use crate::utils::{flat_head, flat_head_state_root, open_rocksdb};
 
 #[repr(C, packed(1))]
 pub struct TrieNodeAlloc {
@@ -917,7 +917,8 @@ impl CompactInMemoryTrieCmd {
         let store = near_store::NodeStorage::new(rocksdb.clone()).get_hot_store();
         let genesis_config = &near_config.genesis.config;
         // Note: this is not necessarily correct; it's just an estimate of the shard layout.
-        let head = store.get_ser<Tip>(DBCol::BlockMisc, HEAD_KEY);
+        let head =
+            store.get_ser::<Tip>(DBCol::BlockMisc, HEAD_KEY).unwrap().unwrap().last_block_hash;
         let block_header = store
             .get_ser::<BlockHeader>(DBCol::BlockHeader, &head.try_to_vec().unwrap())?
             .ok_or_else(|| anyhow::anyhow!("Block header not found"))?;

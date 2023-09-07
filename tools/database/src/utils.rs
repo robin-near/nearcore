@@ -1,11 +1,8 @@
-use std::path::Path;
-
-use borsh::BorshSerialize;
-use near_primitives::block::Block;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{get_block_shard_uid, ShardLayout};
 use near_store::flat::store_helper;
 use near_store::{DBCol, ShardUId, Store};
+use std::path::Path;
 use strum::IntoEnumIterator;
 
 pub(crate) fn open_rocksdb(
@@ -39,7 +36,7 @@ pub fn resolve_column(col: &str) -> Option<DBCol> {
 }
 
 pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
-    match store_helper::get_flat_storage_status(store, shard_uid).unwrap() {
+    match store_helper::get_flat_storage_status(store, *shard_uid).unwrap() {
         near_store::flat::FlatStorageStatus::Ready(status) => status.flat_head.hash,
         other => panic!("invalid flat storage status {other:?}"),
     }
