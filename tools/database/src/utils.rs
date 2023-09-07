@@ -28,24 +28,18 @@ pub fn sweat_shard() -> ShardUId {
 
 pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
     let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
-        .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store), shard_uid))
+        .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store, shard_uid), shard_uid))
         .unwrap()
         .unwrap();
     chunk.state_root().clone()
-}
-
-pub fn flat_head_prev_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
-    let head = flat_head(store);
-    let block = store.get_ser::<Block>(DBCol::Block, &head.try_to_vec().unwrap()).unwrap().unwrap();
-    block.chunks().get(shard_uid.shard_id as usize).unwrap().prev_state_root().clone()
 }
 
 pub fn resolve_column(col: &str) -> Option<DBCol> {
     DBCol::iter().filter(|db_col| <&str>::from(db_col) == col).next()
 }
 
-pub fn flat_head(store: &Store) -> CryptoHash {
-    match store_helper::get_flat_storage_status(store, sweat_shard()).unwrap() {
+pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    match store_helper::get_flat_storage_status(store, shard_uid).unwrap() {
         near_store::flat::FlatStorageStatus::Ready(status) => status.flat_head.hash,
         other => panic!("invalid flat storage status {other:?}"),
     }
