@@ -1027,7 +1027,12 @@ fn load_trie_from_flat_state(
     );
     root.compute_hash_and_memory_usage_recursively();
     if root.hash() != state_root {
-        println!("[{:?}] State root mismatch", load_start.elapsed());
+        println!(
+            "[{:?}] State root mismatch: expected {:?}, actual {:?}",
+            load_start.elapsed(),
+            state_root,
+            root.hash()
+        );
     }
     println!("Begin verifying hash computation");
 
@@ -1052,7 +1057,15 @@ fn load_trie_from_flat_state(
                 node.parse()
             );
             return true;
+        } else {
+            println!(
+                "Hash found in DB: {:?} at path {:?}, node: {:?}",
+                hash,
+                NibbleSlice::from_encoded(path).0,
+                node.parse()
+            );
         }
+
         return false;
     });
 
