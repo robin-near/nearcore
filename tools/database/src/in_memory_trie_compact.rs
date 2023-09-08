@@ -52,23 +52,6 @@ pub enum ParsedTrieNode {
     },
 }
 
-#[repr(C, packed(1))]
-pub struct UnalignedCryptoHash {
-    pub hash: CryptoHash,
-}
-
-impl Debug for UnalignedCryptoHash {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.hash.fmt(f)
-    }
-}
-
-impl From<CryptoHash> for UnalignedCryptoHash {
-    fn from(hash: CryptoHash) -> Self {
-        Self { hash }
-    }
-}
-
 #[derive(Debug)]
 pub enum TrieNodeView<'a> {
     Leaf {
@@ -76,18 +59,18 @@ pub enum TrieNodeView<'a> {
         extension: &'a [u8],
     },
     Extension {
-        hash: &'a UnalignedCryptoHash,
+        hash: &'a CryptoHash,
         memory_usage: u64,
         extension: &'a [u8],
         child: TrieNodeRefHandle<'a>,
     },
     Branch {
-        hash: &'a UnalignedCryptoHash,
+        hash: &'a CryptoHash,
         memory_usage: u64,
         children: ChildrenView<'a>,
     },
     BranchWithValue {
-        hash: &'a UnalignedCryptoHash,
+        hash: &'a CryptoHash,
         memory_usage: u64,
         children: ChildrenView<'a>,
         value: ValueView<'a>,
@@ -103,7 +86,7 @@ impl<'a> TrieNodeView<'a> {
             }
             Self::Extension { hash, .. }
             | Self::Branch { hash, .. }
-            | Self::BranchWithValue { hash, .. } => hash.hash,
+            | Self::BranchWithValue { hash, .. } => **hash,
         }
     }
 
@@ -135,8 +118,9 @@ impl<'a> TrieNodeView<'a> {
                     value.to_flat_value().to_value_ref(),
                     children.to_children(),
                 );
-                let mut memory_usage =
-                    TRIE_COSTS.node_cost + value.len() as u64 * TRIE_COSTS.byte_of_value;
+                let mut memory_usage = TRIE_COSTS.node_cost
+                    + value.len() as u64 * TRIE_COSTS.byte_of_value
+                    + TRIE_COSTS.node_cost;
                 for child in children.children.iter() {
                     memory_usage += child.memory_usage();
                 }
@@ -166,19 +150,19 @@ impl<'a> TrieNodeView<'a> {
                 extension: extension.to_vec().into_boxed_slice(),
             },
             Self::Extension { hash, memory_usage, extension, child } => ParsedTrieNode::Extension {
-                hash: hash.hash,
+                hash: **hash,
                 memory_usage: *memory_usage,
                 extension: extension.to_vec().into_boxed_slice(),
                 child: child.node,
             },
             Self::Branch { hash, memory_usage, children } => ParsedTrieNode::Branch {
-                hash: hash.hash,
+                hash: **hash,
                 memory_usage: *memory_usage,
                 children: children.to_parsed(),
             },
             Self::BranchWithValue { hash, memory_usage, children, value } => {
                 ParsedTrieNode::BranchWithValue {
-                    hash: hash.hash,
+                    hash: **hash,
                     memory_usage: *memory_usage,
                     children: children.to_parsed(),
                     value: value.to_flat_value(),
@@ -249,7 +233,7 @@ impl<'a> ChildrenView<'a> {
 
 #[derive(Debug)]
 pub enum ValueView<'a> {
-    Ref { length: u32, hash: &'a UnalignedCryptoHash },
+    Ref { length: u32, hash: &'a CryptoHash },
     Inlined(&'a [u8]),
 }
 
@@ -257,7 +241,7 @@ impl<'a> ValueView<'a> {
     pub fn to_flat_value(&self) -> FlatStateValue {
         match self {
             Self::Ref { length, hash } => {
-                FlatStateValue::Ref(ValueRef { length: *length, hash: hash.hash })
+                FlatStateValue::Ref(ValueRef { length: *length, hash: **hash })
             }
             Self::Inlined(data) => FlatStateValue::Inlined(data.to_vec()),
         }
@@ -324,7 +308,7 @@ impl FlexibleDataHeader for EncodedValueHeader {
         if inlined {
             ValueView::Inlined(std::slice::from_raw_parts(ptr, length as usize))
         } else {
-            ValueView::Ref { length, hash: &*(ptr as *const UnalignedCryptoHash) }
+            ValueView::Ref { length, hash: &*(ptr as *const CryptoHash) }
         }
     }
 }
@@ -421,7 +405,7 @@ struct CommonHeader {
 
 #[repr(C, packed(1))]
 struct NonLeafHeader {
-    hash: UnalignedCryptoHash,
+    hash: CryptoHash,
     memory_usage: u64,
 }
 
@@ -561,7 +545,7 @@ impl TrieNodeRef {
                 unsafe {
                     data.encode(ExtensionHeader {
                         common: CommonHeader { refcount: 0, kind: NodeKind::Extension },
-                        nonleaf: NonLeafHeader { hash: hash.into(), memory_usage },
+                        nonleaf: NonLeafHeader { hash, memory_usage },
                         child,
                         extension: extension_header,
                     });
@@ -577,7 +561,7 @@ impl TrieNodeRef {
                 unsafe {
                     data.encode(BranchHeader {
                         common: CommonHeader { refcount: 0, kind: NodeKind::Branch },
-                        nonleaf: NonLeafHeader { hash: hash.into(), memory_usage },
+                        nonleaf: NonLeafHeader { hash, memory_usage },
                         children: children_header,
                     });
                     data.encode_flexible(&children_header, &children);
@@ -595,7 +579,7 @@ impl TrieNodeRef {
                 unsafe {
                     data.encode(BranchWithValueHeader {
                         common: CommonHeader { refcount: 0, kind: NodeKind::BranchWithValue },
-                        nonleaf: NonLeafHeader { hash: hash.into(), memory_usage },
+                        nonleaf: NonLeafHeader { hash, memory_usage },
                         children: children_header,
                         value: value_header,
                     });
@@ -1211,7 +1195,7 @@ fn load_trie_from_flat_state(
     );
     root_handle.compute_hash_and_memory_usage_recursively();
     if root_handle.hash() != state_root {
-        println!(
+        panic!(
             "[{:?}] State root mismatch: expected {:?}, actual {:?}",
             load_start.elapsed(),
             state_root,
@@ -1282,7 +1266,7 @@ impl<'a> TrieNodeRefHandle<'a> {
         }
         let raw_node_with_size = self.view().to_raw_trie_node_with_size();
         // the header has same layout as other non-leaf headers for hash and memory usage
-        header.hash = hash(&raw_node_with_size.try_to_vec().unwrap()).into();
+        header.hash = hash(&raw_node_with_size.try_to_vec().unwrap());
         header.memory_usage = raw_node_with_size.memory_usage;
     }
 }
