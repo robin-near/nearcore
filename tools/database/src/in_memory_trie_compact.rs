@@ -115,20 +115,32 @@ impl<'a> TrieNodeView<'a> {
                 let memory_usage = self.memory_usage();
                 RawTrieNodeWithSize { node, memory_usage }
             }
-            TrieNodeView::Extension { memory_usage, extension, child, .. } => {
+            TrieNodeView::Extension { extension, child, .. } => {
                 let node = RawTrieNode::Extension(extension.to_vec(), child.hash());
-                RawTrieNodeWithSize { node, memory_usage: *memory_usage }
+                let memory_usage = TRIE_COSTS.node_cost
+                    + child.memory_usage()
+                    + extension.len() as u64 * TRIE_COSTS.byte_of_key;
+                RawTrieNodeWithSize { node, memory_usage }
             }
-            TrieNodeView::Branch { memory_usage, children, .. } => {
+            TrieNodeView::Branch { children, .. } => {
                 let node = RawTrieNode::BranchNoValue(children.to_children());
-                RawTrieNodeWithSize { node, memory_usage: *memory_usage }
+                let mut memory_usage = TRIE_COSTS.node_cost;
+                for child in children.children.iter() {
+                    memory_usage += child.memory_usage();
+                }
+                RawTrieNodeWithSize { node, memory_usage }
             }
-            TrieNodeView::BranchWithValue { memory_usage, children, value, .. } => {
+            TrieNodeView::BranchWithValue { children, value, .. } => {
                 let node = RawTrieNode::BranchWithValue(
                     value.to_flat_value().to_value_ref(),
                     children.to_children(),
                 );
-                RawTrieNodeWithSize { node, memory_usage: *memory_usage }
+                let mut memory_usage =
+                    TRIE_COSTS.node_cost + value.len() as u64 * TRIE_COSTS.byte_of_value;
+                for child in children.children.iter() {
+                    memory_usage += child.memory_usage();
+                }
+                RawTrieNodeWithSize { node, memory_usage }
             }
         }
     }
@@ -212,9 +224,11 @@ impl<'a> ChildrenView<'a> {
 
     fn to_children(&self) -> Children {
         let mut children = Children::default();
+        let mut j = 0;
         for i in 0..16 {
             if self.mask & (1 << i) != 0 {
-                children.0[i] = Some(self.children[i].hash());
+                children.0[i] = Some(self.children[j].hash());
+                j += 1;
             }
         }
         children
@@ -222,9 +236,11 @@ impl<'a> ChildrenView<'a> {
 
     fn to_parsed(&self) -> [Option<TrieNodeRef>; 16] {
         let mut children = [None; 16];
+        let mut j = 0;
         for i in 0..16 {
             if self.mask & (1 << i) != 0 {
-                children[i] = Some(self.children[i].node);
+                children[i] = Some(self.children[j].node);
+                j += 1;
             }
         }
         children
@@ -1323,7 +1339,7 @@ mod tests {
         eprintln!("Trie and flat storage populated");
         let in_memory_trie =
             load_trie_from_flat_state(&shard_tries.get_store(), shard_uid, state_root).unwrap();
-        print_trie(in_memory_trie.roots.get(&state_root).unwrap().handle(), 0);
+        // print_trie(in_memory_trie.roots.get(&state_root).unwrap().handle(), 0);
         eprintln!("In memory trie loaded");
 
         let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
