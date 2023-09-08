@@ -30,6 +30,11 @@ use wasmer_vm::{
     Artifact, Instantiatable, LinearMemory, LinearTable, Memory, MemoryStyle, TrapCode, VMMemory,
 };
 
+use near_o11y::metrics::{try_create_counter, try_create_int_counter};
+use once_cell::sync::Lazy;
+use prometheus::{Counter, IntCounter};
+use std::time::Instant;
+
 #[derive(Clone)]
 pub struct Wasmer2Memory(Arc<LinearMemory>);
 
@@ -296,6 +301,8 @@ impl Wasmer2VM {
         code: &ContractCode,
         cache: Option<&dyn CompiledContractCache>,
     ) -> Result<Result<UniversalExecutable, CompilationError>, CacheError> {
+        CONTRACT_COMPILATION_NUMBER_OF_COMPILES.inc();
+        let time_before_compile = Instant::now();
         let executable_or_error = self.compile_uncached(code);
         let key = get_contract_cache_key(code, VMKind::Wasmer2, &self.config);
 
@@ -312,6 +319,7 @@ impl Wasmer2VM {
             cache.put(&key, record).map_err(CacheError::WriteError)?;
         }
 
+        CONTRACT_COMPILATION_TIME_MS.inc_by(time_before_compile.elapsed().as_secs_f64() * 1000.0);
         Ok(executable_or_error)
     }
 
@@ -333,10 +341,17 @@ impl Wasmer2VM {
         let key = get_contract_cache_key(code, VMKind::Wasmer2, &self.config);
 
         let compile_or_read_from_cache = || -> VMResult<Result<VMArtifact, CompilationError>> {
+            CONTRACT_COMPILATION_CACHE_NUMBER_OF_LOOKUPS.inc();
             let _span = tracing::debug_span!(target: "vm", "Wasmer2VM::compile_or_read_from_cache")
                 .entered();
             let cache_record = cache
-                .map(|cache| cache.get(&key))
+                .map(|cache| {
+                    let time_before_lookup = Instant::now();
+                    let result = cache.get(&key);
+                    CONTRACT_COMPILATION_CACHE_LOOKUP_TIME_MS
+                        .inc_by(time_before_lookup.elapsed().as_secs_f64() * 1000.0);
+                    result
+                })
                 .transpose()
                 .map_err(CacheError::ReadError)?
                 .flatten();
@@ -347,7 +362,9 @@ impl Wasmer2VM {
                 Some(CompiledContract::Code(serialized_module)) => {
                     let _span =
                         tracing::debug_span!(target: "vm", "Wasmer2VM::read_from_cache").entered();
-                    unsafe {
+                    CONTRACT_COMPILATION_CACHE_NUMBER_OF_HITS.inc();
+                    let time_before_load = Instant::now();
+                    let result = unsafe {
                         // (UN-)SAFETY: the `serialized_module` must have been produced by a prior call to
                         // `serialize`.
                         //
@@ -365,7 +382,10 @@ impl Wasmer2VM {
                             .map(Arc::new)
                             .map_err(|err| VMRunnerError::LoadingError(err.to_string()))?;
                         Some(artifact)
-                    }
+                    };
+                    CONTRACT_COMPILATION_CACHE_LOAD_TIME_MS
+                        .inc_by(time_before_load.elapsed().as_secs_f64() * 1000.0);
+                    result
                 }
             };
 
@@ -506,6 +526,51 @@ impl Wasmer2VM {
         Ok(Ok(()))
     }
 }
+
+pub static CONTRACT_COMPILATION_CACHE_NUMBER_OF_LOOKUPS: Lazy<IntCounter> = Lazy::new(|| {
+    try_create_int_counter(
+        "near_contract_compilation_cache_number_of_lookups",
+        "Number of times a contract was looked up in the compilation cache",
+    )
+    .unwrap()
+});
+
+pub static CONTRACT_COMPILATION_CACHE_LOOKUP_TIME_MS: Lazy<Counter> = Lazy::new(|| {
+    try_create_counter(
+        "near_contract_compilation_cache_lookup_time_ms",
+        "Time spent looking up a contract in the compilation cache",
+    )
+    .unwrap()
+});
+
+pub static CONTRACT_COMPILATION_CACHE_NUMBER_OF_HITS: Lazy<IntCounter> = Lazy::new(|| {
+    try_create_int_counter(
+        "near_contract_compilation_cache_number_of_hits",
+        "Number of times a contract was found in the compilation cache",
+    )
+    .unwrap()
+});
+
+pub static CONTRACT_COMPILATION_CACHE_LOAD_TIME_MS: Lazy<Counter> = Lazy::new(|| {
+    try_create_counter(
+        "near_contract_compilation_cache_load_time_ms",
+        "Time spent loading a contract from the compilation cache, after lookup",
+    )
+    .unwrap()
+});
+
+pub static CONTRACT_COMPILATION_NUMBER_OF_COMPILES: Lazy<IntCounter> = Lazy::new(|| {
+    try_create_int_counter(
+        "near_contract_compilation_number_of_compiles",
+        "Number of times a contract was compiled",
+    )
+    .unwrap()
+});
+
+pub static CONTRACT_COMPILATION_TIME_MS: Lazy<Counter> = Lazy::new(|| {
+    try_create_counter("near_contract_compilation_time_ms", "Time spent compiling a contract")
+        .unwrap()
+});
 
 impl wasmer_vm::Tunables for &Wasmer2VM {
     fn memory_style(&self, memory: &MemoryType) -> MemoryStyle {
