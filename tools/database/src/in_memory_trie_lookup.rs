@@ -1,21 +1,20 @@
-use crate::in_memory_trie_compact::{ParsedTrieNode, TrieNodeRef};
+use crate::in_memory_trie_compact::{TrieNodeRefHandle, TrieNodeView};
 use near_primitives::state::FlatStateValue;
 use near_primitives::types::TrieNodesCount;
 use near_store::{NibbleSlice, ShardUId, Store};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::Arc;
 
-pub struct InMemoryTrieCompact {
+pub struct InMemoryTrieCompact<'a> {
     shard_uid: ShardUId,
     store: Store,
-    root: TrieNodeRef,
-    cache: RefCell<HashSet<TrieNodeRef>>,
+    root: TrieNodeRefHandle<'a>,
+    cache: RefCell<HashSet<TrieNodeRefHandle<'a>>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
-impl InMemoryTrieCompact {
-    pub fn new(shard_uid: ShardUId, store: Store, root: TrieNodeRef) -> Self {
+impl<'a> InMemoryTrieCompact<'a> {
+    pub fn new(shard_uid: ShardUId, store: Store, root: TrieNodeRefHandle<'a>) -> Self {
         Self {
             shard_uid,
             store,
@@ -34,42 +33,42 @@ impl InMemoryTrieCompact {
             } else {
                 self.nodes_count.borrow_mut().mem_reads += 1;
             }
-            match node.parse() {
-                ParsedTrieNode::Leaf { extension, value } => {
-                    if nibbles == NibbleSlice::from_encoded(&extension).0 {
-                        return Some(value);
+            match node.view() {
+                TrieNodeView::Leaf { extension, value } => {
+                    if nibbles == NibbleSlice::from_encoded(extension).0 {
+                        return Some(value.to_flat_value());
                     } else {
                         return None;
                     }
                 }
-                ParsedTrieNode::Extension { extension, child, .. } => {
-                    let extension_nibbles = NibbleSlice::from_encoded(&extension).0;
+                TrieNodeView::Extension { extension, child, .. } => {
+                    let extension_nibbles = NibbleSlice::from_encoded(extension).0;
                     if nibbles.starts_with(&extension_nibbles) {
                         nibbles = nibbles.mid(extension_nibbles.len());
-                        node = child.into();
+                        node = child;
                     } else {
                         return None;
                     }
                 }
-                ParsedTrieNode::Branch { children, .. } => {
+                TrieNodeView::Branch { children, .. } => {
                     if nibbles.is_empty() {
                         return None;
                     }
                     let first = nibbles.at(0);
                     nibbles = nibbles.mid(1);
-                    node = match children[first as usize] {
-                        Some(child) => child.into(),
+                    node = match children.get(first as usize) {
+                        Some(child) => child,
                         None => return None,
                     };
                 }
-                ParsedTrieNode::BranchWithValue { children, value, .. } => {
+                TrieNodeView::BranchWithValue { children, value, .. } => {
                     if nibbles.is_empty() {
-                        return Some(value);
+                        return Some(value.to_flat_value());
                     }
                     let first = nibbles.at(0);
                     nibbles = nibbles.mid(1);
-                    node = match children[first as usize] {
-                        Some(child) => child.into(),
+                    node = match children.get(first as usize) {
+                        Some(child) => child,
                         None => return None,
                     };
                 }
