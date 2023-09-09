@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
-use std::mem;
+use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::utils::{flat_head_state_root, open_rocksdb};
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 #[repr(C, packed(1))]
 pub struct TrieNodeRef {
     data: *const u8,
@@ -42,17 +42,17 @@ pub enum ParsedTrieNode {
     Branch {
         hash: CryptoHash,
         memory_usage: u64,
-        children: [Option<TrieNodeRef>; 16],
+        children: Vec<Option<TrieNodeRef>>,
     },
     BranchWithValue {
         hash: CryptoHash,
         memory_usage: u64,
-        children: [Option<TrieNodeRef>; 16],
+        children: Vec<Option<TrieNodeRef>>,
         value: FlatStateValue,
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TrieNodeView<'a> {
     Leaf {
         value: ValueView<'a>,
@@ -62,7 +62,7 @@ pub enum TrieNodeView<'a> {
         hash: &'a CryptoHash,
         memory_usage: u64,
         extension: &'a [u8],
-        child: TrieNodeRefHandle<'a>,
+        child: &'a TrieNodeRef,
     },
     Branch {
         hash: &'a CryptoHash,
@@ -78,7 +78,7 @@ pub enum TrieNodeView<'a> {
 }
 
 impl<'a> TrieNodeView<'a> {
-    pub fn node_hash(&self) -> CryptoHash {
+    pub fn node_hash(self) -> CryptoHash {
         match self {
             Self::Leaf { .. } => {
                 let node = self.to_raw_trie_node_with_size();
@@ -86,16 +86,16 @@ impl<'a> TrieNodeView<'a> {
             }
             Self::Extension { hash, .. }
             | Self::Branch { hash, .. }
-            | Self::BranchWithValue { hash, .. } => **hash,
+            | Self::BranchWithValue { hash, .. } => *hash,
         }
     }
 
-    pub fn to_raw_trie_node_with_size(&self) -> RawTrieNodeWithSize {
+    pub fn to_raw_trie_node_with_size(self) -> RawTrieNodeWithSize {
         match self {
             Self::Leaf { value, extension } => {
                 let node =
                     RawTrieNode::Leaf(extension.to_vec(), value.to_flat_value().to_value_ref());
-                let memory_usage = self.memory_usage();
+                let memory_usage = Self::Leaf { value, extension }.memory_usage();
                 RawTrieNodeWithSize { node, memory_usage }
             }
             TrieNodeView::Extension { extension, child, .. } => {
@@ -143,27 +143,25 @@ impl<'a> TrieNodeView<'a> {
         }
     }
 
-    pub fn to_parsed(&self) -> ParsedTrieNode {
+    pub fn to_parsed(self) -> ParsedTrieNode {
         match self {
             Self::Leaf { value, extension } => ParsedTrieNode::Leaf {
                 value: value.to_flat_value(),
                 extension: extension.to_vec().into_boxed_slice(),
             },
             Self::Extension { hash, memory_usage, extension, child } => ParsedTrieNode::Extension {
-                hash: **hash,
-                memory_usage: *memory_usage,
+                hash: *hash,
+                memory_usage,
                 extension: extension.to_vec().into_boxed_slice(),
-                child: child.node,
+                child: child.clone(),
             },
-            Self::Branch { hash, memory_usage, children } => ParsedTrieNode::Branch {
-                hash: **hash,
-                memory_usage: *memory_usage,
-                children: children.to_parsed(),
-            },
+            Self::Branch { hash, memory_usage, children } => {
+                ParsedTrieNode::Branch { hash: *hash, memory_usage, children: children.to_parsed() }
+            }
             Self::BranchWithValue { hash, memory_usage, children, value } => {
                 ParsedTrieNode::BranchWithValue {
-                    hash: **hash,
-                    memory_usage: *memory_usage,
+                    hash: *hash,
+                    memory_usage,
                     children: children.to_parsed(),
                     value: value.to_flat_value(),
                 }
@@ -173,20 +171,20 @@ impl<'a> TrieNodeView<'a> {
 }
 
 trait FlexibleDataHeader {
-    type InputData: ?Sized;
+    type InputData;
     type View<'a>
     where
         Self: 'a;
     fn from_input(data: &Self::InputData) -> Self;
     fn flexible_data_length(&self) -> usize;
-    unsafe fn encode_flexible_data(&self, data: &Self::InputData, ptr: *mut u8);
+    unsafe fn encode_flexible_data(&self, data: Self::InputData, ptr: *mut u8);
     unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> Self::View<'a>;
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct ChildrenView<'a> {
     mask: u16,
-    children: &'a [TrieNodeRefHandle<'a>],
+    children: &'a [TrieNodeRef],
 }
 
 impl<'a> ChildrenView<'a> {
@@ -194,7 +192,7 @@ impl<'a> ChildrenView<'a> {
         self.mask.count_ones() as usize
     }
 
-    pub fn get(&self, i: usize) -> Option<TrieNodeRefHandle<'a>> {
+    pub fn get(&self, i: usize) -> Option<&'a TrieNodeRef> {
         assert!(i < 16);
         let bit = 1u16 << (i as u16);
         if self.mask & bit == 0 {
@@ -202,7 +200,7 @@ impl<'a> ChildrenView<'a> {
         } else {
             let lower_mask = self.mask & (bit - 1);
             let index = lower_mask.count_ones() as usize;
-            Some(self.children[index])
+            Some(&self.children[index])
         }
     }
 
@@ -218,20 +216,22 @@ impl<'a> ChildrenView<'a> {
         children
     }
 
-    fn to_parsed(&self) -> [Option<TrieNodeRef>; 16] {
-        let mut children = [None; 16];
+    fn to_parsed(&self) -> Vec<Option<TrieNodeRef>> {
+        let mut children = Vec::new();
         let mut j = 0;
         for i in 0..16 {
             if self.mask & (1 << i) != 0 {
-                children[i] = Some(self.children[j].node);
+                children.push(Some(self.children[j].clone()));
                 j += 1;
+            } else {
+                children.push(None);
             }
         }
         children
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ValueView<'a> {
     Ref { length: u32, hash: &'a CryptoHash },
     Inlined(&'a [u8]),
@@ -289,7 +289,7 @@ impl FlexibleDataHeader for EncodedValueHeader {
         }
     }
 
-    unsafe fn encode_flexible_data(&self, value: &FlatStateValue, ptr: *mut u8) {
+    unsafe fn encode_flexible_data(&self, value: FlatStateValue, ptr: *mut u8) {
         let (length, inlined) = self.decode();
         match value {
             FlatStateValue::Ref(value_ref) => {
@@ -320,9 +320,9 @@ struct EncodedChildrenHeader {
 }
 
 impl FlexibleDataHeader for EncodedChildrenHeader {
-    type InputData = [Option<TrieNodeRef>; 16];
+    type InputData = Vec<Option<TrieNodeRef>>;
     type View<'a> = ChildrenView<'a>;
-    fn from_input(children: &[Option<TrieNodeRef>; 16]) -> EncodedChildrenHeader {
+    fn from_input(children: &Vec<Option<TrieNodeRef>>) -> EncodedChildrenHeader {
         let mut mask = 0u16;
         for i in 0..16 {
             if children[i].is_some() {
@@ -336,10 +336,11 @@ impl FlexibleDataHeader for EncodedChildrenHeader {
         self.mask.count_ones() as usize * mem::size_of::<TrieNodeRef>()
     }
 
-    unsafe fn encode_flexible_data(&self, children: &[Option<TrieNodeRef>; 16], mut ptr: *mut u8) {
-        for i in 0..16 {
+    unsafe fn encode_flexible_data(&self, children: Vec<Option<TrieNodeRef>>, mut ptr: *mut u8) {
+        assert_eq!(children.len(), 16);
+        for (i, child) in children.into_iter().enumerate() {
             if self.mask & (1 << i) != 0 {
-                *(ptr as *mut TrieNodeRef) = children[i].unwrap();
+                (*(ptr as *mut MaybeUninit<TrieNodeRef>)).write(child.unwrap());
                 ptr = ptr.offset(mem::size_of::<TrieNodeRef>() as isize);
             }
         }
@@ -348,7 +349,7 @@ impl FlexibleDataHeader for EncodedChildrenHeader {
     unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> ChildrenView<'a> {
         ChildrenView {
             children: std::slice::from_raw_parts(
-                ptr as *const TrieNodeRefHandle<'a>,
+                ptr as *const TrieNodeRef,
                 self.mask.count_ones() as usize,
             ),
             mask: self.mask,
@@ -363,9 +364,9 @@ struct EncodedExtensionHeader {
 }
 
 impl FlexibleDataHeader for EncodedExtensionHeader {
-    type InputData = [u8];
+    type InputData = Box<[u8]>;
     type View<'a> = &'a [u8];
-    fn from_input(extension: &[u8]) -> EncodedExtensionHeader {
+    fn from_input(extension: &Box<[u8]>) -> EncodedExtensionHeader {
         EncodedExtensionHeader { length: extension.len() as u16 }
     }
 
@@ -373,19 +374,13 @@ impl FlexibleDataHeader for EncodedExtensionHeader {
         self.length as usize
     }
 
-    unsafe fn encode_flexible_data(&self, extension: &[u8], ptr: *mut u8) {
+    unsafe fn encode_flexible_data(&self, extension: Box<[u8]>, ptr: *mut u8) {
         std::ptr::copy_nonoverlapping(extension.as_ptr(), ptr, self.length as usize);
     }
 
     unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> &'a [u8] {
         std::slice::from_raw_parts(ptr, self.length as usize)
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TrieNodeRefHandle<'a> {
-    node: TrieNodeRef,
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 #[repr(u8)]
@@ -460,14 +455,14 @@ impl RawEncoder {
 
     pub unsafe fn encode<T>(&mut self, data: T) {
         assert!(self.pos + mem::size_of::<T>() <= self.data.len());
-        *(self.ptr() as *mut T) = data;
+        (*(self.ptr() as *mut MaybeUninit<T>)).write(data);
         self.pos += mem::size_of::<T>();
     }
 
     pub unsafe fn encode_flexible<T: FlexibleDataHeader>(
         &mut self,
         header: &T,
-        data: &T::InputData,
+        data: T::InputData,
     ) {
         let length = header.flexible_data_length();
         assert!(self.pos + length <= self.data.len());
@@ -528,12 +523,12 @@ impl TrieNodeRef {
                 );
                 unsafe {
                     data.encode(LeafHeader {
-                        common: CommonHeader { refcount: 0, kind: NodeKind::Leaf },
+                        common: CommonHeader { refcount: 1, kind: NodeKind::Leaf },
                         extension: extension_header,
                         value: value_header,
                     });
-                    data.encode_flexible(&extension_header, &extension);
-                    data.encode_flexible(&value_header, &value);
+                    data.encode_flexible(&extension_header, extension);
+                    data.encode_flexible(&value_header, value);
                     data.finish()
                 }
             }
@@ -544,12 +539,12 @@ impl TrieNodeRef {
                 );
                 unsafe {
                     data.encode(ExtensionHeader {
-                        common: CommonHeader { refcount: 0, kind: NodeKind::Extension },
+                        common: CommonHeader { refcount: 1, kind: NodeKind::Extension },
                         nonleaf: NonLeafHeader { hash, memory_usage },
                         child,
                         extension: extension_header,
                     });
-                    data.encode_flexible(&extension_header, &extension);
+                    data.encode_flexible(&extension_header, extension);
                     data.finish()
                 }
             }
@@ -560,11 +555,11 @@ impl TrieNodeRef {
                 );
                 unsafe {
                     data.encode(BranchHeader {
-                        common: CommonHeader { refcount: 0, kind: NodeKind::Branch },
+                        common: CommonHeader { refcount: 1, kind: NodeKind::Branch },
                         nonleaf: NonLeafHeader { hash, memory_usage },
                         children: children_header,
                     });
-                    data.encode_flexible(&children_header, &children);
+                    data.encode_flexible(&children_header, children);
                     data.finish()
                 }
             }
@@ -578,13 +573,13 @@ impl TrieNodeRef {
                 );
                 unsafe {
                     data.encode(BranchWithValueHeader {
-                        common: CommonHeader { refcount: 0, kind: NodeKind::BranchWithValue },
+                        common: CommonHeader { refcount: 1, kind: NodeKind::BranchWithValue },
                         nonleaf: NonLeafHeader { hash, memory_usage },
                         children: children_header,
                         value: value_header,
                     });
-                    data.encode_flexible(&children_header, &children);
-                    data.encode_flexible(&value_header, &value);
+                    data.encode_flexible(&children_header, children);
+                    data.encode_flexible(&value_header, value);
                     data.finish()
                 }
             }
@@ -594,24 +589,42 @@ impl TrieNodeRef {
 
     fn delete(&self) {
         let data = self.data;
+        for child in self.iter_children() {
+            let mut_child = unsafe {
+                &mut *(child as *const TrieNodeRef as *mut TrieNodeRef
+                    as *mut ManuallyDrop<TrieNodeRef>)
+            };
+            unsafe {
+                std::mem::ManuallyDrop::drop(mut_child);
+            }
+        }
         unsafe {
             let refcount = *(data as *const u32);
             assert_eq!(refcount, 0, "Dropping TrieNodeRef {:p} with non-zero refcount", data);
-            let alloc_size =
-                TrieNodeRefHandle { node: *self, _marker: std::marker::PhantomData }.alloc_size();
             drop(Box::from_raw(
-                std::slice::from_raw_parts_mut(data as *mut u8, alloc_size) as *mut [u8]
+                std::slice::from_raw_parts_mut(data as *mut u8, self.alloc_size()) as *mut [u8]
             ));
         }
     }
 }
 
-impl<'a> TrieNodeRefHandle<'a> {
-    fn decoder(&self) -> RawDecoder<'a> {
-        RawDecoder::new(self.node.data)
+impl Drop for TrieNodeRef {
+    fn drop(&mut self) {
+        let mut decoder = self.decoder();
+        let header = unsafe { decoder.decode_as_mut::<CommonHeader>() };
+        header.refcount -= 1;
+        if header.refcount == 0 {
+            self.delete();
+        }
+    }
+}
+
+impl TrieNodeRef {
+    fn decoder<'a>(&'a self) -> RawDecoder<'a> {
+        RawDecoder::new(self.data)
     }
 
-    pub fn view(self) -> TrieNodeView<'a> {
+    pub fn view<'a>(&'a self) -> TrieNodeView<'a> {
         unsafe {
             let mut decoder = self.decoder();
             let kind = decoder.peek::<CommonHeader>().kind;
@@ -625,15 +638,11 @@ impl<'a> TrieNodeRefHandle<'a> {
                 NodeKind::Extension => {
                     let header = decoder.decode::<ExtensionHeader>();
                     let extension = decoder.decode_flexible(&header.extension);
-                    let child = TrieNodeRefHandle::<'a> {
-                        node: header.child,
-                        _marker: std::marker::PhantomData,
-                    };
                     TrieNodeView::Extension {
                         hash: &header.nonleaf.hash,
                         memory_usage: header.nonleaf.memory_usage,
                         extension,
-                        child,
+                        child: &header.child,
                     }
                 }
                 NodeKind::Branch => {
@@ -657,35 +666,6 @@ impl<'a> TrieNodeRefHandle<'a> {
                     }
                 }
             }
-        }
-    }
-
-    pub fn add_ref(&self, stats: &mut TrieStats) {
-        let mut decoder = self.decoder();
-        let header = unsafe { decoder.decode_as_mut::<CommonHeader>() };
-        header.refcount += 1;
-        if header.refcount == 1 {
-            self.increment_stats(stats, 1);
-            // If this is the first time we ref the node (basically as
-            // a result of retaining it as a state root), add ref to
-            // its children as well.
-            for child in self.iter_children() {
-                child.add_ref(stats);
-            }
-        }
-    }
-
-    pub fn deref(&self, stats: &mut TrieStats) {
-        let mut decoder = self.decoder();
-        let header = unsafe { decoder.decode_as_mut::<CommonHeader>() };
-        header.refcount -= 1;
-        if header.refcount == 0 {
-            // If dereference is down to zero, deref children, and delete self.
-            for child in self.iter_children() {
-                child.deref(stats);
-            }
-            self.increment_stats(stats, -1);
-            self.node.delete();
         }
     }
 
@@ -730,14 +710,12 @@ impl<'a> TrieNodeRefHandle<'a> {
         }
     }
 
-    fn iter_children(&self) -> Box<dyn Iterator<Item = TrieNodeRefHandle<'a>> + 'a> {
+    fn iter_children<'a>(&'a self) -> Box<dyn Iterator<Item = &'a TrieNodeRef> + 'a> {
         match self.view() {
             TrieNodeView::Leaf { .. } => Box::new(std::iter::empty()),
             TrieNodeView::Extension { child, .. } => Box::new(std::iter::once(child)),
             TrieNodeView::Branch { children, .. }
-            | TrieNodeView::BranchWithValue { children, .. } => {
-                Box::new(children.children.iter().copied())
-            }
+            | TrieNodeView::BranchWithValue { children, .. } => Box::new(children.children.iter()),
         }
     }
 
@@ -777,6 +755,15 @@ impl<'a> TrieNodeRefHandle<'a> {
     }
 }
 
+impl Clone for TrieNodeRef {
+    fn clone(&self) -> Self {
+        let mut decoder = self.decoder();
+        let header = unsafe { decoder.decode_as_mut::<CommonHeader>() };
+        header.refcount += 1;
+        Self { data: self.data }
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct TrieStats {
     leaf_node_count: isize,
@@ -791,44 +778,8 @@ pub struct TrieStats {
     extension_total_bytes: isize,
 }
 
-pub struct TrieRootNode {
-    pub root: TrieNodeRef,
-}
-
-impl TrieRootNode {
-    fn new(root: TrieNodeRef, stats: &mut TrieStats) -> Self {
-        let result = Self { root };
-        result.handle().add_ref(stats);
-        result
-    }
-
-    fn drop(self, stats: &mut TrieStats) {
-        self.handle().deref(stats);
-        std::mem::forget(self)
-    }
-
-    pub fn handle<'a>(&'a self) -> TrieNodeRefHandle<'a> {
-        TrieNodeRefHandle { node: self.root, _marker: std::marker::PhantomData }
-    }
-}
-
-impl Drop for TrieRootNode {
-    fn drop(&mut self) {
-        panic!("Must be dropped via TrieRootNode::drop");
-    }
-}
-
 pub struct InMemoryTrie {
-    pub roots: HashMap<CryptoHash, TrieRootNode>,
-    pub stats: TrieStats,
-}
-
-impl Drop for InMemoryTrie {
-    fn drop(&mut self) {
-        for (_, root) in std::mem::take(&mut self.roots) {
-            root.drop(&mut self.stats);
-        }
-    }
+    pub roots: HashMap<CryptoHash, TrieNodeRef>,
 }
 
 struct TrieConstructionState {
@@ -890,7 +841,8 @@ impl TrieConstructionSegment {
         let parsed_node: ParsedTrieNode = if self.is_branch {
             assert!(!self.children.is_empty());
             assert!(self.child.is_none());
-            let mut children: [Option<TrieNodeRef>; 16] = [None; 16];
+            let mut children: Vec<Option<TrieNodeRef>> = Vec::new();
+            children.resize_with(16, || None);
             for (i, child) in self.children.into_iter() {
                 children[i as usize] = Some(child);
             }
@@ -1060,11 +1012,11 @@ impl TrieConstructionState {
         }
     }
 
-    pub fn finalize(mut self, stats: &mut TrieStats) -> TrieRootNode {
+    pub fn finalize(mut self) -> TrieNodeRef {
         while self.segments.len() > 1 {
             self.pop_segment();
         }
-        TrieRootNode::new(self.segments.into_iter().next().unwrap().into_node(), stats)
+        self.segments.into_iter().next().unwrap().into_node()
     }
 }
 
@@ -1092,8 +1044,7 @@ impl CompactInMemoryTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
-        println!("Stats: {:?}", trie.stats);
+        let _trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
@@ -1101,7 +1052,7 @@ impl CompactInMemoryTrieCmd {
     }
 }
 
-fn print_trie<'a>(node: TrieNodeRefHandle<'a>, indent: usize) {
+fn print_trie(node: &TrieNodeRef, indent: usize) {
     match node.view() {
         TrieNodeView::Leaf { value, extension } => {
             println!(
@@ -1173,9 +1124,7 @@ fn load_trie_from_flat_state(
             );
         }
     }
-    let mut stats = TrieStats::default();
-    let root = recon.finalize(&mut stats);
-    let root_handle = root.handle();
+    let root = recon.finalize();
 
     println!(
         "[{:?}] Loaded {} keys; computing hash and memory usage...",
@@ -1184,7 +1133,7 @@ fn load_trie_from_flat_state(
     );
     let mut subtrees = Vec::new();
     let (_, total_nodes) =
-        root_handle.compute_subtree_node_count_and_mark_boundary_subtrees(1000, &mut subtrees);
+        root.compute_subtree_node_count_and_mark_boundary_subtrees(1000, &mut subtrees);
     println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
     subtrees.into_par_iter().for_each(|subtree| {
         subtree.compute_hash_and_memory_usage_recursively();
@@ -1193,29 +1142,29 @@ fn load_trie_from_flat_state(
         "[{:?}] Done computing hash and memory usage for subtrees; now computing root hash",
         load_start.elapsed()
     );
-    root_handle.compute_hash_and_memory_usage_recursively();
-    if root_handle.hash() != state_root {
+    root.compute_hash_and_memory_usage_recursively();
+    if root.hash() != state_root {
         panic!(
             "[{:?}] State root mismatch: expected {:?}, actual {:?}",
             load_start.elapsed(),
             state_root,
-            root_handle.hash()
+            root.hash()
         );
     } else {
         println!("[{:?}] Done loading trie from flat state", load_start.elapsed());
     }
 
-    Ok(InMemoryTrie { roots: HashMap::from_iter([(state_root, root)].into_iter()), stats })
+    Ok(InMemoryTrie { roots: HashMap::from_iter([(state_root, root)].into_iter()) })
 }
 
 unsafe impl Send for TrieNodeRef {}
 unsafe impl Sync for TrieNodeRef {}
 
-impl<'a> TrieNodeRefHandle<'a> {
-    fn compute_subtree_node_count_and_mark_boundary_subtrees(
-        &self,
+impl TrieNodeRef {
+    fn compute_subtree_node_count_and_mark_boundary_subtrees<'a>(
+        &'a self,
         threshold: usize,
-        trees: &mut Vec<TrieNodeRefHandle<'a>>,
+        trees: &mut Vec<&'a TrieNodeRef>,
     ) -> (BoundaryNodeType, usize) {
         let mut total = 1;
         let mut any_children_above_or_at_boundary = false;
@@ -1239,7 +1188,7 @@ impl<'a> TrieNodeRefHandle<'a> {
                 trees.push(child);
             }
         } else if total >= threshold {
-            trees.push(*self);
+            trees.push(&self);
         }
         if total >= threshold {
             (BoundaryNodeType::AboveOrAtBoundary, total)
@@ -1286,9 +1235,7 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
-    use crate::in_memory_trie_compact::{
-        load_trie_from_flat_state, print_trie, TrieNodeRef, TrieRootNode,
-    };
+    use crate::in_memory_trie_compact::{load_trie_from_flat_state, print_trie, TrieNodeRef};
     use crate::in_memory_trie_lookup::InMemoryTrieCompact;
 
     use super::{FlatStateValue, ParsedTrieNode, TrieConstructionState};
@@ -1300,9 +1247,8 @@ mod tests {
         rec.add_leaf(b"aaaab", FlatStateValue::Inlined(b"b".to_vec()));
         rec.add_leaf(b"ab", FlatStateValue::Inlined(b"c".to_vec()));
         rec.add_leaf(b"abffff", FlatStateValue::Inlined(b"c".to_vec()));
-        let root = rec.finalize(&mut Default::default());
-        print_trie(root.handle(), 0);
-        root.drop(&mut Default::default());
+        let root = rec.finalize();
+        print_trie(&root, 0);
     }
 
     fn check(keys: Vec<Vec<u8>>) {
@@ -1323,7 +1269,6 @@ mod tests {
         eprintln!("Trie and flat storage populated");
         let in_memory_trie =
             load_trie_from_flat_state(&shard_tries.get_store(), shard_uid, state_root).unwrap();
-        // print_trie(in_memory_trie.roots.get(&state_root).unwrap().handle(), 0);
         eprintln!("In memory trie loaded");
 
         let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
@@ -1332,7 +1277,7 @@ mod tests {
         let in_memory_trie = InMemoryTrieCompact::new(
             shard_uid,
             shard_tries.get_store(),
-            in_memory_trie.roots.get(&state_root).unwrap().handle(),
+            in_memory_trie.roots.get(&state_root).unwrap().clone(),
         );
         for key in keys.iter() {
             let actual_value_ref = in_memory_trie.get_ref(key).map(|v| v.to_value_ref());
@@ -1389,104 +1334,4 @@ mod tests {
     fn flat_nodes_rand_large_data() {
         check_random(32, 100000, 10);
     }
-
-    #[test]
-    fn check_encoding() {
-        let parsed = ParsedTrieNode::Leaf {
-            value: FlatStateValue::inlined(b"abcdef"),
-            extension: Box::new([1, 2, 3, 4, 5]),
-        };
-        let encoded = TrieRootNode::new(
-            TrieNodeRef::new_from_parsed(parsed.clone()),
-            &mut Default::default(),
-        );
-        assert_eq!(encoded.handle().view().to_parsed(), parsed);
-
-        let parsed = ParsedTrieNode::Extension {
-            hash: hash(b"abcde"),
-            memory_usage: 12345,
-            extension: Box::new([5, 6, 7, 8, 9]),
-            child: TrieNodeRef { data: 0x123456789a as *const u8 },
-        };
-        let encoded = TrieRootNode::new(
-            TrieNodeRef::new_from_parsed(parsed.clone()),
-            &mut Default::default(),
-        );
-        assert_eq!(encoded.handle().view().to_parsed(), parsed);
-
-        let parsed = ParsedTrieNode::Branch {
-            hash: hash(b"abcde"),
-            memory_usage: 12345,
-            children: [
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a01 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a02 as *const u8 }),
-                Some(TrieNodeRef { data: 0x123456789a03 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a04 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a05 as *const u8 }),
-                None,
-                Some(TrieNodeRef { data: 0x123456789a06 as *const u8 }),
-                Some(TrieNodeRef { data: 0x123456789a07 as *const u8 }),
-            ],
-        };
-        let encoded = TrieRootNode::new(
-            TrieNodeRef::new_from_parsed(parsed.clone()),
-            &mut Default::default(),
-        );
-        assert_eq!(encoded.handle().view().to_parsed(), parsed);
-
-        let parsed = ParsedTrieNode::BranchWithValue {
-            hash: hash(b"abcde"),
-            memory_usage: 12345,
-            children: [
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a01 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a02 as *const u8 }),
-                Some(TrieNodeRef { data: 0x123456789a03 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a04 as *const u8 }),
-                None,
-                None,
-                Some(TrieNodeRef { data: 0x123456789a05 as *const u8 }),
-                None,
-                Some(TrieNodeRef { data: 0x123456789a06 as *const u8 }),
-                Some(TrieNodeRef { data: 0x123456789a07 as *const u8 }),
-            ],
-            value: FlatStateValue::inlined(b"abcdef"),
-        };
-        let encoded = TrieRootNode::new(
-            TrieNodeRef::new_from_parsed(parsed.clone()),
-            &mut Default::default(),
-        );
-        assert_eq!(encoded.handle().view().to_parsed(), parsed);
-    }
 }
-
-/*
-shard 0:
-Loaded 59844482 nodes (58323289 after dedup), took 256.838155903s; stats: SizesStats { leaf_node_count: 33756917, extension_node_count: 5601563, branch_node_count: 18964284, branch_nodes_with_value_count: 525, children_ptr_count: 53825576, extension_total_bytes: 2336231902 }
-dedupd_nodes_by_type: [1340969, 66694, 113485, 45]
-
-shard 1:
-Loaded 59555105 nodes (47203012 after dedup), took 269.64264202s; stats: SizesStats { leaf_node_count: 29864388, extension_node_count: 4441354, branch_node_count: 12897265, branch_nodes_with_value_count: 5, children_ptr_count: 49567403, extension_total_bytes: 661292598 }
-dedupd_nodes_by_type: [10332897, 289876, 1729320, 0]
-
-Shard 2:
-Loaded 45629386 nodes (40310944 after dedup), took 221.615275672s; stats: SizesStats { leaf_node_count: 23220366, extension_node_count: 4438550, branch_node_count: 12630852, branch_nodes_with_value_count: 21176, children_ptr_count: 38695536, extension_total_bytes: 1249793288 }
-dedupd_nodes_by_type: [4246839, 338421, 732061, 1121]
-
-Shard 3:
-Loaded 119170182 nodes (104589211 after dedup), took 528.250730273s; stats: SizesStats { leaf_node_count: 69794452, extension_node_count: 8612669, branch_node_count: 26168152, branch_nodes_with_value_count: 13938, children_ptr_count: 102318714, extension_total_bytes: 1910740734 }
-dedupd_nodes_by_type: [11288153, 1345560, 1947063, 195]
-*/

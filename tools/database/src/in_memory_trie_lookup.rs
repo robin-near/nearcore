@@ -1,20 +1,20 @@
-use crate::in_memory_trie_compact::{TrieNodeRefHandle, TrieNodeView};
+use crate::in_memory_trie_compact::{TrieNodeRef, TrieNodeView};
 use near_primitives::state::FlatStateValue;
 use near_primitives::types::TrieNodesCount;
 use near_store::{NibbleSlice, ShardUId, Store};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-pub struct InMemoryTrieCompact<'a> {
+pub struct InMemoryTrieCompact {
     shard_uid: ShardUId,
     store: Store,
-    root: TrieNodeRefHandle<'a>,
-    cache: RefCell<HashSet<TrieNodeRefHandle<'a>>>,
+    root: TrieNodeRef,
+    cache: RefCell<HashSet<TrieNodeRef>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
-impl<'a> InMemoryTrieCompact<'a> {
-    pub fn new(shard_uid: ShardUId, store: Store, root: TrieNodeRefHandle<'a>) -> Self {
+impl InMemoryTrieCompact {
+    pub fn new(shard_uid: ShardUId, store: Store, root: TrieNodeRef) -> Self {
         Self {
             shard_uid,
             store,
@@ -26,9 +26,9 @@ impl<'a> InMemoryTrieCompact<'a> {
 
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
-        let mut node = self.root;
+        let mut node = &self.root;
         loop {
-            if self.cache.borrow_mut().insert(node) {
+            if self.cache.borrow_mut().insert(node.clone()) {
                 self.nodes_count.borrow_mut().db_reads += 1;
             } else {
                 self.nodes_count.borrow_mut().mem_reads += 1;
