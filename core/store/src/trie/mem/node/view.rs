@@ -78,7 +78,7 @@ impl<'a> MemTrieNodeView<'a> {
         }
     }
 
-    pub(crate) fn iter_children(&'a self) -> Box<dyn Iterator<Item = &'a MemTrieNode> + 'a> {
+    pub(crate) fn iter_children(&self) -> Box<dyn Iterator<Item = &'a MemTrieNode> + 'a> {
         match self {
             MemTrieNodeView::Leaf { .. } => Box::new(std::iter::empty()),
             MemTrieNodeView::Extension { child, .. } => Box::new(std::iter::once(*child)),

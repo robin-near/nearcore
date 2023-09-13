@@ -39,4 +39,48 @@ impl MemTrieNode {
             self.compute_hash_and_memory_usage();
         }
     }
+
+    /// TODO
+    pub(crate) fn compute_subtree_node_count_and_mark_boundary_subtrees<'a>(
+        &'a self,
+        threshold: usize,
+        trees: &mut Vec<&'a MemTrieNode>,
+    ) -> (BoundaryNodeType, usize) {
+        let mut total = 1;
+        let mut any_children_above_or_at_boundary = false;
+        let mut children_below_boundary = Vec::new();
+        for child in self.view().iter_children() {
+            let (child_boundary_type, child_count) =
+                child.compute_subtree_node_count_and_mark_boundary_subtrees(threshold, trees);
+            match child_boundary_type {
+                BoundaryNodeType::AboveOrAtBoundary => {
+                    any_children_above_or_at_boundary = true;
+                }
+                BoundaryNodeType::BelowBoundary => {
+                    children_below_boundary.push(child);
+                }
+            }
+            total += child_count;
+        }
+        if any_children_above_or_at_boundary {
+            for child in children_below_boundary {
+                trees.push(child);
+            }
+        } else if total >= threshold {
+            trees.push(&self);
+        }
+        if total >= threshold {
+            (BoundaryNodeType::AboveOrAtBoundary, total)
+        } else {
+            (BoundaryNodeType::BelowBoundary, total)
+        }
+    }
 }
+
+pub enum BoundaryNodeType {
+    AboveOrAtBoundary,
+    BelowBoundary,
+}
+
+unsafe impl Send for MemTrieNode {}
+unsafe impl Sync for MemTrieNode {}
