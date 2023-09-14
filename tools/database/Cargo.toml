@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+borsh.workspace = true
 clap.workspace = true
 indicatif.workspace = true
 rand.workspace = true

@@ -2,8 +2,10 @@ use crate::adjust_database::ChangeDbKindCommand;
 use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::compact::RunCompactionCommand;
 use crate::make_snapshot::MakeSnapshotCommand;
+use crate::memtrie::MemTrieCmd;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
+use crate::test_sweat::TestSweatCommand;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -34,6 +36,9 @@ enum SubCommand {
     /// Run performance test for State column reads.
     /// Uses RocksDB data specified via --home argument.
     StatePerf(StatePerfCommand),
+
+    MemTrieCmd(MemTrieCmd),
+    TestSweatCommand(TestSweatCommand),
 }
 
 impl DatabaseCommand {
@@ -52,6 +57,15 @@ impl DatabaseCommand {
             }
             SubCommand::RunMigrations(cmd) => cmd.run(home),
             SubCommand::StatePerf(cmd) => cmd.run(home),
+            SubCommand::MemTrieCmd(cmd) => {
+                let near_config = nearcore::config::load_config(
+                    &home,
+                    near_chain_configs::GenesisValidationMode::UnsafeFast,
+                )
+                .unwrap_or_else(|e| panic!("Error loading config: {:#}", e));
+                cmd.run(near_config, home)
+            }
+            SubCommand::TestSweatCommand(cmd) => cmd.run(home),
         }
     }
 }

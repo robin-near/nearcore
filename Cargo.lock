@@ -3733,6 +3733,7 @@ name = "near-database-tool"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "borsh 0.10.2",
  "clap 4.2.4",
  "indicatif",
  "near-chain-configs",

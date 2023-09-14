@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::get_block_shard_uid;
+use near_primitives::shard_layout::{get_block_shard_uid, ShardLayout};
 use near_store::flat::store_helper;
 use near_store::{DBCol, ShardUId, Store};
 use strum::IntoEnumIterator;
@@ -41,4 +41,22 @@ pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
         near_store::flat::FlatStorageStatus::Ready(status) => status.flat_head.hash,
         other => panic!("invalid flat storage status {other:?}"),
     }
+}
+
+pub fn sweat_shard() -> ShardUId {
+    ShardLayout::get_simple_nightshade_layout().get_shard_uids()[3]
+}
+
+pub fn flush_disk_cache() {
+    eprintln!("Flush disk page cache");
+    let mut cmd = std::process::Command::new("sudo")
+        .arg("tee")
+        .arg("/proc/sys/vm/drop_caches")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    cmd.stdin.as_mut().unwrap().write_all("3".as_bytes()).unwrap();
+    cmd.wait().unwrap();
 }
