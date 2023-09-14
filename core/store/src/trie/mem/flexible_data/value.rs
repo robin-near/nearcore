@@ -1,19 +1,24 @@
-use near_primitives::hash::CryptoHash;
-use near_primitives::state::{FlatStateValue, ValueRef};
+use crate::trie::mem::arena::{ArenaSlice, BorshFixedSize};
 
 use super::FlexibleDataHeader;
+use borsh::{BorshDeserialize, BorshSerialize};
+use near_primitives::hash::CryptoHash;
+use near_primitives::state::{FlatStateValue, ValueRef};
 
 /// Flexibly-sized data header for a trie value, representing either an inline
 /// value, or a reference to a value stored in the State column.
 ///
 /// The flexible part of the data is either the inlined value as a byte array,
 /// or a CryptoHash representing the reference hash.
-#[repr(C, packed(1))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EncodedValueHeader {
     // The high bit is 1 if the value is inlined, 0 if it is a reference.
     // The lower bits are the length of the value.
     length_and_inlined: u32,
+}
+
+impl BorshFixedSize for EncodedValueHeader {
+    const SERIALIZED_SIZE: usize = std::mem::size_of::<u32>();
 }
 
 impl EncodedValueHeader {
@@ -29,7 +34,7 @@ impl EncodedValueHeader {
 
 impl FlexibleDataHeader for EncodedValueHeader {
     type InputData = FlatStateValue;
-    type View<'a> = ValueView<'a>;
+    type View = ValueView;
 
     fn from_input(value: &FlatStateValue) -> Self {
         match value {
@@ -52,44 +57,42 @@ impl FlexibleDataHeader for EncodedValueHeader {
         }
     }
 
-    unsafe fn encode_flexible_data(&self, value: FlatStateValue, ptr: *mut u8) {
-        let (length, inlined) = self.decode();
+    fn encode_flexible_data(&self, value: FlatStateValue, target: &mut ArenaSlice) {
+        let (_, inlined) = self.decode();
         match value {
             FlatStateValue::Ref(value_ref) => {
                 assert!(!inlined);
-                *(ptr as *mut CryptoHash) = value_ref.hash;
+                target.as_slice_mut().copy_from_slice(&value_ref.hash.0);
             }
             FlatStateValue::Inlined(v) => {
                 assert!(inlined);
-                std::ptr::copy_nonoverlapping(v.as_ptr(), ptr, length as usize);
+                target.as_slice_mut().copy_from_slice(&v);
             }
         }
     }
 
-    unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> ValueView<'a> {
+    fn decode_flexible_data<'a>(&'a self, source: &ArenaSlice) -> ValueView {
         let (length, inlined) = self.decode();
         if inlined {
-            ValueView::Inlined(std::slice::from_raw_parts(ptr, length as usize))
+            ValueView::Inlined(source.clone())
         } else {
-            ValueView::Ref { length, hash: &*(ptr as *const CryptoHash) }
+            ValueView::Ref { length, hash: CryptoHash::try_from_slice(source.as_slice()).unwrap() }
         }
     }
-
-    unsafe fn drop_flexible_data(&self, _ptr: *mut u8) {}
 }
 
 // Efficient view of the encoded value.
 #[derive(Debug, Clone)]
-pub enum ValueView<'a> {
-    Ref { length: u32, hash: &'a CryptoHash },
-    Inlined(&'a [u8]),
+pub enum ValueView {
+    Ref { length: u32, hash: CryptoHash },
+    Inlined(ArenaSlice),
 }
 
-impl<'a> ValueView<'a> {
+impl ValueView {
     pub fn to_flat_value(self) -> FlatStateValue {
         match self {
-            Self::Ref { length, hash } => FlatStateValue::Ref(ValueRef { length, hash: *hash }),
-            Self::Inlined(data) => FlatStateValue::Inlined(data.to_vec()),
+            Self::Ref { length, hash } => FlatStateValue::Ref(ValueRef { length, hash }),
+            Self::Inlined(data) => FlatStateValue::Inlined(data.as_slice().to_vec()),
         }
     }
 

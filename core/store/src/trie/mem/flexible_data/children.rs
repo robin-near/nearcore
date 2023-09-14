@@ -1,20 +1,25 @@
+use borsh::{BorshDeserialize, BorshSerialize};
+
 use super::FlexibleDataHeader;
+use crate::trie::mem::arena::{ArenaPtr, ArenaSlice, BorshFixedSize};
 use crate::trie::mem::node::MemTrieNode;
 use crate::trie::Children;
-use std::mem::MaybeUninit;
 
 /// Flexibly-sized data header for a variable-sized list of children trie nodes.
 /// The header contains a 16-bit mask of which children are present, and the
 /// flexible part is one pointer for each present child.
-#[repr(C, packed(1))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EncodedChildrenHeader {
     mask: u16,
 }
 
+impl BorshFixedSize for EncodedChildrenHeader {
+    const SERIALIZED_SIZE: usize = std::mem::size_of::<u16>();
+}
+
 impl FlexibleDataHeader for EncodedChildrenHeader {
     type InputData = Vec<Option<MemTrieNode>>;
-    type View<'a> = ChildrenView<'a>;
+    type View = ChildrenView;
 
     fn from_input(children: &Vec<Option<MemTrieNode>>) -> EncodedChildrenHeader {
         let mut mask = 0u16;
@@ -27,52 +32,35 @@ impl FlexibleDataHeader for EncodedChildrenHeader {
     }
 
     fn flexible_data_length(&self) -> usize {
-        self.mask.count_ones() as usize * std::mem::size_of::<MemTrieNode>()
+        self.mask.count_ones() as usize * ArenaPtr::SIZE
     }
 
-    unsafe fn encode_flexible_data(&self, children: Vec<Option<MemTrieNode>>, mut ptr: *mut u8) {
+    fn encode_flexible_data(&self, children: Vec<Option<MemTrieNode>>, target: &mut ArenaSlice) {
         assert_eq!(children.len(), 16);
+        let mut j = 0;
         for (i, child) in children.into_iter().enumerate() {
             if self.mask & (1 << i) != 0 {
-                // Note: we need to use MaybeUninit here, because the memory
-                // we're writing into is uninitialized. If we do not use
-                // MaybeUninit, the compiler would insert a drop call on the
-                // uninitialized memory as a MemTrieNode, which would segfault.
-                (*(ptr as *mut MaybeUninit<MemTrieNode>)).write(child.unwrap());
-                ptr = ptr.offset(std::mem::size_of::<MemTrieNode>() as isize);
+                target.write_ptr_at(j, &child.unwrap().ptr);
+                j += ArenaPtr::SIZE;
             }
         }
     }
 
-    unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> ChildrenView<'a> {
-        ChildrenView {
-            children: std::slice::from_raw_parts(
-                ptr as *const MemTrieNode,
-                self.mask.count_ones() as usize,
-            ),
-            mask: self.mask,
-        }
-    }
-
-    unsafe fn drop_flexible_data(&self, ptr: *mut u8) {
-        let num_children = self.mask.count_ones() as usize;
-        for i in 0..num_children {
-            let child_ptr = ptr.offset((i * std::mem::size_of::<MemTrieNode>()) as isize);
-            (*(child_ptr as *mut MaybeUninit<MemTrieNode>)).assume_init_drop();
-        }
+    fn decode_flexible_data(&self, source: &ArenaSlice) -> ChildrenView {
+        ChildrenView { mask: self.mask, children: source.clone() }
     }
 }
 
 /// Efficient view of the encoded children data.
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct ChildrenView<'a> {
+#[derive(Debug, Clone)]
+pub struct ChildrenView {
     mask: u16,
-    children: &'a [MemTrieNode],
+    children: ArenaSlice,
 }
 
-impl<'a> ChildrenView<'a> {
+impl ChildrenView {
     /// Gets the child at a specific index (0 to 15).
-    pub fn get(&self, i: usize) -> Option<&'a MemTrieNode> {
+    pub fn get(&self, i: usize) -> Option<MemTrieNode> {
         assert!(i < 16);
         let bit = 1u16 << (i as u16);
         if self.mask & bit == 0 {
@@ -80,7 +68,7 @@ impl<'a> ChildrenView<'a> {
         } else {
             let lower_mask = self.mask & (bit - 1);
             let index = lower_mask.count_ones() as usize;
-            Some(&self.children[index])
+            Some(MemTrieNode::from(self.children.read_ptr_at(index * ArenaPtr::SIZE)))
         }
     }
 
@@ -90,14 +78,16 @@ impl<'a> ChildrenView<'a> {
         let mut j = 0;
         for i in 0..16 {
             if self.mask & (1 << i) != 0 {
-                children.0[i] = Some(self.children[j].hash());
-                j += 1;
+                let child = MemTrieNode::from(self.children.read_ptr_at(j));
+                children.0[i] = Some(child.hash());
+                j += ArenaPtr::SIZE;
             }
         }
         children
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &'a MemTrieNode> {
-        self.children.iter()
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = MemTrieNode> + 'a {
+        (0..self.mask.count_ones() as usize)
+            .map(|i| MemTrieNode::from(self.children.read_ptr_at(i * ArenaPtr::SIZE)))
     }
 }

@@ -4,7 +4,7 @@ use crate::{RawTrieNode, RawTrieNodeWithSize};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 
-impl<'a> MemTrieNodeView<'a> {
+impl MemTrieNodeView {
     pub fn node_hash(self) -> CryptoHash {
         match self {
             Self::Leaf { .. } => {
@@ -13,7 +13,7 @@ impl<'a> MemTrieNodeView<'a> {
             }
             Self::Extension { hash, .. }
             | Self::Branch { hash, .. }
-            | Self::BranchWithValue { hash, .. } => *hash,
+            | Self::BranchWithValue { hash, .. } => hash,
         }
     }
 
@@ -21,14 +21,14 @@ impl<'a> MemTrieNodeView<'a> {
         match self {
             Self::Leaf { value, extension } => {
                 let node = RawTrieNode::Leaf(
-                    extension.to_vec(),
+                    extension.as_slice().to_vec(),
                     value.clone().to_flat_value().to_value_ref(),
                 );
                 let memory_usage = Self::Leaf { value, extension }.memory_usage();
                 RawTrieNodeWithSize { node, memory_usage }
             }
             Self::Extension { extension, child, .. } => {
-                let node = RawTrieNode::Extension(extension.to_vec(), child.hash());
+                let node = RawTrieNode::Extension(extension.as_slice().to_vec(), child.hash());
                 let memory_usage = TRIE_COSTS.node_cost
                     + child.memory_usage()
                     + extension.len() as u64 * TRIE_COSTS.byte_of_key;
@@ -78,10 +78,10 @@ impl<'a> MemTrieNodeView<'a> {
         }
     }
 
-    pub(crate) fn iter_children(&self) -> Box<dyn Iterator<Item = &'a MemTrieNode> + 'a> {
+    pub(crate) fn iter_children<'a>(&'a self) -> Box<dyn Iterator<Item = MemTrieNode> + 'a> {
         match self {
             MemTrieNodeView::Leaf { .. } => Box::new(std::iter::empty()),
-            MemTrieNodeView::Extension { child, .. } => Box::new(std::iter::once(*child)),
+            MemTrieNodeView::Extension { child, .. } => Box::new(std::iter::once(child.clone())),
             MemTrieNodeView::Branch { children, .. }
             | MemTrieNodeView::BranchWithValue { children, .. } => Box::new(children.iter()),
         }

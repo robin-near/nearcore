@@ -6,11 +6,11 @@ mod loading;
 mod tests;
 mod view;
 
-use near_primitives::hash::CryptoHash;
-use near_primitives::state::FlatStateValue;
-
+use super::arena::{ArenaHandle, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
+use near_primitives::hash::CryptoHash;
+use near_primitives::state::FlatStateValue;
 
 /// An efficiently encoded in-memory trie node.
 ///
@@ -20,19 +20,22 @@ use super::flexible_data::value::ValueView;
 ///
 /// To construct a `MemTrieNode`, call `MemTrieNode::new`. To read its contents,
 /// call `MemTrieNode::view()`, which returns a `MemTrieNodeView`.
-#[derive(Debug, Hash, PartialEq, Eq)]
-#[repr(C, packed(1))]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct MemTrieNode {
-    data: *const u8,
+    pub(crate) ptr: ArenaPtr,
 }
 
 impl MemTrieNode {
-    pub fn new(input: InputMemTrieNode) -> Self {
-        unsafe { Self::new_impl(input) }
+    pub fn from(ptr: ArenaPtr) -> Self {
+        Self { ptr }
     }
 
-    pub fn view(&self) -> MemTrieNodeView<'_> {
-        unsafe { self.view_impl() }
+    pub fn new(arena: &ArenaHandle, input: InputMemTrieNode) -> Self {
+        Self::new_impl(arena, input)
+    }
+
+    pub fn view(&self) -> MemTrieNodeView {
+        self.view_impl()
     }
 
     pub fn hash(&self) -> CryptoHash {
@@ -41,18 +44,6 @@ impl MemTrieNode {
 
     pub fn memory_usage(&self) -> u64 {
         self.view().memory_usage()
-    }
-}
-
-impl Clone for MemTrieNode {
-    fn clone(&self) -> Self {
-        unsafe { self.clone_impl() }
-    }
-}
-
-impl Drop for MemTrieNode {
-    fn drop(&mut self) {
-        unsafe { self.drop_impl() }
     }
 }
 
@@ -68,26 +59,26 @@ pub enum InputMemTrieNode {
 /// A view of the encoded data of `MemTrieNode`, obtainable via
 /// `MemTrieNode::view()`.
 #[derive(Debug, Clone)]
-pub enum MemTrieNodeView<'a> {
+pub enum MemTrieNodeView {
     Leaf {
-        extension: &'a [u8],
-        value: ValueView<'a>,
+        extension: ArenaSlice,
+        value: ValueView,
     },
     Extension {
-        hash: &'a CryptoHash,
+        hash: CryptoHash,
         memory_usage: u64,
-        extension: &'a [u8],
-        child: &'a MemTrieNode,
+        extension: ArenaSlice,
+        child: MemTrieNode,
     },
     Branch {
-        hash: &'a CryptoHash,
+        hash: CryptoHash,
         memory_usage: u64,
-        children: ChildrenView<'a>,
+        children: ChildrenView,
     },
     BranchWithValue {
-        hash: &'a CryptoHash,
+        hash: CryptoHash,
         memory_usage: u64,
-        children: ChildrenView<'a>,
-        value: ValueView<'a>,
+        children: ChildrenView,
+        value: ValueView,
     },
 }

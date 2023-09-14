@@ -30,7 +30,7 @@ impl MemTrieLookup {
 
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
-        let mut node = &self.root;
+        let mut node = self.root.clone();
         loop {
             if self.cache.borrow_mut().insert(node.clone()) {
                 self.nodes_count.borrow_mut().db_reads += 1;
@@ -39,14 +39,14 @@ impl MemTrieLookup {
             }
             match node.view() {
                 MemTrieNodeView::Leaf { extension, value } => {
-                    if nibbles == NibbleSlice::from_encoded(extension).0 {
+                    if nibbles == NibbleSlice::from_encoded(extension.as_slice()).0 {
                         return Some(value.to_flat_value());
                     } else {
                         return None;
                     }
                 }
                 MemTrieNodeView::Extension { extension, child, .. } => {
-                    let extension_nibbles = NibbleSlice::from_encoded(extension).0;
+                    let extension_nibbles = NibbleSlice::from_encoded(extension.as_slice()).0;
                     if nibbles.starts_with(&extension_nibbles) {
                         nibbles = nibbles.mid(extension_nibbles.len());
                         node = child;

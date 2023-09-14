@@ -1,16 +1,22 @@
+use crate::trie::mem::arena::{ArenaSlice, BorshFixedSize};
+
 use super::FlexibleDataHeader;
+use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Flexibly-sized data header for a trie extension path (which is simply
 /// a byte array).
-#[repr(C, packed(1))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EncodedExtensionHeader {
     length: u16,
 }
 
+impl BorshFixedSize for EncodedExtensionHeader {
+    const SERIALIZED_SIZE: usize = std::mem::size_of::<u16>();
+}
+
 impl FlexibleDataHeader for EncodedExtensionHeader {
     type InputData = Box<[u8]>;
-    type View<'a> = &'a [u8];
+    type View = ArenaSlice;
     fn from_input(extension: &Box<[u8]>) -> EncodedExtensionHeader {
         EncodedExtensionHeader { length: extension.len() as u16 }
     }
@@ -19,13 +25,11 @@ impl FlexibleDataHeader for EncodedExtensionHeader {
         self.length as usize
     }
 
-    unsafe fn encode_flexible_data(&self, extension: Box<[u8]>, ptr: *mut u8) {
-        std::ptr::copy_nonoverlapping(extension.as_ptr(), ptr, self.length as usize);
+    fn encode_flexible_data(&self, extension: Box<[u8]>, target: &mut ArenaSlice) {
+        target.as_slice_mut().copy_from_slice(&extension);
     }
 
-    unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> &'a [u8] {
-        std::slice::from_raw_parts(ptr, self.length as usize)
+    fn decode_flexible_data<'a>(&'a self, source: &ArenaSlice) -> ArenaSlice {
+        source.clone()
     }
-
-    unsafe fn drop_flexible_data(&self, _ptr: *mut u8) {}
 }

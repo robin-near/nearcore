@@ -1,5 +1,7 @@
 #![allow(dead_code)] // still being implemented
 
+use super::arena::ArenaSlice;
+
 pub mod children;
 pub mod encoding;
 pub mod extension;
@@ -40,9 +42,7 @@ pub trait FlexibleDataHeader {
     /// than InputData so that decoding does not require copying; therefore,
     /// it carries a lifetime. We assume the lifetime of the view is the same
     /// as the lifetime of the header.
-    type View<'a>
-    where
-        Self: 'a;
+    type View;
 
     /// Derives the header (fixed-size part) from the original data.
     fn from_input(data: &Self::InputData) -> Self;
@@ -57,7 +57,7 @@ pub trait FlexibleDataHeader {
     /// exactly `self.flexible_data_length()` bytes to the given memory
     /// location. The caller must ensure that the memory location points into
     /// an allocation that is large enough to hold these bytes.
-    unsafe fn encode_flexible_data(&self, data: Self::InputData, ptr: *mut u8);
+    fn encode_flexible_data(&self, data: Self::InputData, target: &mut ArenaSlice);
 
     /// Decodes the flexibly-sized part of the data from the given memory
     /// location. This function must be implemented in a consistent manner
@@ -65,8 +65,5 @@ pub trait FlexibleDataHeader {
     /// `self.flexible_data_length()` bytes from the given memory location,
     /// and the caller must ensure that the memory pointer is the same one
     /// that was used to encode the data.
-    unsafe fn decode_flexible_data<'a>(&'a self, ptr: *const u8) -> Self::View<'a>;
-
-    /// Drops any objects encoded in the flexible data.
-    unsafe fn drop_flexible_data(&self, ptr: *mut u8);
+    fn decode_flexible_data(&self, source: &ArenaSlice) -> Self::View;
 }

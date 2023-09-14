@@ -1,19 +1,22 @@
+use super::{InputMemTrieNode, MemTrieNode};
+use crate::trie::mem::arena::Arena;
+use crate::trie::mem::node::MemTrieNodeView;
+use crate::trie::Children;
+use crate::{RawTrieNode, RawTrieNodeWithSize};
 use borsh::BorshSerialize;
 use near_primitives::hash::hash;
 use near_primitives::state::{FlatStateValue, ValueRef};
 
-use crate::trie::mem::node::MemTrieNodeView;
-use crate::trie::Children;
-use crate::{RawTrieNode, RawTrieNodeWithSize};
-
-use super::{InputMemTrieNode, MemTrieNode};
-
 #[test]
 fn test_basic_leaf_node_inlined() {
-    let node = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]),
-    });
+    let arena = Arena::new(1);
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]),
+        },
+    );
     let view = node.view();
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
@@ -29,7 +32,7 @@ fn test_basic_leaf_node_inlined() {
     assert_eq!(node.hash(), hash(&view.to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert_eq!(extension, &[0, 1, 2, 3, 4]);
+            assert_eq!(extension.as_slice(), &[0, 1, 2, 3, 4]);
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]));
         }
         _ => panic!(),
@@ -38,11 +41,15 @@ fn test_basic_leaf_node_inlined() {
 
 #[test]
 fn test_basic_leaf_node_ref() {
+    let arena = Arena::new(1);
     let test_hash = hash(&[5, 6, 7, 8, 9]);
-    let node = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
-        value: FlatStateValue::Ref(ValueRef { hash: test_hash, length: 5 }),
-    });
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
+            value: FlatStateValue::Ref(ValueRef { hash: test_hash, length: 5 }),
+        },
+    );
     let view = node.view();
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
@@ -55,7 +62,7 @@ fn test_basic_leaf_node_ref() {
     assert_eq!(node.hash(), hash(&view.to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert_eq!(extension, &[0, 1, 2, 3, 4]);
+            assert_eq!(extension.as_slice(), &[0, 1, 2, 3, 4]);
             assert_eq!(
                 value.to_flat_value(),
                 FlatStateValue::Ref(ValueRef { hash: test_hash, length: 5 })
@@ -67,10 +74,14 @@ fn test_basic_leaf_node_ref() {
 
 #[test]
 fn test_basic_leaf_node_empty_extension_empty_value() {
-    let node = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![]),
-    });
+    let arena = Arena::new(1);
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![]),
+        },
+    );
     let view = node.view();
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
@@ -83,7 +94,7 @@ fn test_basic_leaf_node_empty_extension_empty_value() {
     assert_eq!(node.hash(), hash(&view.to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert!(extension.is_empty());
+            assert!(extension.as_slice().is_empty());
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![]));
         }
         _ => panic!(),
@@ -92,14 +103,21 @@ fn test_basic_leaf_node_empty_extension_empty_value() {
 
 #[test]
 fn test_basic_extension_node() {
-    let child = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]),
-    });
-    let node = MemTrieNode::new(InputMemTrieNode::Extension {
-        extension: vec![5, 6, 7, 8, 9].into_boxed_slice(),
-        child: child.clone(),
-    });
+    let arena = Arena::new(1);
+    let child = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![0, 1, 2, 3, 4].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]),
+        },
+    );
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Extension {
+            extension: vec![5, 6, 7, 8, 9].into_boxed_slice(),
+            child: child.clone(),
+        },
+    );
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -112,10 +130,10 @@ fn test_basic_extension_node() {
     assert_eq!(node.hash(), hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::Extension { hash, memory_usage, extension, child: actual_child } => {
-            assert_eq!(*hash, node.hash());
+            assert_eq!(hash, node.hash());
             assert_eq!(memory_usage, node.memory_usage());
-            assert_eq!(extension, &[5, 6, 7, 8, 9]);
-            assert_eq!(actual_child, &child);
+            assert_eq!(extension.as_slice(), &[5, 6, 7, 8, 9]);
+            assert_eq!(actual_child, child);
         }
         _ => panic!(),
     }
@@ -131,17 +149,27 @@ fn branch_vec(children: Vec<(usize, MemTrieNode)>) -> Vec<Option<MemTrieNode>> {
 
 #[test]
 fn test_basic_branch_node() {
-    let child1 = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![1]),
-    });
-    let child2 = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![1].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![2]),
-    });
-    let node = MemTrieNode::new(InputMemTrieNode::Branch {
-        children: branch_vec(vec![(3, child1.clone()), (5, child2.clone())]),
-    });
+    let arena = Arena::new(1);
+    let child1 = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![1]),
+        },
+    );
+    let child2 = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![1].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![2]),
+        },
+    );
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Branch {
+            children: branch_vec(vec![(3, child1.clone()), (5, child2.clone())]),
+        },
+    );
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -171,15 +199,12 @@ fn test_basic_branch_node() {
     assert_eq!(node.hash(), hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::Branch { hash, memory_usage, children } => {
-            assert_eq!(*hash, node.hash());
+            assert_eq!(hash, node.hash());
             assert_eq!(memory_usage, node.memory_usage());
-            assert_eq!(
-                children.iter().cloned().collect::<Vec<_>>(),
-                vec![child1.clone(), child2.clone()]
-            );
-            assert_eq!(children.get(3).cloned(), Some(child1));
+            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1.clone(), child2.clone()]);
+            assert_eq!(children.get(3), Some(child1));
             assert_eq!(children.get(1), None);
-            assert_eq!(children.get(5).cloned(), Some(child2));
+            assert_eq!(children.get(5), Some(child2));
         }
         _ => panic!(),
     }
@@ -187,18 +212,28 @@ fn test_basic_branch_node() {
 
 #[test]
 fn test_basic_branch_with_value_node() {
-    let child1 = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![1]),
-    });
-    let child2 = MemTrieNode::new(InputMemTrieNode::Leaf {
-        extension: vec![1].into_boxed_slice(),
-        value: FlatStateValue::Inlined(vec![2]),
-    });
-    let node = MemTrieNode::new(InputMemTrieNode::BranchWithValue {
-        children: branch_vec(vec![(0, child1.clone()), (15, child2.clone())]),
-        value: FlatStateValue::Inlined(vec![3, 4, 5]),
-    });
+    let arena = Arena::new(1);
+    let child1 = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![1]),
+        },
+    );
+    let child2 = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::Leaf {
+            extension: vec![1].into_boxed_slice(),
+            value: FlatStateValue::Inlined(vec![2]),
+        },
+    );
+    let node = MemTrieNode::new(
+        &arena,
+        InputMemTrieNode::BranchWithValue {
+            children: branch_vec(vec![(0, child1.clone()), (15, child2.clone())]),
+            value: FlatStateValue::Inlined(vec![3, 4, 5]),
+        },
+    );
     assert_eq!(
         node.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -231,15 +266,12 @@ fn test_basic_branch_with_value_node() {
     assert_eq!(node.hash(), hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap()));
     match node.view() {
         MemTrieNodeView::BranchWithValue { hash, memory_usage, children, value } => {
-            assert_eq!(*hash, node.hash());
+            assert_eq!(hash, node.hash());
             assert_eq!(memory_usage, node.memory_usage());
-            assert_eq!(
-                children.iter().cloned().collect::<Vec<_>>(),
-                vec![child1.clone(), child2.clone()]
-            );
-            assert_eq!(children.get(0).cloned(), Some(child1));
+            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1.clone(), child2.clone()]);
+            assert_eq!(children.get(0), Some(child1));
             assert_eq!(children.get(1), None);
-            assert_eq!(children.get(15).cloned(), Some(child2));
+            assert_eq!(children.get(15), Some(child2));
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![3, 4, 5]));
         }
         _ => panic!(),

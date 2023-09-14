@@ -10,9 +10,11 @@ impl MemTrieNode {
         match decoder.decode::<CommonHeader>().kind {
             NodeKind::Leaf => {}
             _ => {
-                let nonleaf = decoder.decode_as_mut::<NonLeafHeader>();
-                nonleaf.memory_usage = raw_trie_node_with_size.memory_usage;
-                nonleaf.hash = hash(&raw_trie_node_with_size.try_to_vec().unwrap());
+                let nonleaf = NonLeafHeader {
+                    memory_usage: raw_trie_node_with_size.memory_usage,
+                    hash: hash(&raw_trie_node_with_size.try_to_vec().unwrap()),
+                };
+                decoder.overwrite(nonleaf);
             }
         }
     }
@@ -21,7 +23,7 @@ impl MemTrieNode {
         let mut decoder = self.decoder();
         match decoder.decode::<CommonHeader>().kind {
             NodeKind::Leaf => true,
-            _ => decoder.decode::<NonLeafHeader>().memory_usage != 0,
+            _ => decoder.peek::<NonLeafHeader>().memory_usage != 0,
         }
     }
 
@@ -41,10 +43,10 @@ impl MemTrieNode {
     }
 
     /// TODO
-    pub(crate) fn compute_subtree_node_count_and_mark_boundary_subtrees<'a>(
-        &'a self,
+    pub(crate) fn compute_subtree_node_count_and_mark_boundary_subtrees(
+        &self,
         threshold: usize,
-        trees: &mut Vec<&'a MemTrieNode>,
+        trees: &mut Vec<MemTrieNode>,
     ) -> (BoundaryNodeType, usize) {
         let mut total = 1;
         let mut any_children_above_or_at_boundary = false;
@@ -67,7 +69,7 @@ impl MemTrieNode {
                 trees.push(child);
             }
         } else if total >= threshold {
-            trees.push(&self);
+            trees.push(self.clone());
         }
         if total >= threshold {
             (BoundaryNodeType::AboveOrAtBoundary, total)
@@ -81,6 +83,3 @@ pub enum BoundaryNodeType {
     AboveOrAtBoundary,
     BelowBoundary,
 }
-
-unsafe impl Send for MemTrieNode {}
-unsafe impl Sync for MemTrieNode {}
