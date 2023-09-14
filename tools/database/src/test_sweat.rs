@@ -88,10 +88,11 @@ impl TestSweatCommand {
         flush_disk_cache();
         let all_keys = generate_sweat_request_keys(&rocksdb);
         let (request_keys, rest_keys) = all_keys.split_at(self.request_count);
-        warm_up_tries(trie, rest_keys.split_at(self.warmup_count).0);
+        warm_up_tries(trie, &memtrie_lookup, rest_keys.split_at(self.warmup_count).0);
         let mut total_elapsed_trie = Duration::ZERO;
         let mut total_elapsed_mem = Duration::ZERO;
         eprintln!("Executing get_ref for {} keys", request_keys.len());
+        let before_counts = memtrie_lookup.get_nodes_count();
         for key in request_keys.iter().progress() {
             // read trie
             let trie_nodes_before = trie.get_trie_nodes_count();
@@ -111,18 +112,30 @@ impl TestSweatCommand {
             "Elapsed in-memory: {total_elapsed_mem:?} ({:.2}x)",
             total_elapsed_trie.as_secs_f64() / total_elapsed_mem.as_secs_f64()
         );
+        let after_counts = memtrie_lookup.get_nodes_count();
+        eprintln!(
+            "Trie nodes: mem: {}, db: {}",
+            after_counts.mem_reads - before_counts.mem_reads,
+            after_counts.db_reads - before_counts.db_reads
+        );
         eprintln!("Finished SWEAT test");
         Ok(())
     }
 }
 
-fn warm_up_tries(trie: &Trie, keys: &[Vec<u8>]) {
+fn warm_up_tries(trie: &Trie, memtrie: &MemTrieLookup, keys: &[Vec<u8>]) {
     eprintln!("Start tries warmup with {} keys", keys.len());
     let trie_start = Instant::now();
     for key in keys {
         trie.get_ref(&key, near_store::KeyLookupMode::Trie).unwrap();
     }
     eprintln!("Elapsed trie: {:?}", trie_start.elapsed());
+    eprintln!("Start memtrie warmup with {} keys", keys.len());
+    let trie_start = Instant::now();
+    for key in keys {
+        memtrie.get_ref(&key).unwrap();
+    }
+    eprintln!("Elapsed memtrie: {:?}", trie_start.elapsed());
 }
 
 #[allow(dead_code)]
