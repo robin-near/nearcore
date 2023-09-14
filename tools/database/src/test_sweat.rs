@@ -61,7 +61,7 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let mut in_memory_trie = if self.map {
+        let in_memory_trie = if self.map {
             map_trie_from_file(
                 &store,
                 shard_uid,

@@ -41,6 +41,14 @@ impl Arena {
                 .map_mut()
                 .expect("mmap failed")
         };
+        unsafe {
+            nix::sys::mman::madvise(
+                mmap.as_ptr() as *mut _,
+                mmap.len(),
+                nix::sys::mman::MmapAdvise::MADV_RANDOM,
+            )
+            .unwrap();
+        }
         std::mem::forget(reserved);
         mmap
     }
