@@ -6,7 +6,9 @@ mod loading;
 mod tests;
 mod view;
 
-use super::arena::{ArenaHandle, ArenaPtr, ArenaSlice};
+use std::fmt::{Debug, Formatter};
+
+use super::arena::{Arena, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
 use near_primitives::hash::CryptoHash;
@@ -20,30 +22,47 @@ use near_primitives::state::FlatStateValue;
 ///
 /// To construct a `MemTrieNode`, call `MemTrieNode::new`. To read its contents,
 /// call `MemTrieNode::view()`, which returns a `MemTrieNodeView`.
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub struct MemTrieNode {
-    pub(crate) ptr: ArenaPtr,
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct MemTrieNodeId {
+    pub(crate) ptr: usize,
 }
 
-impl MemTrieNode {
-    pub fn from(ptr: ArenaPtr) -> Self {
+impl MemTrieNodeId {
+    pub fn from(ptr: usize) -> Self {
         Self { ptr }
     }
 
-    pub fn new(arena: &ArenaHandle, input: InputMemTrieNode) -> Self {
+    pub fn new(arena: &mut Arena, input: InputMemTrieNode) -> Self {
         Self::new_impl(arena, input)
     }
 
-    pub fn view(&self) -> MemTrieNodeView {
+    pub fn to_ref<'a>(&self, arena: &'a Arena) -> MemTrieNodePtr<'a> {
+        MemTrieNodePtr { ptr: arena.ptr(self.ptr) }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct MemTrieNodePtr<'a> {
+    ptr: ArenaPtr<'a>,
+}
+
+impl<'a> Debug for MemTrieNodePtr<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.id().fmt(f)
+    }
+}
+
+impl<'a> MemTrieNodePtr<'a> {
+    pub fn from(ptr: ArenaPtr<'a>) -> Self {
+        Self { ptr }
+    }
+
+    pub fn view(&self) -> MemTrieNodeView<'a> {
         self.view_impl()
     }
 
-    pub fn hash(&self) -> CryptoHash {
-        self.view().node_hash()
-    }
-
-    pub fn memory_usage(&self) -> u64 {
-        self.view().memory_usage()
+    pub fn id(&self) -> MemTrieNodeId {
+        MemTrieNodeId { ptr: self.ptr.raw_offset() }
     }
 }
 
@@ -51,34 +70,34 @@ impl MemTrieNode {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum InputMemTrieNode {
     Leaf { value: FlatStateValue, extension: Box<[u8]> },
-    Extension { extension: Box<[u8]>, child: MemTrieNode },
-    Branch { children: Vec<Option<MemTrieNode>> },
-    BranchWithValue { children: Vec<Option<MemTrieNode>>, value: FlatStateValue },
+    Extension { extension: Box<[u8]>, child: MemTrieNodeId },
+    Branch { children: Vec<Option<MemTrieNodeId>> },
+    BranchWithValue { children: Vec<Option<MemTrieNodeId>>, value: FlatStateValue },
 }
 
 /// A view of the encoded data of `MemTrieNode`, obtainable via
 /// `MemTrieNode::view()`.
 #[derive(Debug, Clone)]
-pub enum MemTrieNodeView {
+pub enum MemTrieNodeView<'a> {
     Leaf {
-        extension: ArenaSlice,
-        value: ValueView,
+        extension: ArenaSlice<'a>,
+        value: ValueView<'a>,
     },
     Extension {
         hash: CryptoHash,
         memory_usage: u64,
-        extension: ArenaSlice,
-        child: MemTrieNode,
+        extension: ArenaSlice<'a>,
+        child: MemTrieNodePtr<'a>,
     },
     Branch {
         hash: CryptoHash,
         memory_usage: u64,
-        children: ChildrenView,
+        children: ChildrenView<'a>,
     },
     BranchWithValue {
         hash: CryptoHash,
         memory_usage: u64,
-        children: ChildrenView,
-        value: ValueView,
+        children: ChildrenView<'a>,
+        value: ValueView<'a>,
     },
 }

@@ -1,18 +1,18 @@
-use crate::trie::mem::arena::{ArenaHandle, ArenaPtr, ArenaSlice, BorshFixedSize};
+use crate::trie::mem::arena::{Arena, ArenaPtr, ArenaSliceMut, BorshFixedSize};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::Write;
 
 use super::FlexibleDataHeader;
 
 /// Facilitates allocation and encoding of flexibly-sized data.
-pub struct RawEncoder {
-    data: ArenaSlice,
+pub struct RawEncoder<'a> {
+    data: ArenaSliceMut<'a>,
     pos: usize,
 }
 
-impl Write for RawEncoder {
+impl<'a> Write for RawEncoder<'a> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.data.as_slice_mut()[self.pos..self.pos + buf.len()].copy_from_slice(buf);
+        self.data.raw_slice_mut()[self.pos..self.pos + buf.len()].copy_from_slice(buf);
         self.pos += buf.len();
         Ok(buf.len())
     }
@@ -22,10 +22,10 @@ impl Write for RawEncoder {
     }
 }
 
-impl RawEncoder {
+impl<'a> RawEncoder<'a> {
     /// Creates a new memory allocation of the given size, returning an encoder
     /// that can be used to initialize the allocated memory.
-    pub fn new(arena: &ArenaHandle, n: usize) -> RawEncoder {
+    pub fn new(arena: &'a mut Arena, n: usize) -> RawEncoder<'a> {
         let data = arena.alloc(n);
         RawEncoder { data, pos: 0 }
     }
@@ -47,24 +47,24 @@ impl RawEncoder {
 
     /// Finishes the encoding process and returns a pointer to the allocated
     /// memory. The caller is responsible for freeing the pointer later.
-    pub fn finish(self) -> ArenaPtr {
+    pub fn finish(self) -> ArenaSliceMut<'a> {
         assert_eq!(self.pos, self.data.len());
-        self.data.ptr()
+        self.data
     }
 }
 
 /// Facilitates the decoding of flexibly-sized data.
 /// The lifetime 'a should be a lifetime that guarantees the availability of
 /// the memory being decoded from.
-pub struct RawDecoder {
-    data: ArenaPtr,
+pub struct RawDecoder<'a> {
+    data: ArenaPtr<'a>,
     pos: usize,
 }
 
-impl RawDecoder {
+impl<'a> RawDecoder<'a> {
     /// Starts decoding from the given memory location. The location should be
     /// a pointer returned by RawEncoder::finish.
-    pub fn new(data: ArenaPtr) -> RawDecoder {
+    pub fn new(data: ArenaPtr<'a>) -> RawDecoder<'a> {
         RawDecoder { data, pos: 0 }
     }
 
@@ -77,9 +77,9 @@ impl RawDecoder {
         result
     }
 
-    pub fn overwrite<T: BorshSerialize + BorshFixedSize>(&mut self, data: T) {
-        let mut slice = self.data.offset(self.pos).slice(T::SERIALIZED_SIZE);
-        data.serialize(&mut slice.as_slice_mut()).unwrap();
+    pub unsafe fn overwrite<T: BorshSerialize + BorshFixedSize>(&mut self, data: T) {
+        let slice = self.data.offset(self.pos).slice(T::SERIALIZED_SIZE);
+        data.serialize(&mut &mut *slice.as_slice_mut()).unwrap();
         self.pos += T::SERIALIZED_SIZE;
     }
 
@@ -93,7 +93,7 @@ impl RawDecoder {
     /// Decodes a flexibly-sized part of the data at the current position,
     /// and then advances the position by the size of the flexibly-sized part,
     /// as returned by `header.flexible_data_length()`.
-    pub fn decode_flexible<T: FlexibleDataHeader>(&mut self, header: &T) -> T::View {
+    pub fn decode_flexible<T: FlexibleDataHeader>(&mut self, header: &T) -> T::View<'a> {
         let length = header.flexible_data_length();
         let view = header.decode_flexible_data(&self.data.offset(self.pos).slice(length));
         self.pos += length;

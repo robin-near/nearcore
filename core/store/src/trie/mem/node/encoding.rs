@@ -1,13 +1,14 @@
-use crate::trie::mem::arena::{ArenaHandle, BorshFixedSize};
+use crate::trie::mem::arena::{Arena, BorshFixedSize};
 use crate::trie::mem::flexible_data::children::EncodedChildrenHeader;
 use crate::trie::mem::flexible_data::encoding::{RawDecoder, RawEncoder};
 use crate::trie::mem::flexible_data::extension::EncodedExtensionHeader;
 use crate::trie::mem::flexible_data::value::EncodedValueHeader;
 use crate::trie::mem::flexible_data::FlexibleDataHeader;
 use borsh::{BorshDeserialize, BorshSerialize};
+use elastic_array::ElasticArray16;
 use near_primitives::hash::CryptoHash;
 
-use super::{InputMemTrieNode, MemTrieNode, MemTrieNodeView};
+use super::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug, BorshSerialize, BorshDeserialize)]
@@ -94,9 +95,23 @@ impl BorshFixedSize for BranchWithValueHeader {
         + EncodedChildrenHeader::SERIALIZED_SIZE;
 }
 
-impl MemTrieNode {
+impl MemTrieNodeId {
     /// Encodes the data.
-    pub(crate) fn new_impl(arena: &ArenaHandle, node: InputMemTrieNode) -> Self {
+    pub(crate) fn new_impl(arena: &mut Arena, node: InputMemTrieNode) -> Self {
+        match &node {
+            InputMemTrieNode::Extension { child, .. } => {
+                child.add_ref(arena);
+            }
+            InputMemTrieNode::Branch { children }
+            | InputMemTrieNode::BranchWithValue { children, .. } => {
+                for child in children {
+                    if let Some(child) = child {
+                        child.add_ref(arena);
+                    }
+                }
+            }
+            _ => {}
+        }
         let data = match node {
             InputMemTrieNode::Leaf { value, extension } => {
                 let extension_header = EncodedExtensionHeader::from_input(&extension);
@@ -125,7 +140,7 @@ impl MemTrieNode {
                 data.encode(ExtensionHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::Extension },
                     nonleaf: NonLeafHeader::default(),
-                    child: child.ptr.raw_offset(),
+                    child: child.ptr,
                     extension: extension_header,
                 });
                 data.encode_flexible(&extension_header, extension);
@@ -165,15 +180,41 @@ impl MemTrieNode {
                 data.finish()
             }
         };
-        Self { ptr: data }
+        Self { ptr: data.ptr().raw_offset() }
     }
 
-    pub(crate) fn decoder(&self) -> RawDecoder {
+    pub(crate) fn add_ref(&self, arena: &mut Arena) {
+        let mut refcount = arena.slice_mut(self.ptr, 4);
+        let new_refcount = refcount.read_u32_at(0);
+        refcount.write_u32_at(0, new_refcount + 1);
+    }
+
+    pub(crate) fn remove_ref(&self, arena: &mut Arena) {
+        let mut refcount = arena.slice_mut(self.ptr, 4);
+        let new_refcount = refcount.read_u32_at(0) - 1;
+        refcount.write_u32_at(0, new_refcount);
+        if new_refcount == 0 {
+            let mut children_to_unref = ElasticArray16::new();
+            let node_ptr = self.to_ref(arena);
+            for child in node_ptr.view().iter_children() {
+                children_to_unref.push(child.id().ptr);
+            }
+            let alloc_size = node_ptr.size_of_allocation();
+            arena.slice_mut(self.ptr, alloc_size).dealloc();
+            for child in children_to_unref.iter() {
+                MemTrieNodeId::from(*child).remove_ref(arena);
+            }
+        }
+    }
+}
+
+impl<'a> MemTrieNodePtr<'a> {
+    pub(crate) fn decoder(&self) -> RawDecoder<'a> {
         RawDecoder::new(self.ptr.clone())
     }
 
     /// Decodes the data.
-    pub(crate) fn view_impl(&self) -> MemTrieNodeView {
+    pub(crate) fn view_impl(&self) -> MemTrieNodeView<'a> {
         let mut decoder = self.decoder();
         let kind = decoder.peek::<CommonHeader>().kind;
         match kind {
@@ -190,7 +231,7 @@ impl MemTrieNode {
                     hash: header.nonleaf.hash,
                     memory_usage: header.nonleaf.memory_usage,
                     extension,
-                    child: MemTrieNode::from(self.ptr.arena().ptr(header.child)),
+                    child: MemTrieNodePtr::from(self.ptr.arena().ptr(header.child)),
                 }
             }
             NodeKind::Branch => {
@@ -212,6 +253,33 @@ impl MemTrieNode {
                     children,
                     value,
                 }
+            }
+        }
+    }
+
+    fn size_of_allocation(&self) -> usize {
+        let mut decoder = self.decoder();
+        let kind = decoder.peek::<CommonHeader>().kind;
+        match kind {
+            NodeKind::Leaf => {
+                let header = decoder.decode::<LeafHeader>();
+                LeafHeader::SERIALIZED_SIZE
+                    + header.extension.flexible_data_length()
+                    + header.value.flexible_data_length()
+            }
+            NodeKind::Extension => {
+                let header = decoder.decode::<ExtensionHeader>();
+                ExtensionHeader::SERIALIZED_SIZE + header.extension.flexible_data_length()
+            }
+            NodeKind::Branch => {
+                let header = decoder.decode::<BranchHeader>();
+                BranchHeader::SERIALIZED_SIZE + header.children.flexible_data_length()
+            }
+            NodeKind::BranchWithValue => {
+                let header = decoder.decode::<BranchWithValueHeader>();
+                BranchWithValueHeader::SERIALIZED_SIZE
+                    + header.children.flexible_data_length()
+                    + header.value.flexible_data_length()
             }
         }
     }

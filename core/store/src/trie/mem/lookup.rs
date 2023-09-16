@@ -7,18 +7,18 @@ use near_vm_runner::logic::TrieNodesCount;
 
 use crate::{NibbleSlice, Store};
 
-use super::node::{MemTrieNode, MemTrieNodeView};
+use super::node::{MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 
-pub struct MemTrieLookup {
+pub struct MemTrieLookup<'a> {
     shard_uid: ShardUId,
     store: Store,
-    root: MemTrieNode,
-    cache: RefCell<HashSet<MemTrieNode>>,
+    root: MemTrieNodePtr<'a>,
+    cache: RefCell<HashSet<MemTrieNodeId>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
-impl MemTrieLookup {
-    pub fn new(shard_uid: ShardUId, store: Store, root: MemTrieNode) -> Self {
+impl<'a> MemTrieLookup<'a> {
+    pub fn new(shard_uid: ShardUId, store: Store, root: MemTrieNodePtr<'a>) -> Self {
         Self {
             shard_uid,
             store,
@@ -32,7 +32,7 @@ impl MemTrieLookup {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root.clone();
         loop {
-            if self.cache.borrow_mut().insert(node.clone()) {
+            if self.cache.borrow_mut().insert(node.id()) {
                 self.nodes_count.borrow_mut().db_reads += 1;
             } else {
                 self.nodes_count.borrow_mut().mem_reads += 1;

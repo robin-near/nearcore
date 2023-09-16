@@ -79,7 +79,7 @@ impl TestSweatCommand {
         let memtrie_lookup = MemTrieLookup::new(
             shard_uid,
             store.clone(),
-            in_memory_trie.roots.get(&state_root).unwrap().clone(),
+            in_memory_trie.get_root(&state_root).unwrap(),
         );
 
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);

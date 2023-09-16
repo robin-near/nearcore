@@ -1,36 +1,37 @@
-use super::{MemTrieNode, MemTrieNodeView};
+use super::{MemTrieNodePtr, MemTrieNodeView};
 use crate::trie::TRIE_COSTS;
 use crate::{RawTrieNode, RawTrieNodeWithSize};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 
-impl MemTrieNodeView {
-    pub fn node_hash(self) -> CryptoHash {
+impl<'a> MemTrieNodeView<'a> {
+    pub fn node_hash(&self) -> CryptoHash {
         match self {
             Self::Leaf { .. } => {
-                let node = self.to_raw_trie_node_with_size();
+                let node = self.clone().to_raw_trie_node_with_size();
                 hash(&node.try_to_vec().unwrap())
             }
             Self::Extension { hash, .. }
             | Self::Branch { hash, .. }
-            | Self::BranchWithValue { hash, .. } => hash,
+            | Self::BranchWithValue { hash, .. } => *hash,
         }
     }
 
-    pub fn to_raw_trie_node_with_size(self) -> RawTrieNodeWithSize {
+    pub fn to_raw_trie_node_with_size(&self) -> RawTrieNodeWithSize {
         match self {
             Self::Leaf { value, extension } => {
                 let node = RawTrieNode::Leaf(
                     extension.as_slice().to_vec(),
                     value.clone().to_flat_value().to_value_ref(),
                 );
-                let memory_usage = Self::Leaf { value, extension }.memory_usage();
+                let memory_usage = self.memory_usage();
                 RawTrieNodeWithSize { node, memory_usage }
             }
             Self::Extension { extension, child, .. } => {
-                let node = RawTrieNode::Extension(extension.as_slice().to_vec(), child.hash());
+                let view = child.view();
+                let node = RawTrieNode::Extension(extension.as_slice().to_vec(), view.node_hash());
                 let memory_usage = TRIE_COSTS.node_cost
-                    + child.memory_usage()
+                    + view.memory_usage()
                     + extension.len() as u64 * TRIE_COSTS.byte_of_key;
                 RawTrieNodeWithSize { node, memory_usage }
             }
@@ -38,7 +39,7 @@ impl MemTrieNodeView {
                 let node = RawTrieNode::BranchNoValue(children.to_children());
                 let mut memory_usage = TRIE_COSTS.node_cost;
                 for child in children.iter() {
-                    memory_usage += child.memory_usage();
+                    memory_usage += child.view().memory_usage();
                 }
                 RawTrieNodeWithSize { node, memory_usage }
             }
@@ -51,7 +52,7 @@ impl MemTrieNodeView {
                     children.to_children(),
                 );
                 for child in children.iter() {
-                    memory_usage += child.memory_usage();
+                    memory_usage += child.view().memory_usage();
                 }
                 RawTrieNodeWithSize { node, memory_usage }
             }
@@ -78,7 +79,7 @@ impl MemTrieNodeView {
         }
     }
 
-    pub(crate) fn iter_children<'a>(&'a self) -> Box<dyn Iterator<Item = MemTrieNode> + 'a> {
+    pub(crate) fn iter_children<'b>(&'b self) -> Box<dyn Iterator<Item = MemTrieNodePtr<'a>> + 'b> {
         match self {
             MemTrieNodeView::Leaf { .. } => Box::new(std::iter::empty()),
             MemTrieNodeView::Extension { child, .. } => Box::new(std::iter::once(child.clone())),

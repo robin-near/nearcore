@@ -1,8 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use super::FlexibleDataHeader;
-use crate::trie::mem::arena::{ArenaPtr, ArenaSlice, BorshFixedSize};
-use crate::trie::mem::node::MemTrieNode;
+use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut, BorshFixedSize};
+use crate::trie::mem::node::{MemTrieNodeId, MemTrieNodePtr};
 use crate::trie::Children;
 
 /// Flexibly-sized data header for a variable-sized list of children trie nodes.
@@ -18,10 +18,10 @@ impl BorshFixedSize for EncodedChildrenHeader {
 }
 
 impl FlexibleDataHeader for EncodedChildrenHeader {
-    type InputData = Vec<Option<MemTrieNode>>;
-    type View = ChildrenView;
+    type InputData = Vec<Option<MemTrieNodeId>>;
+    type View<'a> = ChildrenView<'a>;
 
-    fn from_input(children: &Vec<Option<MemTrieNode>>) -> EncodedChildrenHeader {
+    fn from_input(children: &Vec<Option<MemTrieNodeId>>) -> EncodedChildrenHeader {
         let mut mask = 0u16;
         for i in 0..16 {
             if children[i].is_some() {
@@ -32,35 +32,39 @@ impl FlexibleDataHeader for EncodedChildrenHeader {
     }
 
     fn flexible_data_length(&self) -> usize {
-        self.mask.count_ones() as usize * ArenaPtr::SIZE
+        self.mask.count_ones() as usize * 8
     }
 
-    fn encode_flexible_data(&self, children: Vec<Option<MemTrieNode>>, target: &mut ArenaSlice) {
+    fn encode_flexible_data(
+        &self,
+        children: Vec<Option<MemTrieNodeId>>,
+        target: &mut ArenaSliceMut<'_>,
+    ) {
         assert_eq!(children.len(), 16);
         let mut j = 0;
         for (i, child) in children.into_iter().enumerate() {
             if self.mask & (1 << i) != 0 {
-                target.write_ptr_at(j, &child.unwrap().ptr);
-                j += ArenaPtr::SIZE;
+                target.write_ptr_at(j, child.unwrap().ptr);
+                j += 8;
             }
         }
     }
 
-    fn decode_flexible_data(&self, source: &ArenaSlice) -> ChildrenView {
+    fn decode_flexible_data<'a>(&self, source: &ArenaSlice<'a>) -> ChildrenView<'a> {
         ChildrenView { mask: self.mask, children: source.clone() }
     }
 }
 
 /// Efficient view of the encoded children data.
 #[derive(Debug, Clone)]
-pub struct ChildrenView {
+pub struct ChildrenView<'a> {
     mask: u16,
-    children: ArenaSlice,
+    children: ArenaSlice<'a>,
 }
 
-impl ChildrenView {
+impl<'a> ChildrenView<'a> {
     /// Gets the child at a specific index (0 to 15).
-    pub fn get(&self, i: usize) -> Option<MemTrieNode> {
+    pub fn get(&self, i: usize) -> Option<MemTrieNodePtr<'a>> {
         assert!(i < 16);
         let bit = 1u16 << (i as u16);
         if self.mask & bit == 0 {
@@ -68,7 +72,7 @@ impl ChildrenView {
         } else {
             let lower_mask = self.mask & (bit - 1);
             let index = lower_mask.count_ones() as usize;
-            Some(MemTrieNode::from(self.children.read_ptr_at(index * ArenaPtr::SIZE)))
+            Some(MemTrieNodePtr::from(self.children.read_ptr_at(index * 8)))
         }
     }
 
@@ -78,16 +82,16 @@ impl ChildrenView {
         let mut j = 0;
         for i in 0..16 {
             if self.mask & (1 << i) != 0 {
-                let child = MemTrieNode::from(self.children.read_ptr_at(j));
-                children.0[i] = Some(child.hash());
-                j += ArenaPtr::SIZE;
+                let child = MemTrieNodePtr::from(self.children.read_ptr_at(j));
+                children.0[i] = Some(child.view().node_hash());
+                j += 8;
             }
         }
         children
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = MemTrieNode> + 'a {
+    pub fn iter<'b>(&'b self) -> impl Iterator<Item = MemTrieNodePtr<'a>> + 'b {
         (0..self.mask.count_ones() as usize)
-            .map(|i| MemTrieNode::from(self.children.read_ptr_at(i * ArenaPtr::SIZE)))
+            .map(|i| MemTrieNodePtr::from(self.children.read_ptr_at(i * 8)))
     }
 }

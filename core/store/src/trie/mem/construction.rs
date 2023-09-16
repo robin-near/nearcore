@@ -1,8 +1,9 @@
-use super::arena::ArenaHandle;
-use super::node::MemTrieNode;
 use crate::trie::mem::node::InputMemTrieNode;
 use crate::NibbleSlice;
 use near_primitives::state::FlatStateValue;
+
+use super::arena::Arena;
+use super::node::MemTrieNodeId;
 
 /// Algorithm to construct a trie from a given stream of sorted leaf values.
 ///
@@ -12,8 +13,8 @@ use near_primitives::state::FlatStateValue;
 /// The algorithm maintains a list of segments, where each segment represents
 /// a subpath of the last key (where path means a sequence of nibbles), and
 /// the segments' subpaths join together to form the last key.
-pub struct TrieConstructor {
-    arena: ArenaHandle,
+pub struct TrieConstructor<'a> {
+    arena: &'a mut Arena,
     segments: Vec<TrieConstructionSegment>,
 }
 
@@ -21,8 +22,8 @@ struct TrieConstructionSegment {
     is_branch: bool,
     trail: Vec<u8>,
     leaf: Option<FlatStateValue>,
-    children: Vec<(u8, MemTrieNode)>,
-    child: Option<MemTrieNode>,
+    children: Vec<(u8, MemTrieNodeId)>,
+    child: Option<MemTrieNodeId>,
 }
 
 impl TrieConstructionSegment {
@@ -46,11 +47,11 @@ impl TrieConstructionSegment {
         self.leaf.is_some() && !self.is_branch
     }
 
-    fn into_node(self, arena: &ArenaHandle) -> MemTrieNode {
+    fn into_node(self, arena: &mut Arena) -> MemTrieNodeId {
         let input_node = if self.is_branch {
             assert!(!self.children.is_empty());
             assert!(self.child.is_none());
-            let mut children: Vec<Option<MemTrieNode>> = Vec::new();
+            let mut children: Vec<Option<MemTrieNodeId>> = Vec::new();
             children.resize_with(16, || None);
             for (i, child) in self.children.into_iter() {
                 children[i as usize] = Some(child);
@@ -72,18 +73,18 @@ impl TrieConstructionSegment {
                 child: self.child.unwrap(),
             }
         };
-        MemTrieNode::new(arena, input_node)
+        MemTrieNodeId::new(arena, input_node)
     }
 }
 
-impl TrieConstructor {
-    pub fn new(arena: ArenaHandle) -> Self {
+impl<'a> TrieConstructor<'a> {
+    pub fn new(arena: &'a mut Arena) -> Self {
         Self { arena, segments: vec![] }
     }
 
     fn pop_segment(&mut self) {
         let segment = self.segments.pop().unwrap();
-        let node = segment.into_node(&self.arena);
+        let node = segment.into_node(self.arena);
         let parent = self.segments.last_mut().unwrap();
         if parent.is_branch {
             parent.children.push((NibbleSlice::from_encoded(&parent.trail).0.at(0), node));
@@ -214,10 +215,10 @@ impl TrieConstructor {
         }
     }
 
-    pub fn finalize(mut self) -> MemTrieNode {
+    pub fn finalize(mut self) -> MemTrieNodeId {
         while self.segments.len() > 1 {
             self.pop_segment();
         }
-        self.segments.into_iter().next().unwrap().into_node(&self.arena)
+        self.segments.into_iter().next().unwrap().into_node(self.arena)
     }
 }

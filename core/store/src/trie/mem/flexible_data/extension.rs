@@ -1,4 +1,4 @@
-use crate::trie::mem::arena::{ArenaSlice, BorshFixedSize};
+use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut, BorshFixedSize};
 
 use super::FlexibleDataHeader;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -16,7 +16,7 @@ impl BorshFixedSize for EncodedExtensionHeader {
 
 impl FlexibleDataHeader for EncodedExtensionHeader {
     type InputData = Box<[u8]>;
-    type View = ArenaSlice;
+    type View<'a> = ArenaSlice<'a>;
     fn from_input(extension: &Box<[u8]>) -> EncodedExtensionHeader {
         EncodedExtensionHeader { length: extension.len() as u16 }
     }
@@ -25,11 +25,11 @@ impl FlexibleDataHeader for EncodedExtensionHeader {
         self.length as usize
     }
 
-    fn encode_flexible_data(&self, extension: Box<[u8]>, target: &mut ArenaSlice) {
-        target.as_slice_mut().copy_from_slice(&extension);
+    fn encode_flexible_data(&self, extension: Box<[u8]>, target: &mut ArenaSliceMut<'_>) {
+        target.raw_slice_mut().copy_from_slice(&extension);
     }
 
-    fn decode_flexible_data<'a>(&'a self, source: &ArenaSlice) -> ArenaSlice {
+    fn decode_flexible_data<'a>(&self, source: &ArenaSlice<'a>) -> ArenaSlice<'a> {
         source.clone()
     }
 }
