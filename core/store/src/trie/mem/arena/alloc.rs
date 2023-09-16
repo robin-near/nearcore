@@ -36,17 +36,21 @@ pub fn initialize_allocator(arena: &mut Arena) {
     }
 }
 
-fn initialize_page(arena: &mut Arena, page_index: usize, allocation_class: usize) -> usize {
+fn initialize_page_with_debug_checks(
+    arena: &mut Arena,
+    page_index: usize,
+    allocation_class: usize,
+) -> usize {
     let mut slice = arena.slice_mut(page_index * PAGE_SIZE, PAGE_SIZE);
     slice.write_u8_at(0, allocation_class as u8);
     let allocation_size = allocation_size(allocation_class);
     let num_allocs = (PAGE_SIZE * 8 - 5 * 8 - 7) / (allocation_size * 8 + 1);
     let flag_bytes_count = (num_allocs + 7) / 8;
     let first_alloc_offset = flag_bytes_count + 5;
-    slice.write_u32_at(1, first_alloc_offset as u32);
     for i in 0..flag_bytes_count {
         slice.write_u8_at(i + 5, 0);
     }
+    slice.write_u32_at(1, first_alloc_offset as u32);
     let first_alloc_ptr = page_index * PAGE_SIZE + first_alloc_offset;
     for i in 0..num_allocs {
         let next = if i == num_allocs - 1 {
@@ -57,6 +61,24 @@ fn initialize_page(arena: &mut Arena, page_index: usize, allocation_class: usize
         slice.write_ptr_at(first_alloc_offset + i * allocation_size, next);
     }
     first_alloc_ptr
+}
+
+fn initialize_page(arena: &mut Arena, page_index: usize, allocation_class: usize) -> usize {
+    if cfg!(debug_assertions) {
+        return initialize_page_with_debug_checks(arena, page_index, allocation_class);
+    }
+    let mut slice = arena.slice_mut(page_index * PAGE_SIZE, PAGE_SIZE);
+    let allocation_size = allocation_size(allocation_class);
+    let num_allocs = PAGE_SIZE / allocation_size;
+    for i in 0..num_allocs {
+        let next = if i == num_allocs - 1 {
+            usize::MAX
+        } else {
+            page_index * PAGE_SIZE + (i + 1) * allocation_size
+        };
+        slice.write_ptr_at(i * allocation_size, next);
+    }
+    page_index * PAGE_SIZE
 }
 
 fn alloc_check(arena: &mut Arena, ptr: usize, size_class: usize, is_dealloc: bool) {
@@ -85,7 +107,9 @@ pub fn allocate<'a>(arena: &'a mut Arena, size: usize) -> ArenaSliceMut<'a> {
     let ptr = arena.ptr(freelist_ptr).read_usize();
     assert!(ptr != usize::MAX);
     let next = arena.slice(ptr, size_of::<usize>()).read_ptr_at(0).raw_offset();
-    alloc_check(arena, ptr, size_class, false);
+    if cfg!(debug_assertions) {
+        alloc_check(arena, ptr, size_class, false);
+    }
     arena.ptr_mut(freelist_ptr).write_usize(next);
     arena.slice_mut(ptr, size)
 }
@@ -96,7 +120,9 @@ pub fn deallocate<'a>(slice: ArenaSliceMut<'a>) {
     let size_class = allocation_class(slice.len);
     let freelist_ptr = (1 + size_class) * 8;
     let freelist = arena.ptr(freelist_ptr).read_usize();
-    alloc_check(arena, ptr, size_class, true);
+    if cfg!(debug_assertions) {
+        alloc_check(arena, ptr, size_class, true);
+    }
     arena.slice_mut(ptr, size_of::<usize>()).write_ptr_at(0, freelist);
     arena.ptr_mut(freelist_ptr).write_usize(ptr);
 }
