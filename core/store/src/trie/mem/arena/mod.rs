@@ -26,7 +26,11 @@ impl Arena {
             "Arena size must be at least {}MB",
             MINIMUM_ARENA_SIZE_IN_MB
         );
-        let mmap = MmapOptions::new(mb_size * PAGE_SIZE).unwrap().map_mut().expect("mmap failed");
+        let mmap = MmapOptions::new(mb_size * PAGE_SIZE)
+            .unwrap()
+            .with_flags(MmapFlags::NO_RESERVE)
+            .map_mut()
+            .expect("mmap failed");
         println!("Arena: {:x}..{:x}", mmap.as_ptr() as usize, mmap.as_ptr() as usize + mmap.len());
         let mut result = Self { mmap, file: None, reserved: None };
         result.init_allocator();
