@@ -8,7 +8,7 @@ pub(crate) const MINIMUM_ARENA_SIZE_IN_MB: usize =
 
 const fn allocation_class(size: usize) -> usize {
     if size <= 128 {
-        (size + 8) / 8 - 1
+        (size + 7) / 8 - 1
     } else if size <= 256 {
         (size - 128 + 63) / 64 + allocation_class(128)
     } else {
@@ -21,7 +21,7 @@ const fn allocation_size(size_class: usize) -> usize {
     if size_class <= allocation_class(128) {
         (size_class + 1) * 8
     } else if size_class <= allocation_class(256) {
-        (size_class - allocation_class(128)) * 64 + 256
+        (size_class - allocation_class(128)) * 64 + 128
     } else {
         256 << (size_class - allocation_class(256))
     }
@@ -174,5 +174,28 @@ mod test {
         let slice = arena.alloc(10);
         assert_eq!(first_alloc_addr, slice.pos);
         slice.dealloc();
+    }
+
+    #[test]
+    fn test_size_classes() {
+        for i in 1..=1048576 {
+            let size_class = super::allocation_class(i);
+            assert!(
+                size_class < super::NUM_ALLOCATION_CLASSES,
+                "size: {}, class: {}",
+                i,
+                size_class
+            );
+            let size = super::allocation_size(size_class);
+            assert!(size >= i, "size: {}, class: {}", i, size_class);
+            if size_class > 0 {
+                assert!(
+                    super::allocation_size(size_class - 1) < i,
+                    "size: {}, class: {}",
+                    i,
+                    size_class
+                );
+            }
+        }
     }
 }
