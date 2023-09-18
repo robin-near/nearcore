@@ -53,38 +53,24 @@ impl Arena {
     }
 
     pub fn new_with_file_backing(file: &std::path::PathBuf, max_size_in_pages: usize) -> Arena {
-        unimplemented!();
-        // let file =
-        //     std::fs::OpenOptions::new().read(true).append(true).create(true).open(file).unwrap();
-        // let mut size = file.metadata().unwrap().len() as usize;
-        // if size % MmapOptions::page_size() != 0 {
-        //     panic!("File size is not a multiple of page size");
-        // }
-        // println!("Mapping a file of size {}", size);
-        // let need_initialization = size == 0;
-        // if need_initialization {
-        //     size = Self::EXPANSION_STEP;
-        //     file.set_len(size as u64).unwrap();
-        // }
-        // let mut reserved = MmapOptions::new(max_size_in_pages * MmapOptions::page_size())
-        //     .unwrap()
-        //     .reserve()
-        //     .expect("reserve failed");
-        // let split = reserved.split_to(size).unwrap();
-        // let mmap = Self::remap_reserved_with_file(split, &file, 0);
-        // let mut result = Self { mmap, file: Some(file), reserved: Some(reserved) };
-        // if need_initialization {
-        //     result.init_allocator();
-        // }
-        // println!(
-        //     "Arena: {:x}..{:x}, reserved: {:x}..{:x}",
-        //     result.mmap.as_ptr() as usize,
-        //     result.mmap.as_ptr() as usize + result.mmap.len(),
-        //     result.reserved.as_ref().unwrap().start() as usize,
-        //     result.reserved.as_ref().unwrap().start() as usize
-        //         + result.reserved.as_ref().unwrap().size()
-        // );
-        // result
+        let _ = std::fs::remove_file(file);
+        let file =
+            std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(file).unwrap();
+        let size = max_size_in_pages * PAGE_SIZE;
+        println!("Mapping a file of size {}", size);
+        file.set_len(size as u64).unwrap();
+        let mmap = unsafe {
+            MmapOptions::new(size)
+                .unwrap()
+                .with_flags(MmapFlags::NO_RESERVE)
+                .with_file(&file, 0)
+                .map_mut()
+                .expect("mmap failed")
+        };
+        println!("Arena: {:x}..{:x}", mmap.as_ptr() as usize, mmap.as_ptr() as usize + mmap.len());
+        let mut result = Self { mmap, file: None, reserved: None };
+        result.init_allocator();
+        result
     }
 
     fn init_allocator(&mut self) {

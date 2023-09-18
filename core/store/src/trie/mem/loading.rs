@@ -19,19 +19,7 @@ pub fn load_trie_from_flat_state(
     state_root: CryptoHash,
     backing_file: Option<std::path::PathBuf>,
 ) -> anyhow::Result<MemTries> {
-    let mut tries = MemTries::new(64 * 1024);
-    // let arena = match backing_file {
-    //     Some(file) => {
-    //         std::fs::OpenOptions::new()
-    //             .truncate(true)
-    //             .write(true)
-    //             .create(true)
-    //             .open(&file)
-    //             .unwrap();
-    //         Arena::new_with_file_backing(&file, 16 * 1024 * 1024)
-    //     }
-    //     None => Arena::new(64 * 1024 * 1024),
-    // };
+    let mut tries = MemTries::new(64 * 1024, backing_file);
 
     tries.construct_root(state_root, |arena| -> anyhow::Result<MemTrieNodeId> {
         println!("Loading trie from flat state...");

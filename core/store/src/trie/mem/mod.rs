@@ -19,8 +19,14 @@ pub struct MemTries {
 }
 
 impl MemTries {
-    pub fn new(arena_size_in_pages: usize) -> Self {
-        Self { arena: Arena::new(arena_size_in_pages), roots: HashMap::new() }
+    pub fn new(arena_size_in_pages: usize, backing_file: Option<std::path::PathBuf>) -> Self {
+        Self {
+            arena: match backing_file {
+                Some(path) => Arena::new_with_file_backing(&path, arena_size_in_pages),
+                None => Arena::new(arena_size_in_pages),
+            },
+            roots: HashMap::new(),
+        }
     }
 
     pub fn construct_root<Error>(
