@@ -1,8 +1,9 @@
 use super::{MemTrieNodePtr, MemTrieNodeView};
 use crate::trie::TRIE_COSTS;
-use crate::{RawTrieNode, RawTrieNodeWithSize};
+use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
+use near_primitives::state::FlatStateValue;
 
 impl<'a> MemTrieNodeView<'a> {
     pub fn node_hash(&self) -> CryptoHash {
@@ -85,6 +86,47 @@ impl<'a> MemTrieNodeView<'a> {
             MemTrieNodeView::Extension { child, .. } => Box::new(std::iter::once(child.clone())),
             MemTrieNodeView::Branch { children, .. }
             | MemTrieNodeView::BranchWithValue { children, .. } => Box::new(children.iter()),
+        }
+    }
+
+    // INSERT/DELETE LOGIC
+
+    // insert to root
+    // todo: consider already dropping hash & mem usage. but maybe idc
+    pub fn insert(&self, key: &[u8], value: FlatStateValue) {
+        let mut node = self.clone();
+        let mut partial = NibbleSlice::new(key);
+        // I think we don't need path as we can update both mem & hashes on flatten.
+        // let mut path = Vec::new();
+
+        let handle_branch = |children| -> bool {
+            partial = NibbleSlice::new(key);
+            false
+        };
+
+        loop {
+            match &node {
+                // Skipping Empty case. Maybe we should add it on rollout
+                MemTrieNodeView::Branch { children, .. } => {
+                    if handle_branch(children) {
+                        break;
+                    }
+                }
+                MemTrieNodeView::BranchWithValue { children, value, .. } => {
+                    if partial.is_empty() {
+                        // remove value somehow
+                    }
+                    if handle_branch(children) {
+                        break;
+                    }
+                }
+                MemTrieNodeView::Leaf { extension, value } => {
+                    // todo
+                }
+                MemTrieNodeView::Extension { extension, child, .. } => {
+                    // todo
+                }
+            }
         }
     }
 }
