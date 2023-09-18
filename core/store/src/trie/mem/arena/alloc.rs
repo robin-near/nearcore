@@ -2,28 +2,28 @@ use std::mem::size_of;
 
 use super::{Arena, ArenaSliceMut};
 
-pub(crate) const PAGE_SIZE: usize = 1024 * 1024;
+pub(crate) const PAGE_SIZE: usize = 256 * 1024;
 pub(crate) const MINIMUM_ARENA_SIZE_IN_MB: usize =
     (PAGE_SIZE + NUM_ALLOCATION_CLASSES * PAGE_SIZE) / 1024 / 1024;
 
 const fn allocation_class(size: usize) -> usize {
-    if size <= 128 {
+    if size <= 256 {
         (size + 7) / 8 - 1
-    } else if size <= 256 {
-        (size - 128 + 63) / 64 + allocation_class(128)
+    } else if size <= 512 {
+        (size - 256 + 63) / 64 + allocation_class(256)
     } else {
-        ((255 as usize).leading_zeros() - (size - 1).leading_zeros()) as usize
-            + allocation_class(256)
+        ((511 as usize).leading_zeros() - (size - 1).leading_zeros()) as usize
+            + allocation_class(512)
     }
 }
 
 const fn allocation_size(size_class: usize) -> usize {
-    if size_class <= allocation_class(128) {
+    if size_class <= allocation_class(256) {
         (size_class + 1) * 8
-    } else if size_class <= allocation_class(256) {
-        (size_class - allocation_class(128)) * 64 + 128
+    } else if size_class <= allocation_class(512) {
+        (size_class - allocation_class(256)) * 64 + 256
     } else {
-        256 << (size_class - allocation_class(256))
+        512 << (size_class - allocation_class(512))
     }
 }
 
@@ -165,6 +165,8 @@ pub fn print_alloc_stats(arena: &Arena) {
 mod test {
     use crate::trie::mem::arena::Arena;
 
+    use super::PAGE_SIZE;
+
     #[test]
     fn test_allocate() {
         let mut arena = Arena::new(100);
@@ -178,7 +180,7 @@ mod test {
 
     #[test]
     fn test_size_classes() {
-        for i in 1..=1048576 {
+        for i in 1..=PAGE_SIZE {
             let size_class = super::allocation_class(i);
             assert!(
                 size_class < super::NUM_ALLOCATION_CLASSES,
