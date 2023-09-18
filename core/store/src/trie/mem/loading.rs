@@ -87,6 +87,7 @@ pub fn load_trie_from_flat_state(
         }
         Ok(root.id())
     })?;
+    tries.arena.print_alloc_stats();
     Ok(tries)
 }
 

@@ -2,7 +2,7 @@ mod alloc;
 
 use crate::trie::mem::arena::alloc::{MINIMUM_ARENA_SIZE_IN_MB, PAGE_SIZE};
 
-use self::alloc::{allocate, deallocate, initialize_allocator};
+use self::alloc::{allocate, deallocate, initialize_allocator, print_alloc_stats};
 use borsh::{BorshDeserialize, BorshSerialize};
 use mmap_rs::{MmapFlags, MmapMut, MmapOptions, Reserved, UnsafeMmapFlags};
 use std::fmt::{Debug, Formatter};
@@ -135,6 +135,10 @@ impl Arena {
 
     pub fn flush(&self) {
         self.mmap.flush(0..self.mmap.len()).unwrap();
+    }
+
+    pub fn print_alloc_stats(&self) {
+        print_alloc_stats(self);
     }
 }
 

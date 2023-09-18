@@ -29,6 +29,8 @@ const fn allocation_size(size_class: usize) -> usize {
 
 const NUM_ALLOCATION_CLASSES: usize = allocation_class(PAGE_SIZE) + 1;
 
+const ENABLE_ARENA_DEBUG_CHECKS: bool = true;
+
 pub fn initialize_allocator(arena: &mut Arena) {
     arena.ptr_mut(0).write_usize(1);
     for i in 0..NUM_ALLOCATION_CLASSES {
@@ -64,9 +66,9 @@ fn initialize_page_with_debug_checks(
 }
 
 fn initialize_page(arena: &mut Arena, page_index: usize, allocation_class: usize) -> usize {
-    // if cfg!(debug_assertions) {
-    //     return initialize_page_with_debug_checks(arena, page_index, allocation_class);
-    // }
+    if ENABLE_ARENA_DEBUG_CHECKS {
+        return initialize_page_with_debug_checks(arena, page_index, allocation_class);
+    }
     let mut slice = arena.slice_mut(page_index * PAGE_SIZE, PAGE_SIZE);
     let allocation_size = allocation_size(allocation_class);
     let num_allocs = PAGE_SIZE / allocation_size;
@@ -107,9 +109,9 @@ pub fn allocate<'a>(arena: &'a mut Arena, size: usize) -> ArenaSliceMut<'a> {
     let ptr = arena.ptr(freelist_ptr).read_usize();
     assert!(ptr != usize::MAX);
     let next = arena.slice(ptr, size_of::<usize>()).read_ptr_at(0).raw_offset();
-    // if cfg!(debug_assertions) {
-    //     alloc_check(arena, ptr, size_class, false);
-    // }
+    if ENABLE_ARENA_DEBUG_CHECKS {
+        alloc_check(arena, ptr, size_class, false);
+    }
     arena.ptr_mut(freelist_ptr).write_usize(next);
     arena.slice_mut(ptr, size)
 }
@@ -120,11 +122,43 @@ pub fn deallocate<'a>(slice: ArenaSliceMut<'a>) {
     let size_class = allocation_class(slice.len);
     let freelist_ptr = (1 + size_class) * 8;
     let freelist = arena.ptr(freelist_ptr).read_usize();
-    // if cfg!(debug_assertions) {
-    //     alloc_check(arena, ptr, size_class, true);
-    // }
+    if ENABLE_ARENA_DEBUG_CHECKS {
+        alloc_check(arena, ptr, size_class, true);
+    }
     arena.slice_mut(ptr, size_of::<usize>()).write_ptr_at(0, freelist);
     arena.ptr_mut(freelist_ptr).write_usize(ptr);
+}
+
+pub fn print_alloc_stats(arena: &Arena) {
+    if !ENABLE_ARENA_DEBUG_CHECKS {
+        println!("Arena debug checks are disabled");
+        return;
+    }
+    let last_page = arena.ptr(0).read_usize();
+    println!("Number of pages used: {}", last_page);
+    let mut page_by_allocation_class = [0 as usize; NUM_ALLOCATION_CLASSES];
+    let mut allocs_by_allocation_class = [0 as usize; NUM_ALLOCATION_CLASSES];
+    for i in 1..last_page {
+        let slice = arena.slice(i * PAGE_SIZE, PAGE_SIZE);
+        let allocation_class = slice.read_u8_at(0) as usize;
+        page_by_allocation_class[allocation_class] += 1;
+        let first_alloc_offset = slice.read_u32_at(1) as usize;
+        for i in 5..first_alloc_offset {
+            let flag = slice.read_u8_at(i);
+            allocs_by_allocation_class[allocation_class] += flag.count_ones() as usize;
+        }
+    }
+    for i in 0..NUM_ALLOCATION_CLASSES {
+        let slots_per_page = (PAGE_SIZE * 8 - 5 * 8 - 7) / (allocation_size(i) * 8 + 1);
+        println!(
+            "Allocation class {} ({} bytes): {} pages, {}/{} allocations",
+            i,
+            allocation_size(i),
+            page_by_allocation_class[i],
+            allocs_by_allocation_class[i],
+            page_by_allocation_class[i] * slots_per_page
+        );
+    }
 }
 
 #[cfg(test)]
