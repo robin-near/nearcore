@@ -39,7 +39,7 @@ impl TrieConstructionSegment {
 
     fn new_extension(trail: Vec<u8>) -> Self {
         let nibbles = NibbleSlice::from_encoded(&trail);
-        assert!(nibbles.1 || nibbles.0.len() > 0);
+        assert!(nibbles.1 || !nibbles.0.is_empty());
         Self { is_branch: false, trail, leaf: None, children: Vec::new(), child: None }
     }
 
@@ -95,14 +95,12 @@ impl<'a> TrieConstructor<'a> {
     }
 
     pub fn add_leaf(&mut self, key: &[u8], value: FlatStateValue) {
-        // println!("State before adding leaf {:?}: {:?}", key, self);
         let mut nibbles = NibbleSlice::new(key);
         let mut i = 0;
         while i < self.segments.len() {
-            // println!("    Sweeping index {} nibble path {:?}", i, nibbles);
             // We can't be inserting a prefix into the existing path because that
             // would violate ordering.
-            assert!(nibbles.len() > 0);
+            assert!(!nibbles.is_empty());
 
             let segment = &self.segments[i];
             let (extension_nibbles, _) = NibbleSlice::from_encoded(&segment.trail);
@@ -121,7 +119,6 @@ impl<'a> TrieConstructor<'a> {
 
             // If we have a common prefix, split that first.
             if common_prefix_len > 0 {
-                // println!("      Splitting extension path in the middle");
                 let mut segment = self.segments.pop().unwrap();
                 assert!(!segment.is_branch);
                 let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
@@ -182,16 +179,15 @@ impl<'a> TrieConstructor<'a> {
         // When we exit the loop, either we exited because we ran out of segments
         // (in which case this leaf has the previous leaf as a prefix) or we
         // exited in the middle and we've just added a new branch.
-        // println!("      Adding nibbles {:?} in the end", nibbles);
         if !self.segments.is_empty() && self.segments.last().unwrap().is_leaf() {
             // This is the case where we ran out of segments.
-            assert!(nibbles.len() > 0);
+            assert!(!nibbles.is_empty());
             // We need to turn the leaf node into an extension node, add a branch node
             // to store the previous leaf, and add the new leaf in.
             let segment = self.segments.pop().unwrap();
             let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
             assert!(was_leaf);
-            if extension_nibbles.len() > 0 {
+            if !extension_nibbles.is_empty() {
                 // Only make an extension segment if it was a leaf with an extension.
                 let top_segment = TrieConstructionSegment::new_extension(
                     extension_nibbles.encoded(false).to_vec(),

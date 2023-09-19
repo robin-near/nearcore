@@ -25,7 +25,7 @@ impl<'a> MemTrieLookup<'a> {
 
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
-        let mut node = self.root.clone();
+        let mut node = self.root;
         loop {
             if self.cache.borrow_mut().insert(node.id()) {
                 self.nodes_count.borrow_mut().db_reads += 1;

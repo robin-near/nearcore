@@ -250,7 +250,7 @@ impl MemTrieNodeId {
 
 impl<'a> MemTrieNodePtr<'a> {
     pub(crate) fn decoder(&self) -> RawDecoder<'a> {
-        RawDecoder::new(self.ptr.clone())
+        RawDecoder::new(self.ptr)
     }
 
     /// Decodes the data.

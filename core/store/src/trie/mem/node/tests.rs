@@ -112,10 +112,7 @@ fn test_basic_extension_node() {
     );
     let node = MemTrieNodeId::new(
         &mut arena,
-        InputMemTrieNode::Extension {
-            extension: vec![5, 6, 7, 8, 9].into_boxed_slice(),
-            child: child.clone(),
-        },
+        InputMemTrieNode::Extension { extension: vec![5, 6, 7, 8, 9].into_boxed_slice(), child },
     );
     node.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
     let child_ptr = child.to_ref(arena.memory());

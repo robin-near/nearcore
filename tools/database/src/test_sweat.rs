@@ -1,7 +1,6 @@
 use clap::Parser;
 use indicatif::ProgressIterator;
 use near_primitives::borsh::{BorshDeserialize, BorshSerialize};
-use near_primitives::config::ExtCostsConfig;
 use near_primitives::state::FlatStateValue;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::AccountId;
@@ -60,7 +59,6 @@ impl TestSweatCommand {
 
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
-        let costs_config = ExtCostsConfig::test();
         flush_disk_cache();
         let all_keys = generate_sweat_request_keys(&rocksdb);
         let (request_keys, rest_keys) = all_keys.split_at(self.request_count);
@@ -70,14 +68,10 @@ impl TestSweatCommand {
         eprintln!("Executing get_ref for {} keys", request_keys.len());
         let before_counts = memtrie_lookup.get_nodes_count();
         for key in request_keys.iter().progress() {
-            // read trie
-            let trie_nodes_before = trie.get_trie_nodes_count();
             let start_trie = Instant::now();
             let trie_value_ref = trie.get_ref(key, near_store::KeyLookupMode::Trie).unwrap();
             total_elapsed_trie += start_trie.elapsed();
             assert!(trie_value_ref.is_some());
-            let trie_nodes_count =
-                trie.get_trie_nodes_count().checked_sub(&trie_nodes_before).unwrap();
             let start_in_memory = Instant::now();
             let in_memory_data = memtrie_lookup.get_ref(key);
             total_elapsed_mem += start_in_memory.elapsed();

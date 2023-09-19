@@ -120,8 +120,7 @@ mod tests {
             &CryptoHash::default(),
             &changes,
         );
-        let state_root =
-            test_populate_trie(&shard_tries, &Trie::EMPTY_ROOT, shard_uid, changes.clone());
+        let state_root = test_populate_trie(&shard_tries, &Trie::EMPTY_ROOT, shard_uid, changes);
 
         eprintln!("Trie and flat storage populated");
         let in_memory_trie =

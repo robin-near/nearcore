@@ -33,7 +33,7 @@ pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
         .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store, shard_uid), shard_uid))
         .unwrap()
         .unwrap();
-    chunk.state_root().clone()
+    *chunk.state_root()
 }
 
 pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {

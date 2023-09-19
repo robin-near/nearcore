@@ -20,7 +20,7 @@ pub struct MemTrieCmd {
 impl MemTrieCmd {
     pub fn run(&self, near_config: NearConfig, home: &Path) -> anyhow::Result<()> {
         let rocksdb = Arc::new(open_rocksdb(home, near_store::Mode::ReadOnly)?);
-        let store = near_store::NodeStorage::new(rocksdb.clone()).get_hot_store();
+        let store = near_store::NodeStorage::new(rocksdb).get_hot_store();
         let genesis_config = &near_config.genesis.config;
         // Note: this is not necessarily correct; it's just an estimate of the shard layout.
         let head =
