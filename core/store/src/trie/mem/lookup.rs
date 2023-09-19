@@ -1,27 +1,22 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-use near_primitives::shard_layout::ShardUId;
 use near_primitives::state::FlatStateValue;
 use near_vm_runner::logic::TrieNodesCount;
 
-use crate::{NibbleSlice, Store};
+use crate::NibbleSlice;
 
 use super::node::{MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 
 pub struct MemTrieLookup<'a> {
-    shard_uid: ShardUId,
-    store: Store,
     root: MemTrieNodePtr<'a>,
     cache: RefCell<HashSet<MemTrieNodeId>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
 impl<'a> MemTrieLookup<'a> {
-    pub fn new(shard_uid: ShardUId, store: Store, root: MemTrieNodePtr<'a>) -> Self {
+    pub fn new(root: MemTrieNodePtr<'a>) -> Self {
         Self {
-            shard_uid,
-            store,
             root,
             cache: RefCell::new(HashSet::new()),
             nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),

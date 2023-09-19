@@ -17,17 +17,16 @@ pub fn load_trie_from_flat_state(
     store: &Store,
     shard_uid: ShardUId,
     state_root: CryptoHash,
-    backing_file: Option<std::path::PathBuf>,
 ) -> anyhow::Result<MemTries> {
-    let mut tries = MemTries::new(64 * 1024, backing_file);
+    let mut tries = MemTries::new(64 * 1024 * 1024 * 1024);
 
     tries.construct_root(state_root, |arena| -> anyhow::Result<MemTrieNodeId> {
         println!("Loading trie from flat state...");
         let load_start = Instant::now();
         let mut recon = TrieConstructor::new(arena);
         let mut loaded = 0;
-        for item in
-            store.iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
+        for item in store
+            .iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &shard_uid.try_to_vec().unwrap())
         {
             let (key, value) = item?;
             let (_, key) = decode_flat_state_db_key(&key)?;
@@ -42,7 +41,7 @@ pub fn load_trie_from_flat_state(
                 );
             }
         }
-        let root = recon.finalize().to_ref(arena);
+        let root_id = recon.finalize();
 
         println!(
             "[{:?}] Loaded {} keys; computing hash and memory usage...",
@@ -50,19 +49,22 @@ pub fn load_trie_from_flat_state(
             loaded
         );
         let mut subtrees = Vec::new();
-        let (_, total_nodes) =
-            root.compute_subtree_node_count_and_mark_boundary_subtrees(1000, &mut subtrees);
-        println!("[{:?}] Total node count = {}, parallel subtree count = {}, going to compute hash and memory for subtrees", load_start.elapsed(), total_nodes, subtrees.len());
-        subtrees.into_par_iter().for_each(|subtree| unsafe {
-            subtree.compute_hash_and_memory_usage_recursively();
+        root_id.as_ptr_mut(arena.memory_mut()).take_small_subtrees(1000, &mut subtrees);
+        println!(
+            "[{:?}] Going to compute hash and memory for {} subtrees in parallel...",
+            load_start.elapsed(),
+            subtrees.len()
+        );
+        subtrees.into_par_iter().for_each(|mut subtree| {
+            subtree.compute_hash_recursively();
         });
         println!(
             "[{:?}] Done computing hash and memory usage for subtrees; now computing root hash",
             load_start.elapsed()
         );
-        unsafe {
-            root.compute_hash_and_memory_usage_recursively();
-        }
+        root_id.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
+
+        let root = root_id.to_ref(arena.memory());
         if root.view().node_hash() != state_root {
             panic!(
                 "[{:?}] State root mismatch: expected {:?}, actual {:?}",
@@ -75,22 +77,7 @@ pub fn load_trie_from_flat_state(
         }
         Ok(root.id())
     })?;
-    tries.arena.print_alloc_stats();
     Ok(tries)
-}
-
-pub fn map_trie_from_file(
-    store: &Store,
-    shard_uid: ShardUId,
-    state_root: CryptoHash,
-    backing_file: std::path::PathBuf,
-) -> anyhow::Result<MemTries> {
-    unimplemented!();
-    // let arena = Arena::new_with_file_backing(&backing_file, 16 * 1024 * 1024);
-    // let root_ptr_slice = arena.slice(ArenaPtr::SIZE, ArenaPtr::SIZE);
-    // let root = MemTrieNode::from(root_ptr_slice.read_ptr_at(0));
-    // println!("Root is at {:x}", root.ptr.raw_offset());
-    // Ok(MemTries { arena, roots: HashMap::from_iter([(state_root, root)].into_iter()) })
 }
 
 #[cfg(test)]
@@ -106,13 +93,13 @@ mod tests {
     };
     use crate::trie::mem::arena::Arena;
     use crate::trie::mem::construction::TrieConstructor;
-    use crate::trie::mem::loading::{load_trie_from_flat_state, map_trie_from_file};
+    use crate::trie::mem::loading::load_trie_from_flat_state;
     use crate::trie::mem::lookup::MemTrieLookup;
     use crate::{KeyLookupMode, NibbleSlice, Trie, TrieUpdate};
 
     #[test]
     fn test_basic_reconstruction() {
-        let mut arena = Arena::new(10);
+        let mut arena = Arena::new(64 * 1024 * 1024 * 1024);
         let mut rec = TrieConstructor::new(&mut arena);
         rec.add_leaf(b"aaaaa", FlatStateValue::Inlined(b"a".to_vec()));
         rec.add_leaf(b"aaaab", FlatStateValue::Inlined(b"b".to_vec()));
@@ -121,7 +108,7 @@ mod tests {
         rec.finalize();
     }
 
-    fn check(keys: Vec<Vec<u8>>, file: Option<String>) {
+    fn check(keys: Vec<Vec<u8>>) {
         let shard_tries = create_tries();
         let shard_uid = ShardUId::single_shard();
         let changes = keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect::<Vec<_>>();
@@ -137,65 +124,23 @@ mod tests {
             test_populate_trie(&shard_tries, &Trie::EMPTY_ROOT, shard_uid, changes.clone());
 
         eprintln!("Trie and flat storage populated");
-        let in_memory_trie = load_trie_from_flat_state(
-            &shard_tries.get_store(),
-            shard_uid,
-            state_root,
-            file.as_ref().map(|f| std::path::PathBuf::from(f)),
-        )
-        .unwrap();
+        let in_memory_trie =
+            load_trie_from_flat_state(&shard_tries.get_store(), shard_uid, state_root).unwrap();
         eprintln!("In memory trie loaded");
 
         let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
-        let lookup = MemTrieLookup::new(
-            shard_uid,
-            shard_tries.get_store(),
-            in_memory_trie.get_root(&state_root).unwrap(),
-        );
+        let lookup = MemTrieLookup::new(in_memory_trie.get_root(&state_root).unwrap());
         for key in keys.iter() {
             let actual_value_ref = lookup.get_ref(key).map(|v| v.to_value_ref());
             let expected_value_ref = trie.get_ref(key, KeyLookupMode::Trie).unwrap();
             assert_eq!(actual_value_ref, expected_value_ref, "{:?}", NibbleSlice::new(key));
             assert_eq!(lookup.get_nodes_count(), trie.get_trie_nodes_count());
         }
-
-        drop(trie_update);
-        drop(lookup);
-        drop(in_memory_trie);
-        if file.is_some() {
-            let in_memory_trie = map_trie_from_file(
-                &shard_tries.get_store(),
-                shard_uid,
-                state_root,
-                std::path::PathBuf::from(file.unwrap()),
-            )
-            .unwrap();
-            let trie_update =
-                TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
-            trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
-            let trie = trie_update.trie();
-            let lookup = MemTrieLookup::new(
-                shard_uid,
-                shard_tries.get_store(),
-                in_memory_trie.get_root(&state_root).unwrap(),
-            );
-            for key in keys.iter() {
-                let actual_value_ref = lookup.get_ref(key).map(|v| v.to_value_ref());
-                let expected_value_ref = trie.get_ref(key, KeyLookupMode::Trie).unwrap();
-                assert_eq!(actual_value_ref, expected_value_ref, "{:?}", NibbleSlice::new(key));
-                assert_eq!(lookup.get_nodes_count(), trie.get_trie_nodes_count());
-            }
-        }
     }
 
-    fn check_random(
-        max_key_len: usize,
-        max_keys_count: usize,
-        test_count: usize,
-        file: Option<String>,
-    ) {
+    fn check_random(max_key_len: usize, max_keys_count: usize, test_count: usize) {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..test_count {
             let key_cnt = rng.gen_range(1..=max_keys_count);
@@ -209,47 +154,37 @@ mod tests {
                 }
                 keys.push(key);
             }
-            check(keys, file.clone());
+            check(keys);
         }
     }
 
     #[test]
-    fn flat_nodes_basic() {
-        check(vec![vec![0, 1], vec![1, 0]], None);
+    fn test_memtrie_basic() {
+        check(vec![vec![0, 1], vec![1, 0]]);
     }
 
     #[test]
-    fn flat_nodes_basic_file() {
-        check(vec![vec![0, 1], vec![1, 0]], Some("testtrie".to_owned()));
+    fn test_memtrie_rand_small() {
+        check_random(3, 20, 10);
     }
 
     #[test]
-    fn flat_nodes_rand_small() {
-        check_random(3, 20, 10, None);
+    fn test_memtrie_rand_many_keys() {
+        check_random(5, 1000, 10);
     }
 
     #[test]
-    fn flat_nodes_rand_many_keys() {
-        check_random(5, 1000, 10, None);
+    fn test_memtrie_rand_long_keys() {
+        check_random(20, 100, 10);
     }
 
     #[test]
-    fn flat_nodes_rand_long_keys() {
-        check_random(20, 100, 10, None);
+    fn test_memtrie_rand_long_long_keys() {
+        check_random(1000, 1000, 1);
     }
 
     #[test]
-    fn flat_nodes_rand_long_long_keys() {
-        check_random(1000, 1000, 1, None);
-    }
-
-    #[test]
-    fn flat_nodes_rand_large_data() {
-        check_random(32, 100000, 10, None);
-    }
-
-    #[test]
-    fn flat_nodes_rand_large_data_file() {
-        check_random(1000, 100000, 10, Some("testtrie".to_owned()));
+    fn test_memtrie_rand_large_data() {
+        check_random(32, 100000, 10);
     }
 }

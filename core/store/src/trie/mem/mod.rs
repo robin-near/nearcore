@@ -1,10 +1,7 @@
-use std::collections::HashMap;
-use std::rc::Rc;
-
-use near_primitives::hash::CryptoHash;
-
 use self::arena::Arena;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
+use near_primitives::hash::CryptoHash;
+use std::collections::HashMap;
 
 mod arena;
 mod construction;
@@ -19,14 +16,8 @@ pub struct MemTries {
 }
 
 impl MemTries {
-    pub fn new(arena_size_in_pages: usize, backing_file: Option<std::path::PathBuf>) -> Self {
-        Self {
-            arena: match backing_file {
-                Some(path) => Arena::new_with_file_backing(&path, arena_size_in_pages),
-                None => Arena::new(arena_size_in_pages),
-            },
-            roots: HashMap::new(),
-        }
+    pub fn new(arena_size_in_pages: usize) -> Self {
+        Self { arena: Arena::new(arena_size_in_pages), roots: HashMap::new() }
     }
 
     pub fn construct_root<Error>(
@@ -41,7 +32,7 @@ impl MemTries {
     }
 
     pub fn get_root<'a>(&'a self, state_root: &CryptoHash) -> Option<MemTrieNodePtr<'a>> {
-        self.roots.get(state_root).map(|id| id.to_ref(&self.arena))
+        self.roots.get(state_root).map(|id| id.to_ref(self.arena.memory()))
     }
 
     pub fn delete_root(&mut self, state_root: &CryptoHash) {

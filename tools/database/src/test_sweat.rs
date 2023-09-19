@@ -7,7 +7,7 @@ use near_primitives::trie_key::TrieKey;
 use near_primitives::types::AccountId;
 use near_store::db::{Database, RocksDB};
 use near_store::flat::store_helper;
-use near_store::trie::mem::loading::{load_trie_from_flat_state, map_trie_from_file};
+use near_store::trie::mem::loading::load_trie_from_flat_state;
 use near_store::trie::mem::lookup::MemTrieLookup;
 use near_store::{Store, Trie, TrieCache, TrieCachingStorage, TrieConfig, TrieUpdate};
 use rand::seq::SliceRandom;
@@ -26,12 +26,6 @@ pub(crate) struct TestSweatCommand {
 
     #[arg(short, long, default_value_t = 100)]
     warmup_count: usize,
-
-    #[arg(long)]
-    trie_file: Option<String>,
-
-    #[arg(long)]
-    map: bool,
 }
 
 const MAX_REQUEST_COUNT: usize = 10000;
@@ -61,26 +55,8 @@ impl TestSweatCommand {
         let storage = TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
         let state_root = flat_head_state_root(&store, &shard_uid);
         let trie_update = TrieUpdate::new(Trie::new(Rc::new(storage), state_root, None));
-        let in_memory_trie = if self.map {
-            map_trie_from_file(
-                &store,
-                shard_uid,
-                state_root,
-                std::path::PathBuf::from(self.trie_file.clone().unwrap()),
-            )?
-        } else {
-            load_trie_from_flat_state(
-                &store,
-                shard_uid,
-                state_root,
-                self.trie_file.clone().map(|f| std::path::PathBuf::from(f)),
-            )?
-        };
-        let memtrie_lookup = MemTrieLookup::new(
-            shard_uid,
-            store.clone(),
-            in_memory_trie.get_root(&state_root).unwrap(),
-        );
+        let in_memory_trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
+        let memtrie_lookup = MemTrieLookup::new(in_memory_trie.get_root(&state_root).unwrap());
 
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();

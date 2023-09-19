@@ -8,7 +8,7 @@ mod view;
 
 use std::fmt::{Debug, Formatter};
 
-use super::arena::{Arena, ArenaPtr, ArenaSlice};
+use super::arena::{Arena, ArenaMemory, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
 use near_primitives::hash::CryptoHash;
@@ -36,7 +36,7 @@ impl MemTrieNodeId {
         Self::new_impl(arena, input)
     }
 
-    pub fn to_ref<'a>(&self, arena: &'a Arena) -> MemTrieNodePtr<'a> {
+    pub fn to_ref<'a>(&self, arena: &'a ArenaMemory) -> MemTrieNodePtr<'a> {
         MemTrieNodePtr { ptr: arena.ptr(self.ptr) }
     }
 }

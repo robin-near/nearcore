@@ -4,8 +4,8 @@ use near_primitives::block::Tip;
 use near_primitives::block_header::BlockHeader;
 use near_primitives::borsh::BorshSerialize;
 use near_primitives::types::ShardId;
-use near_store::trie::mem::loading::{load_trie_from_flat_state, map_trie_from_file};
-use near_store::{DBCol, NibbleSlice, ShardUId, HEAD_KEY};
+use near_store::trie::mem::loading::load_trie_from_flat_state;
+use near_store::{DBCol, ShardUId, HEAD_KEY};
 use nearcore::NearConfig;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,10 +15,6 @@ use std::time::Duration;
 pub struct MemTrieCmd {
     #[clap(long)]
     shard_id: ShardId,
-    #[clap(long)]
-    file: Option<String>,
-    #[clap(long)]
-    map: bool,
 }
 
 impl MemTrieCmd {
@@ -39,21 +35,7 @@ impl MemTrieCmd {
         let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
         let state_root = flat_head_state_root(&store, &shard_uid);
 
-        let _trie = if self.map {
-            map_trie_from_file(
-                &store,
-                shard_uid,
-                state_root,
-                std::path::PathBuf::from(self.file.clone().unwrap()),
-            )?
-        } else {
-            load_trie_from_flat_state(
-                &store,
-                shard_uid,
-                state_root,
-                self.file.clone().map(|f| std::path::PathBuf::from(f)),
-            )?
-        };
+        let _trie = load_trie_from_flat_state(&store, shard_uid, state_root)?;
         for _ in 0..1000000 {
             std::thread::sleep(Duration::from_secs(100));
         }
