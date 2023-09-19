@@ -4,9 +4,11 @@ use crate::trie::mem::flexible_data::encoding::{RawDecoder, RawEncoder};
 use crate::trie::mem::flexible_data::extension::EncodedExtensionHeader;
 use crate::trie::mem::flexible_data::value::EncodedValueHeader;
 use crate::trie::mem::flexible_data::FlexibleDataHeader;
+use crate::trie::TRIE_COSTS;
 use borsh::{BorshDeserialize, BorshSerialize};
 use elastic_array::ElasticArray16;
 use near_primitives::hash::CryptoHash;
+use near_primitives::state::FlatStateValue;
 
 use super::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 
@@ -29,10 +31,16 @@ impl BorshFixedSize for CommonHeader {
     const SERIALIZED_SIZE: usize = std::mem::size_of::<u32>() + std::mem::size_of::<u8>();
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Default)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub(crate) struct NonLeafHeader {
     pub(crate) hash: CryptoHash,
     pub(crate) memory_usage: u64,
+}
+
+impl NonLeafHeader {
+    pub(crate) fn new(memory_usage: u64) -> Self {
+        Self { hash: CryptoHash::default(), memory_usage }
+    }
 }
 
 impl BorshFixedSize for NonLeafHeader {
@@ -112,6 +120,38 @@ impl MemTrieNodeId {
             }
             _ => {}
         }
+        let memory_usage = match &node {
+            InputMemTrieNode::Leaf { .. } => 0,
+            InputMemTrieNode::Extension { extension, child } => {
+                TRIE_COSTS.node_cost
+                    + extension.len() as u64 * TRIE_COSTS.byte_of_key
+                    + child.to_ref(arena.memory()).view().memory_usage()
+            }
+            InputMemTrieNode::Branch { children } => {
+                let mut memory_usage = TRIE_COSTS.node_cost;
+                for child in children.iter() {
+                    if let Some(child) = child {
+                        memory_usage += child.to_ref(arena.memory()).view().memory_usage();
+                    }
+                }
+                memory_usage
+            }
+            InputMemTrieNode::BranchWithValue { children, value } => {
+                let value_len = match value {
+                    FlatStateValue::Ref(value_ref) => value_ref.len(),
+                    FlatStateValue::Inlined(value) => value.len(),
+                };
+                let mut memory_usage = TRIE_COSTS.node_cost
+                    + value_len as u64 * TRIE_COSTS.byte_of_value
+                    + TRIE_COSTS.node_cost;
+                for child in children.iter() {
+                    if let Some(child) = child {
+                        memory_usage += child.to_ref(arena.memory()).view().memory_usage();
+                    }
+                }
+                memory_usage
+            }
+        };
         let data = match node {
             InputMemTrieNode::Leaf { value, extension } => {
                 let extension_header = EncodedExtensionHeader::from_input(&extension);
@@ -139,7 +179,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(ExtensionHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::Extension },
-                    nonleaf: NonLeafHeader::default(),
+                    nonleaf: NonLeafHeader::new(memory_usage),
                     child: child.ptr,
                     extension: extension_header,
                 });
@@ -154,7 +194,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(BranchHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::Branch },
-                    nonleaf: NonLeafHeader::default(),
+                    nonleaf: NonLeafHeader::new(memory_usage),
                     children: children_header,
                 });
                 data.encode_flexible(&children_header, children);
@@ -171,7 +211,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(BranchWithValueHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::BranchWithValue },
-                    nonleaf: NonLeafHeader::default(),
+                    nonleaf: NonLeafHeader::new(memory_usage),
                     children: children_header,
                     value: value_header,
                 });
@@ -184,23 +224,23 @@ impl MemTrieNodeId {
     }
 
     pub(crate) fn add_ref(&self, arena: &mut Arena) {
-        let mut refcount = arena.slice_mut(self.ptr, 4);
+        let mut refcount = arena.memory_mut().slice_mut(self.ptr, 4);
         let new_refcount = refcount.read_u32_at(0);
         refcount.write_u32_at(0, new_refcount + 1);
     }
 
     pub(crate) fn remove_ref(&self, arena: &mut Arena) {
-        let mut refcount = arena.slice_mut(self.ptr, 4);
+        let mut refcount = arena.memory_mut().slice_mut(self.ptr, 4);
         let new_refcount = refcount.read_u32_at(0) - 1;
         refcount.write_u32_at(0, new_refcount);
         if new_refcount == 0 {
             let mut children_to_unref = ElasticArray16::new();
-            let node_ptr = self.to_ref(arena);
+            let node_ptr = self.to_ref(arena.memory());
             for child in node_ptr.view().iter_children() {
                 children_to_unref.push(child.id().ptr);
             }
             let alloc_size = node_ptr.size_of_allocation();
-            arena.slice_mut(self.ptr, alloc_size).dealloc();
+            arena.dealloc(self.ptr, alloc_size);
             for child in children_to_unref.iter() {
                 MemTrieNodeId::from(*child).remove_ref(arena);
             }
@@ -210,7 +250,7 @@ impl MemTrieNodeId {
 
 impl<'a> MemTrieNodePtr<'a> {
     pub(crate) fn decoder(&self) -> RawDecoder<'a> {
-        RawDecoder::new(self.ptr.clone())
+        RawDecoder::new(self.ptr)
     }
 
     /// Decodes the data.

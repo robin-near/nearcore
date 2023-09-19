@@ -16,7 +16,7 @@ fn test_basic_leaf_node_inlined() {
             value: FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]),
         },
     );
-    let view = node.to_ref(&arena).view();
+    let view = node.to_ref(arena.memory()).view();
     assert_eq!(
         view.to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -49,7 +49,7 @@ fn test_basic_leaf_node_ref() {
             value: FlatStateValue::Ref(ValueRef { hash: test_hash, length: 5 }),
         },
     );
-    let view = node.to_ref(&arena).view();
+    let view = node.to_ref(arena.memory()).view();
     assert_eq!(
         view.to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -81,7 +81,7 @@ fn test_basic_leaf_node_empty_extension_empty_value() {
             value: FlatStateValue::Inlined(vec![]),
         },
     );
-    let view = node.to_ref(&arena).view();
+    let view = node.to_ref(arena.memory()).view();
     assert_eq!(
         view.to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
@@ -112,34 +112,29 @@ fn test_basic_extension_node() {
     );
     let node = MemTrieNodeId::new(
         &mut arena,
-        InputMemTrieNode::Extension {
-            extension: vec![5, 6, 7, 8, 9].into_boxed_slice(),
-            child: child.clone(),
-        },
+        InputMemTrieNode::Extension { extension: vec![5, 6, 7, 8, 9].into_boxed_slice(), child },
     );
-    let child = child.to_ref(&arena);
-    let node = node.to_ref(&arena);
+    node.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
+    let child_ptr = child.to_ref(arena.memory());
+    let node_ptr = node.to_ref(arena.memory());
     assert_eq!(
-        node.view().to_raw_trie_node_with_size(),
+        node_ptr.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
-            memory_usage: child.view().memory_usage() + 60,
-            node: RawTrieNode::Extension(vec![5, 6, 7, 8, 9], child.view().node_hash()),
+            memory_usage: child_ptr.view().memory_usage() + 60,
+            node: RawTrieNode::Extension(vec![5, 6, 7, 8, 9], child_ptr.view().node_hash()),
         }
     );
-    unsafe {
-        node.compute_hash_and_memory_usage_recursively();
-    }
-    assert_eq!(node.view().memory_usage(), child.view().memory_usage() + 60);
+    assert_eq!(node_ptr.view().memory_usage(), child_ptr.view().memory_usage() + 60);
     assert_eq!(
-        node.view().node_hash(),
-        hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
+        node_ptr.view().node_hash(),
+        hash(&node_ptr.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
     );
-    match node.view() {
+    match node_ptr.view() {
         MemTrieNodeView::Extension { hash, memory_usage, extension, child: actual_child } => {
-            assert_eq!(hash, node.view().node_hash());
-            assert_eq!(memory_usage, node.view().memory_usage());
+            assert_eq!(hash, node_ptr.view().node_hash());
+            assert_eq!(memory_usage, node_ptr.view().memory_usage());
             assert_eq!(extension.as_slice(), &[5, 6, 7, 8, 9]);
-            assert_eq!(actual_child, child);
+            assert_eq!(actual_child, child_ptr);
         }
         _ => panic!(),
     }
@@ -174,20 +169,21 @@ fn test_basic_branch_node() {
         &mut arena,
         InputMemTrieNode::Branch { children: branch_vec(vec![(3, child1), (5, child2)]) },
     );
-    let child1 = child1.to_ref(&arena);
-    let child2 = child2.to_ref(&arena);
-    let node = node.to_ref(&arena);
+    node.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
+    let child1_ptr = child1.to_ref(arena.memory());
+    let child2_ptr = child2.to_ref(arena.memory());
+    let node_ptr = node.to_ref(arena.memory());
     assert_eq!(
-        node.view().to_raw_trie_node_with_size(),
+        node_ptr.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
-            memory_usage: child1.view().memory_usage() + child2.view().memory_usage() + 50,
+            memory_usage: child1_ptr.view().memory_usage() + child2_ptr.view().memory_usage() + 50,
             node: RawTrieNode::BranchNoValue(Children([
                 None,
                 None,
                 None,
-                Some(child1.view().node_hash()),
+                Some(child1_ptr.view().node_hash()),
                 None,
-                Some(child2.view().node_hash()),
+                Some(child2_ptr.view().node_hash()),
                 None,
                 None,
                 None,
@@ -201,25 +197,22 @@ fn test_basic_branch_node() {
             ])),
         }
     );
-    unsafe {
-        node.compute_hash_and_memory_usage_recursively();
-    }
     assert_eq!(
-        node.view().memory_usage(),
-        child1.view().memory_usage() + child2.view().memory_usage() + 50
+        node_ptr.view().memory_usage(),
+        child1_ptr.view().memory_usage() + child2_ptr.view().memory_usage() + 50
     );
     assert_eq!(
-        node.view().node_hash(),
-        hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
+        node_ptr.view().node_hash(),
+        hash(&node_ptr.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
     );
-    match node.view() {
+    match node_ptr.view() {
         MemTrieNodeView::Branch { hash, memory_usage, children } => {
-            assert_eq!(hash, node.view().node_hash());
-            assert_eq!(memory_usage, node.view().memory_usage());
-            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1, child2]);
-            assert_eq!(children.get(3), Some(child1));
+            assert_eq!(hash, node_ptr.view().node_hash());
+            assert_eq!(memory_usage, node_ptr.view().memory_usage());
+            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1_ptr, child2_ptr]);
+            assert_eq!(children.get(3), Some(child1_ptr));
             assert_eq!(children.get(1), None);
-            assert_eq!(children.get(5), Some(child2));
+            assert_eq!(children.get(5), Some(child2_ptr));
         }
         _ => panic!(),
     }
@@ -249,17 +242,20 @@ fn test_basic_branch_with_value_node() {
             value: FlatStateValue::Inlined(vec![3, 4, 5]),
         },
     );
-    let child1 = child1.to_ref(&arena);
-    let child2 = child2.to_ref(&arena);
-    let node = node.to_ref(&arena);
+
+    node.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
+
+    let child1_ptr = child1.to_ref(arena.memory());
+    let child2_ptr = child2.to_ref(arena.memory());
+    let node_ptr = node.to_ref(arena.memory());
     assert_eq!(
-        node.view().to_raw_trie_node_with_size(),
+        node_ptr.view().to_raw_trie_node_with_size(),
         RawTrieNodeWithSize {
-            memory_usage: child1.view().memory_usage() + child2.view().memory_usage() + 103,
+            memory_usage: child1_ptr.view().memory_usage() + child2_ptr.view().memory_usage() + 103,
             node: RawTrieNode::BranchWithValue(
                 FlatStateValue::Inlined(vec![3, 4, 5]).to_value_ref(),
                 Children([
-                    Some(child1.view().node_hash()),
+                    Some(child1_ptr.view().node_hash()),
                     None,
                     None,
                     None,
@@ -274,30 +270,27 @@ fn test_basic_branch_with_value_node() {
                     None,
                     None,
                     None,
-                    Some(child2.view().node_hash()),
+                    Some(child2_ptr.view().node_hash()),
                 ])
             ),
         }
     );
-    unsafe {
-        node.compute_hash_and_memory_usage_recursively();
-    }
     assert_eq!(
-        node.view().memory_usage(),
-        child1.view().memory_usage() + child2.view().memory_usage() + 103
+        node_ptr.view().memory_usage(),
+        child1_ptr.view().memory_usage() + child2_ptr.view().memory_usage() + 103
     );
     assert_eq!(
-        node.view().node_hash(),
-        hash(&node.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
+        node_ptr.view().node_hash(),
+        hash(&node_ptr.view().to_raw_trie_node_with_size().try_to_vec().unwrap())
     );
-    match node.view() {
+    match node_ptr.view() {
         MemTrieNodeView::BranchWithValue { hash, memory_usage, children, value } => {
-            assert_eq!(hash, node.view().node_hash());
-            assert_eq!(memory_usage, node.view().memory_usage());
-            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1, child2]);
-            assert_eq!(children.get(0), Some(child1));
+            assert_eq!(hash, node_ptr.view().node_hash());
+            assert_eq!(memory_usage, node_ptr.view().memory_usage());
+            assert_eq!(children.iter().collect::<Vec<_>>(), vec![child1_ptr, child2_ptr]);
+            assert_eq!(children.get(0), Some(child1_ptr));
             assert_eq!(children.get(1), None);
-            assert_eq!(children.get(15), Some(child2));
+            assert_eq!(children.get(15), Some(child2_ptr));
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![3, 4, 5]));
         }
         _ => panic!(),

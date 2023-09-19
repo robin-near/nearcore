@@ -1,4 +1,4 @@
-use crate::trie::mem::arena::{Arena, ArenaPtr, ArenaSliceMut, BorshFixedSize};
+use crate::trie::mem::arena::{Arena, ArenaPtr, ArenaPtrMut, ArenaSliceMut, BorshFixedSize};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::Write;
 
@@ -77,12 +77,6 @@ impl<'a> RawDecoder<'a> {
         result
     }
 
-    pub unsafe fn overwrite<T: BorshSerialize + BorshFixedSize>(&mut self, data: T) {
-        let slice = self.data.offset(self.pos).slice(T::SERIALIZED_SIZE);
-        data.serialize(&mut &mut *slice.as_slice_mut()).unwrap();
-        self.pos += T::SERIALIZED_SIZE;
-    }
-
     /// Decodes a fixed-sized field at the current position, but does not
     /// advance the position.
     pub fn peek<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
@@ -98,5 +92,37 @@ impl<'a> RawDecoder<'a> {
         let view = header.decode_flexible_data(&self.data.offset(self.pos).slice(length));
         self.pos += length;
         view
+    }
+}
+
+pub struct RawDecoderMut<'a> {
+    data: ArenaPtrMut<'a>,
+    pos: usize,
+}
+
+impl<'a> RawDecoderMut<'a> {
+    pub fn new(data: ArenaPtrMut<'a>) -> RawDecoderMut<'a> {
+        RawDecoderMut { data, pos: 0 }
+    }
+
+    pub fn decode<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
+        let ptr = self.data.offset(self.pos);
+        let slice = ptr.slice(T::SERIALIZED_SIZE);
+        let result = T::try_from_slice(slice.as_slice()).unwrap();
+        self.pos += T::SERIALIZED_SIZE;
+        result
+    }
+
+    pub fn peek<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
+        let ptr = self.data.offset(self.pos);
+        let slice = ptr.slice(T::SERIALIZED_SIZE);
+        T::try_from_slice(slice.as_slice()).unwrap()
+    }
+
+    pub fn overwrite<T: BorshSerialize + BorshFixedSize>(&mut self, data: T) {
+        let mut ptr = self.data.offset(self.pos);
+        let mut slice = ptr.slice_mut(T::SERIALIZED_SIZE);
+        data.serialize(&mut slice.raw_slice_mut()).unwrap();
+        self.pos += T::SERIALIZED_SIZE;
     }
 }
