@@ -58,8 +58,8 @@ impl FlexibleDataHeader for EncodedChildrenHeader {
 /// Efficient view of the encoded children data.
 #[derive(Debug, Clone)]
 pub struct ChildrenView<'a> {
-    mask: u16,
-    children: ArenaSlice<'a>,
+    pub mask: u16,
+    pub children: ArenaSlice<'a>,
 }
 
 impl<'a> ChildrenView<'a> {

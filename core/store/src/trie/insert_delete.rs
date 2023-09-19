@@ -159,6 +159,7 @@ impl Trie {
                     } else if common_prefix == 0 {
                         let mut children = Default::default();
                         let children_memory_usage;
+                        // ??? existing key cannot be empty!
                         let branch_node = if existing_key.is_empty() {
                             children_memory_usage = 0;
                             TrieNode::Branch(children, Some(existing_value))

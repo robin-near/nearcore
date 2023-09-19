@@ -12,6 +12,7 @@ use std::fmt::{Debug, Formatter};
 use super::arena::{Arena, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
+use crate::trie::mem::node::view::{MemTrieUpdate, UpdatedNodeRef};
 use crate::NibbleSlice;
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
@@ -67,19 +68,11 @@ impl<'a> MemTrieNodePtr<'a> {
         MemTrieNodeId { ptr: self.ptr.raw_offset() }
     }
 
-    pub fn move_node_to_mutable(
-        &self,
-        changes: &mut HashMap<MemTrieNodeId, i32>,
-    ) -> MemTrieNodeView<'a> {
-        *changes.entry(self.id()).or_insert_with(|| 0) -= 1;
-        self.view()
-    }
-
     // todo: take state changes and gen trie updates
     pub fn update(&self, key: &[u8], value: FlatStateValue) {
-        let mut changes: HashMap<MemTrieNodeId, i32> = Default::default();
-        let root = self.move_node_to_mutable(&mut changes);
-        root.insert(key, value)
+        let mut trie_update = MemTrieUpdate::default();
+        let root = trie_update.move_node_to_mutable(&self);
+        trie_update.insert(root, key, value);
     }
 }
 
