@@ -10,25 +10,28 @@ use std::collections::HashMap;
 
 pub type UpdatedMemTrieNodeId = usize;
 
+// Reference to either node in big trie or in small temporary trie.
 #[derive(Clone)]
 pub enum UpdatedNodeRef<'a> {
     Old(MemTrieNodePtr<'a>),
     New(UpdatedMemTrieNodeId),
 }
 
+// Structure to handle new temporarily created nodes.
 #[derive(Clone)]
 pub enum UpdatedMemTrieNode<'a> {
-    // Fancy edge case. Used very widely during updates!
+    // Fancy edge case. Used when we create an empty child and descend to it to create new node.
     Empty,
     Leaf { extension: Box<[u8]>, value: FlatStateValue },
     Extension { extension: Box<[u8]>, child: UpdatedNodeRef<'a> },
+    // United Branch&BranchWithValue because it is easier to write `match`.
     Branch { children: Vec<Option<UpdatedNodeRef<'a>>>, value: Option<FlatStateValue> },
 }
 
 #[derive(Default)]
 pub struct MemTrieUpdate<'a> {
     pub refcount_changes: HashMap<MemTrieNodeId, i32>,
-    pub nodes_storage: HashMap<UpdatedMemTrieNodeId, UpdatedMemTrieNode<'a>>,
+    pub nodes_storage: Vec<Option<UpdatedMemTrieNode<'a>>>,
 }
 
 fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
@@ -48,13 +51,19 @@ fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
 }
 
 impl<'a> MemTrieUpdate<'a> {
-    pub fn store_at(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode<'a>) {
-        self.nodes_storage.insert(index, node);
+    pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode<'a> {
+        self.nodes_storage.get_mut(index).unwrap().take().unwrap()
     }
 
+    // Replace node in place due to changes
+    pub fn store_at(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode<'a>) {
+        self.nodes_storage[index] = Some(node);
+    }
+
+    // Create new node
     pub fn store(&mut self, node: UpdatedMemTrieNode<'a>) -> UpdatedMemTrieNodeId {
         let index = self.nodes_storage.len();
-        self.nodes_storage.insert(index, node);
+        self.nodes_storage.push(Some(node));
         index
     }
 
@@ -66,19 +75,24 @@ impl<'a> MemTrieUpdate<'a> {
 
     // INSERT/DELETE LOGIC
 
-    // insert to root
+    // Starting from the root, insert `key` to trie, modifying nodes on the way from top to bottom.
+    // Combination of different operations:
+    // * Split some existing key into two, as new branch is created
+    // * Move node from big trie to temporary one
+    // * Create new node
+    // * Descend to node if it corresponds to subslice of key
+    // ! No need to return anything. `root_id` stays as is
     // todo: consider already dropping hash & mem usage. but maybe idc
     // todo: what are trie changes for values?
     pub fn insert(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8], value: FlatStateValue) {
         let mut value = Some(value);
-        let mut node = self.nodes_storage.get(&root_id).unwrap().clone();
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
-        // I think we don't need path as we can update both mem & hashes on flatten.
-        // let mut path = Vec::new();
 
         loop {
-            match &node {
+            // Destroy node as it will be changed anyway.
+            let node = self.destroy(node_id);
+            match node {
                 UpdatedMemTrieNode::Empty => {
                     // store value somehow
                     let extension: Vec<_> = partial.encoded(true).into_vec();
@@ -126,7 +140,7 @@ impl<'a> MemTrieUpdate<'a> {
                     }
                 }
                 UpdatedMemTrieNode::Leaf { extension: key, value: old_value } => {
-                    let existing_key = NibbleSlice::from_encoded(key).0;
+                    let existing_key = NibbleSlice::from_encoded(key.as_ref()).0;
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
                         // Equivalent leaf, rewrite the value.
@@ -253,6 +267,162 @@ impl<'a> MemTrieUpdate<'a> {
                 }
             }
         }
+    }
+
+    // Delete
+    pub fn delete(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8]) {
+        let mut node_id = root_id;
+        let mut partial = NibbleSlice::new(key);
+        let mut path = vec![];
+
+        loop {
+            path.push(node_id);
+            let node = self.destroy(node_id);
+
+            match &node {
+                // finished
+                UpdatedMemTrieNode::Empty => {
+                    self.store_at(node_id, UpdatedMemTrieNode::Empty);
+                    break;
+                }
+                UpdatedMemTrieNode::Leaf { extension: key, value } => {
+                    if NibbleSlice::from_encoded(key).0 == partial {
+                        // delete value somehow
+                        self.store_at(node_id, UpdatedMemTrieNode::Empty);
+                        break;
+                    } else {
+                        // ??? throw an error because key does not exist?
+                    }
+                }
+                UpdatedMemTrieNode::Branch { children, value } => {
+                    if partial.is_empty() {
+                        let _value = match value {
+                            Some(value) => value,
+                            None => {
+                                panic!("no value for key {:?}", key);
+                            }
+                        };
+                        // delete value somehow
+                        // there must be at least 1 child, otherwise it shouldn't be a branch.
+                        // could be even 2, but there is some weird case when 1
+                        assert!(children.iter().filter(|x| x.is_some()).count() >= 1);
+                        // if needed, branch will be squashed on the way back
+                        break;
+                    } else {
+                        let mut children = children.clone();
+                        let child = &mut children[partial.at(0) as usize];
+                        let node = match child.take() {
+                            Some(node) => node,
+                            None => {
+                                // again, wtf? need to panic.
+                                panic!("no value for key {:?}", key);
+                            }
+                        };
+                        let new_node_id = match node {
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+                            UpdatedNodeRef::New(node_id) => node_id,
+                        };
+                        *child = Some(UpdatedNodeRef::New(new_node_id));
+                        self.store_at(
+                            node_id,
+                            UpdatedMemTrieNode::Branch { children, value: value.clone() },
+                        );
+
+                        node_id = new_node_id;
+                        partial = partial.mid(1);
+                        continue;
+                    }
+                }
+                UpdatedMemTrieNode::Extension { extension: key, child } => {
+                    let (common_prefix, existing_len) = {
+                        let existing_key = NibbleSlice::from_encoded(&key).0;
+                        (existing_key.common_prefix(&partial), existing_key.len())
+                    };
+                    if common_prefix == existing_len {
+                        let new_node_id = match child {
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+                            UpdatedNodeRef::New(node_id) => node_id.clone(),
+                        };
+                        self.store_at(
+                            node_id,
+                            UpdatedMemTrieNode::Extension {
+                                extension: key.clone(),
+                                child: UpdatedNodeRef::New(new_node_id),
+                            },
+                        );
+
+                        node_id = new_node_id;
+                        partial = partial.mid(existing_len);
+                        continue;
+                    } else {
+                        panic!("can't go down by {} in partial = {:?}", key.len(), partial);
+                    }
+                }
+            }
+        }
+
+        self.squash_nodes(path);
+    }
+
+    fn squash_nodes(&mut self, path: Vec<UpdatedMemTrieNodeId>) {
+        for node_id in path.into_iter().rev() {
+            let node = self.destroy(node_id);
+            match node {
+                // First two cases - nothing to squash, just come up.
+                UpdatedMemTrieNode::Empty => {
+                    self.store_at(node_id, UpdatedMemTrieNode::Empty);
+                }
+                UpdatedMemTrieNode::Leaf { extension, value } => {
+                    self.store_at(node_id, UpdatedMemTrieNode::Leaf { extension, value });
+                }
+                UpdatedMemTrieNode::Branch { mut children, value } => {
+                    for child in children.iter_mut() {
+                        if let Some(UpdatedNodeRef::New(child_node_id)) = child {
+                            if let UpdatedMemTrieNode::Empty =
+                                self.nodes_storage[*child_node_id as usize].unwrap()
+                            {
+                                *child = None;
+                            }
+                        }
+                    }
+                    let num_children = children.iter().filter(|node| node.is_some()).count();
+                    if num_children == 0 {
+                        if let Some(value) = value {
+                            // should it be this way? idk
+                            let empty: Vec<_> = NibbleSlice::new(&[]).encoded(true).into_vec();
+                            let leaf_node = UpdatedMemTrieNode::Leaf {
+                                extension: empty.into_boxed_slice(),
+                                value,
+                            };
+                            self.store_at(node_id, leaf_node);
+                        } else {
+                            self.store_at(node_id, UpdatedMemTrieNode::Empty);
+                        }
+                    } else if num_children == 1 && value.is_none() {
+                        let (idx, child) = children
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, node)| node.is_some())
+                            .next()
+                            .unwrap();
+                        let child = child.unwrap();
+                        let key: Vec<_> = NibbleSlice::new(&[(idx << 4) as u8])
+                            .encoded_leftmost(1, false)
+                            .into_vec();
+                        self.extend_child(node_id, key, child);
+                    } else {
+                        self.store_at(node_id, UpdatedMemTrieNode::Branch { children, value });
+                    }
+                }
+                UpdatedMemTrieNode::Extension { extension, child } => {
+                    self.extend_child(node_id, extension.to_vec(), child);
+                }
+            }
+        }
+    }
+
+    // If
+    fn extend_child(&mut self, node_id: UpdatedMemTrieNodeId, key: Vec<u8>, child: UpdatedNodeRef) {
     }
 }
 
