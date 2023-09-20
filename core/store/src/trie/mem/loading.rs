@@ -49,7 +49,7 @@ pub fn load_trie_from_flat_state(
             loaded
         );
         let mut subtrees = Vec::new();
-        root_id.as_ptr_mut(arena.memory_mut()).take_small_subtrees(1000, &mut subtrees);
+        root_id.as_ptr_mut(arena.memory_mut()).take_small_subtrees(1024 * 1024, &mut subtrees);
         println!(
             "[{:?}] Going to compute hash and memory for {} subtrees in parallel...",
             load_start.elapsed(),
