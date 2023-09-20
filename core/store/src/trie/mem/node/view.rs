@@ -50,6 +50,12 @@ fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
     children
 }
 
+enum FlattenNodesCrumb<'a> {
+    Entering,
+    AtChild(Vec<Option<UpdatedNodeRef<'a>>>, usize),
+    Exiting,
+}
+
 impl<'a> MemTrieUpdate<'a> {
     pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode<'a> {
         self.nodes_storage.get_mut(index).unwrap().take().unwrap()
@@ -365,6 +371,7 @@ impl<'a> MemTrieUpdate<'a> {
     }
 
     fn squash_nodes(&mut self, path: Vec<UpdatedMemTrieNodeId>) {
+        // Induction by correctness of path suffix.
         for node_id in path.into_iter().rev() {
             let node = self.destroy(node_id);
             match node {
@@ -421,8 +428,94 @@ impl<'a> MemTrieUpdate<'a> {
         }
     }
 
-    // If
+    // If some branch has only one child, it may end up being squashed to extension.
+    // Then we need to append some existing child to a key and put it into `node_id`.
     fn extend_child(&mut self, node_id: UpdatedMemTrieNodeId, key: Vec<u8>, child: UpdatedNodeRef) {
+        let child = match child {
+            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+            UpdatedNodeRef::New(node_id) => node_id,
+        };
+        let child_node = self.destroy(child);
+        match child_node {
+            // not sure about that... maybe we do need to kill the key, but not sure if we shouldn't panic
+            UpdatedMemTrieNode::Empty => self.store_at(node_id, UpdatedMemTrieNode::Empty),
+            // Make extended leaf
+            UpdatedMemTrieNode::Leaf { extension: child_key, value } => {
+                let child_key = NibbleSlice::from_encoded(&child_key).0;
+                let key: Vec<_> =
+                    NibbleSlice::from_encoded(&key).0.merge_encoded(&child_key, true).into_vec();
+                self.store_at(
+                    node_id,
+                    UpdatedMemTrieNode::Leaf { extension: key.into_boxed_slice(), value },
+                )
+            }
+            // Nothing to squash! Just append Branch to new Extension.
+            node @ UpdatedMemTrieNode::Branch { .. } => {
+                self.store_at(child, node);
+                self.store_at(
+                    node_id,
+                    UpdatedMemTrieNode::Extension {
+                        extension: key.into_boxed_slice(),
+                        child: UpdatedNodeRef::New(child),
+                    },
+                );
+            }
+            // Join two Extensions into one.
+            UpdatedMemTrieNode::Extension { extension, child: inner_child } => {
+                let child_key = NibbleSlice::from_encoded(&extension).0;
+                let key: Vec<_> =
+                    NibbleSlice::from_encoded(&key).0.merge_encoded(&child_key, false).into_vec();
+                self.store_at(
+                    node_id,
+                    UpdatedMemTrieNode::Extension {
+                        extension: key.into_boxed_slice(),
+                        child: inner_child,
+                    },
+                );
+            }
+        }
+    }
+
+    pub fn flatten_nodes(&mut self, root_id: UpdatedMemTrieNodeId) {
+        let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
+        stack.push((root_id, FlattenNodesCrumb::Entering));
+        let mut last_hash = CryptoHash::default();
+        let mut buffer: Vec<u8> = Vec::new();
+        'outer: while let Some((node, position)) = stack.pop() {
+            let updated_node = self.nodes_storage[node].unwrap();
+            let raw_node = match updated_node {
+                UpdatedMemTrieNode::Empty => {
+                    last_hash = Default::default();
+                    continue;
+                },
+                UpdatedMemTrieNode::Branch { children, value } => match position {
+                    FlattenNodesCrumb::Entering => {
+                        stack.push((node, FlattenNodesCrumb::AtChild(vec![None; 16], 0)));
+                        continue;
+                    },
+                    FlattenNodesCrumb::AtChild(mut new_children, mut i) => {
+                        if i > 0 && children[i - 1].is_some() {
+                            new_children[i - 1] = Some(last_hash);
+                        }
+                        while i < 16 {
+                            match children[i].clone() {
+                                Some(UpdatedNodeRef::New(child_node_id)) => {
+                                    stack.push((node, FlattenNodesCrumb::AtChild(new_children, i + 1)));
+                                    stack.push((child_node_id, FlattenNodesCrumb::Entering));
+                                    continue 'outer;
+                                }
+                                Some(UpdatedNodeRef::Old(ptr)) => new_children[i] = Some(ptr),
+                                None => {},
+                            }
+                            i += 1;
+                        }
+                        // let new_value = value.clone().map(|value| self.flatten_value(value));
+
+                    },
+                    FlattenNodesCrumb::Exiting => unreachable!(),
+                },
+            }
+        }
     }
 }
 
