@@ -53,7 +53,7 @@ pub mod update;
 use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
-use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
+use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr};
 pub use from_flat::construct_trie_from_flat;
 
 const POISONED_LOCK_ERR: &str = "The lock was poisoned.";
@@ -1051,7 +1051,7 @@ impl Trie {
         let path_begin = self.find_state_part_boundary(0, 1).unwrap();
         let path_end = self.find_state_part_boundary(1, 1).unwrap();
         let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
-        let mut last_node_id = MemTrieNodeId::from(0);
+        let mut last_node_id = MemTrieNodeId::from(usize::MAX);
         for item in self
             .iter()
             .unwrap()
@@ -1061,6 +1061,10 @@ impl Trie {
             .rev()
         {
             let hash = item.hash;
+            if hash == CryptoHash::default() {
+                // empty trie edge case?
+                break;
+            }
             eprintln!("{}", hash);
             let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
             let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
@@ -1092,11 +1096,17 @@ impl Trie {
             last_node_id = node_id;
             mapper.insert(hash, node_id);
         }
-        last_node_id.add_ref(&mut arena);
+        if last_node_id.ptr != usize::MAX {
+            last_node_id.add_ref(&mut arena);
+        }
         drop(arena);
 
         let arena1 = lock.read().unwrap();
-        let ptr = last_node_id.as_ptr(arena1.memory());
+        let ptr = if last_node_id.ptr == usize::MAX {
+            MemTrieNodePtr::from(arena1.memory().ptr(usize::MAX))
+        } else {
+            last_node_id.as_ptr(arena1.memory())
+        };
 
         let mut arena2 = lock.write().unwrap();
         let tc = ptr.update(changes, &mut arena2);

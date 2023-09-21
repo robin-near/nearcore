@@ -75,9 +75,13 @@ impl<'a> MemTrieUpdate<'a> {
     }
 
     pub fn move_node_to_mutable(&mut self, node: &MemTrieNodePtr<'a>) -> usize {
-        *self.refcount_changes.entry(node.id()).or_insert_with(|| 0) -= 1;
-        let updated_node = node.view().to_updated();
-        self.store(updated_node)
+        if node.id().ptr == usize::MAX {
+            self.store(UpdatedMemTrieNode::Empty)
+        } else {
+            *self.refcount_changes.entry(node.id()).or_insert_with(|| 0) -= 1;
+            let updated_node = node.view().to_updated();
+            self.store(updated_node)
+        }
     }
 
     // INSERT/DELETE LOGIC
