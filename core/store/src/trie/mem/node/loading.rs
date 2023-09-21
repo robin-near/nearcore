@@ -16,7 +16,7 @@ impl MemTrieNodeId {
         MemTrieNodePtrMut { ptr: arena.ptr_mut(self.ptr) }
     }
 
-    pub(crate) fn as_ptr<'a>(&self, arena: &ArenaMemory) -> MemTrieNodePtr<'a> {
+    pub(crate) fn as_ptr<'a>(&self, arena: &'a ArenaMemory) -> MemTrieNodePtr<'a> {
         MemTrieNodePtr { ptr: arena.ptr(self.ptr) }
     }
 }
