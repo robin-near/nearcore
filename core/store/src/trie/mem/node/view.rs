@@ -1,8 +1,9 @@
 use super::{MemTrieNodePtr, MemTrieNodeView};
+use crate::trie::mem::arena::Arena;
 use crate::trie::mem::flexible_data::children::ChildrenView;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
 use crate::trie::TRIE_COSTS;
-use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize};
+use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::state::FlatStateValue;
@@ -50,9 +51,9 @@ fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
     children
 }
 
-enum FlattenNodesCrumb<'a> {
+enum FlattenNodesCrumb {
     Entering,
-    AtChild(Vec<Option<UpdatedNodeRef<'a>>>, usize),
+    AtChild(usize),
     Exiting,
 }
 
@@ -476,46 +477,116 @@ impl<'a> MemTrieUpdate<'a> {
         }
     }
 
-    pub fn flatten_nodes(&mut self, root_id: UpdatedMemTrieNodeId) {
+    // For now it doesn't recompute hashes yet.
+    // Just prepare DFS-ordered list of nodes for further application.
+    pub fn flatten_nodes(&mut self, root_id: UpdatedMemTrieNodeId) -> Vec<UpdatedMemTrieNodeId> {
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
-        let mut last_hash = CryptoHash::default();
-        let mut buffer: Vec<u8> = Vec::new();
+        let mut ordered_nodes = vec![];
         'outer: while let Some((node, position)) = stack.pop() {
             let updated_node = self.nodes_storage[node].unwrap();
-            let raw_node = match updated_node {
+            match &updated_node {
                 UpdatedMemTrieNode::Empty => {
-                    last_hash = Default::default();
+                    // panic?!
                     continue;
-                },
-                UpdatedMemTrieNode::Branch { children, value } => match position {
+                }
+                UpdatedMemTrieNode::Branch { children, .. } => match position {
                     FlattenNodesCrumb::Entering => {
-                        stack.push((node, FlattenNodesCrumb::AtChild(vec![None; 16], 0)));
+                        stack.push((node, FlattenNodesCrumb::AtChild(0)));
                         continue;
-                    },
-                    FlattenNodesCrumb::AtChild(mut new_children, mut i) => {
-                        if i > 0 && children[i - 1].is_some() {
-                            new_children[i - 1] = Some(last_hash);
-                        }
+                    }
+                    FlattenNodesCrumb::AtChild(mut i) => {
                         while i < 16 {
                             match children[i].clone() {
                                 Some(UpdatedNodeRef::New(child_node_id)) => {
-                                    stack.push((node, FlattenNodesCrumb::AtChild(new_children, i + 1)));
+                                    stack.push((node, FlattenNodesCrumb::AtChild(i + 1)));
                                     stack.push((child_node_id, FlattenNodesCrumb::Entering));
                                     continue 'outer;
                                 }
-                                Some(UpdatedNodeRef::Old(ptr)) => new_children[i] = Some(ptr),
-                                None => {},
+                                _ => {}
                             }
                             i += 1;
                         }
-                        // let new_value = value.clone().map(|value| self.flatten_value(value));
-
-                    },
+                        // flatten value
+                    }
                     FlattenNodesCrumb::Exiting => unreachable!(),
                 },
+                UpdatedMemTrieNode::Extension { child, .. } => match position {
+                    FlattenNodesCrumb::Entering => match child {
+                        UpdatedNodeRef::New(child_id) => {
+                            stack.push((node, FlattenNodesCrumb::Exiting));
+                            stack.push((*child_id, FlattenNodesCrumb::Entering));
+                            continue;
+                        }
+                        UpdatedNodeRef::Old(_) => {}
+                    },
+                    FlattenNodesCrumb::Exiting => {}
+                    _ => unreachable!(),
+                },
+                UpdatedMemTrieNode::Leaf { .. } => {
+                    // flatten value
+                }
             }
+            ordered_nodes.push(node);
         }
+
+        ordered_nodes
+    }
+
+    // Prepare Trie changes and update Arena right now.
+    // Yeah it is not atomic, but enough for testing for now.
+    pub fn prepare_changes(
+        self,
+        old_root: CryptoHash,
+        nodes: Vec<UpdatedMemTrieNodeId>,
+        arena: &mut Arena,
+    ) -> TrieChanges {
+        let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
+
+        let map_node = |node: UpdatedNodeRef| -> MemTrieNodeId {
+            match node {
+                UpdatedNodeRef::New(node) => mapped_nodes.get(&node).unwrap().clone(),
+                UpdatedNodeRef::Old(ptr) => ptr.id().clone(),
+            }
+        };
+
+        let mut refcount_changes: HashMadp<CryptoHash, (Vec<u8>, i32)> = Default::default();
+        let mut last_node_hash = old_root; // last node must be new root, lol
+        for node_id in nodes.into_iter() {
+            let node = self.nodes_storage[node_id].unwrap();
+            let node = match node {
+                UpdatedMemTrieNode::Empty => unreachable!(),
+                UpdatedMemTrieNode::Branch { children, value } => {
+                    let children = children.into_iter().map(|child| child.map(map_node)).collect();
+                    match value {
+                        Some(value) => InputMemTrieNode::BranchWithValue { children, value },
+                        None => InputMemTrieNode::Branch { children },
+                    }
+                }
+                UpdatedMemTrieNode::Extension { extension, child } => {
+                    InputMemTrieNode::Extension { extension, child: map_node(child) }
+                }
+                UpdatedMemTrieNode::Leaf { extension, value } => {
+                    InputMemTrieNode::Leaf { value, extension }
+                }
+            };
+            let mem_node_id = MemTrieNodeId::new(arena, node);
+            mapped_nodes.insert(node_id, mem_node_id);
+
+            let mut node_ptr = mem_node_id.as_ptr_mut(arena.memory_mut());
+            node_ptr.compute_hash_recursively();
+            let node = node_ptr.as_const();
+            let view = node.view();
+            let hash = view.node_hash();
+            let raw_node = view.to_raw_trie_node_with_size();
+            let (_, rc) =
+                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
+            *rc += 1;
+        }
+
+        let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
+
+        Ok(TrieChanges { old_root, new_root: last_node_hash, insertions, deletions })
     }
 }
 

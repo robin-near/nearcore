@@ -17,7 +17,7 @@ impl MemTrieNodeId {
 }
 
 impl<'a> MemTrieNodePtrMut<'a> {
-    fn as_const(&'a self) -> MemTrieNodePtr<'a> {
+    pub fn as_const(&'a self) -> MemTrieNodePtr<'a> {
         MemTrieNodePtr { ptr: self.ptr.as_const() }
     }
 
