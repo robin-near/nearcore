@@ -628,8 +628,9 @@ impl<'a> MemTrieUpdate<'a> {
                         .collect();
                     match value {
                         Some(value) => {
-                            let (_, old_rc) =
-                                refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
+                            let (_, old_rc) = refcount_changes
+                                .entry(hash(&value))
+                                .or_insert_with(|| (value.clone(), 0));
                             *old_rc += 1;
                             InputMemTrieNode::BranchWithValue {
                                 children,
@@ -644,7 +645,7 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Leaf { extension, value } => {
                     let (_, old_rc) =
-                        refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
+                        refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
                     *old_rc += 1;
                     InputMemTrieNode::Leaf { value: FlatStateValue::on_disk(&value), extension }
                 }
