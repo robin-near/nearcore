@@ -702,7 +702,7 @@ impl<'a> MemTrieNodeView<'a> {
         }
     }
 
-    pub fn to_updated(self) -> UpdatedMemTrieNode<'a> {
+    pub fn to_updated(self) -> UpdatedMemTrieNode {
         match self {
             Self::Leaf { extension, value } => UpdatedMemTrieNode::Leaf {
                 extension: extension.as_slice().to_vec().into_boxed_slice(),
@@ -717,7 +717,7 @@ impl<'a> MemTrieNodeView<'a> {
             },
             Self::Extension { extension, child, .. } => UpdatedMemTrieNode::Extension {
                 extension: extension.as_slice().to_vec().into_boxed_slice(),
-                child: UpdatedNodeRef::Old(child),
+                child: UpdatedNodeRef::Old(child.ptr.raw_offset()),
             },
         }
     }
