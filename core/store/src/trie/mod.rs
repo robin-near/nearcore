@@ -1098,7 +1098,6 @@ impl Trie {
             last_node_id = node_id;
             mapper.insert(hash, node_id);
         }
-        panic!("tttt");
         eprintln!("0.5");
         if last_node_id.ptr != usize::MAX {
             last_node_id.add_ref(&mut arena);
@@ -1107,13 +1106,14 @@ impl Trie {
         drop(arena);
 
         eprintln!("1");
+        // panic!("ttt");
         let arena1 = lock.read().unwrap();
         let ptr = if last_node_id.ptr == usize::MAX {
-            MemTrieNodePtr::from(arena1.memory().ptr(usize::MAX))
+            MemTrieNodePtr::from(arena1.memory().clone().ptr(usize::MAX)).clone()
         } else {
-            last_node_id.as_ptr(arena1.memory())
+            last_node_id.as_ptr(arena1.memory().clone()).clone()
         };
-
+        drop(arena1);
         eprintln!("2");
         let mut arena2 = lock.write().unwrap();
         eprintln!("3");
