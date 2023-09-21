@@ -1101,6 +1101,7 @@ impl Trie {
         }
         drop(arena);
 
+        eprintln!("1");
         let arena1 = lock.read().unwrap();
         let ptr = if last_node_id.ptr == usize::MAX {
             MemTrieNodePtr::from(arena1.memory().ptr(usize::MAX))
@@ -1108,7 +1109,9 @@ impl Trie {
             last_node_id.as_ptr(arena1.memory())
         };
 
+        eprintln!("2");
         let mut arena2 = lock.write().unwrap();
+        eprintln!("3");
         let tc = ptr.update(changes, &mut arena2);
         Ok(tc)
         // let mut memory = NodesStorage::new();
