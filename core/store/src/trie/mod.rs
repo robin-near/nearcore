@@ -53,7 +53,7 @@ pub mod update;
 use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
-use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr};
+use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieUpdate};
 pub use from_flat::construct_trie_from_flat;
 
 const POISONED_LOCK_ERR: &str = "The lock was poisoned.";
@@ -1047,8 +1047,7 @@ impl Trie {
     {
         eprintln!("0");
         // build mem trie from self
-        let mut lock = RwLock::new(mem::Arena::new(1024 * 1024 * 1024));
-        let mut arena = lock.write().unwrap();
+        let mut arena = mem::Arena::new(1024 * 1024 * 1024);
         let path_begin = self.find_state_part_boundary(0, 1).unwrap();
         let path_end = self.find_state_part_boundary(1, 1).unwrap();
         let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
@@ -1102,22 +1101,34 @@ impl Trie {
         if last_node_id.ptr != usize::MAX {
             last_node_id.add_ref(&mut arena);
         }
-        eprintln!("0.75");
-        drop(arena);
 
         eprintln!("1");
-        // panic!("ttt");
-        let arena1 = lock.read().unwrap();
-        let ptr = if last_node_id.ptr == usize::MAX {
-            MemTrieNodePtr::from(arena1.memory().clone().ptr(usize::MAX)).clone()
-        } else {
-            last_node_id.as_ptr(arena1.memory().clone()).clone()
+        let (ordered_nodes, refcount_changes, mut nodes_storage) = {
+            let ptr = last_node_id.ptr;
+            let mut trie_update = MemTrieUpdate::new(&arena);
+            let root = trie_update.move_node_to_mutable(ptr);
+
+            for (key, value) in changes {
+                match value {
+                    Some(value) => {
+                        // ?! maybe just pass a vector?
+                        let flat_value = FlatStateValue::on_disk(&value);
+                        trie_update.insert(root, &key, flat_value)
+                    }
+                    None => trie_update.delete(root, &key),
+                };
+            }
+
+            trie_update.flatten_nodes(root)
         };
-        drop(arena1);
-        eprintln!("2");
-        let mut arena2 = lock.write().unwrap();
-        eprintln!("3");
-        let tc = ptr.update(changes, &mut arena2);
+
+        let tc = MemTrieUpdate::prepare_changes(
+            refcount_changes,
+            nodes_storage,
+            CryptoHash::default(),
+            ordered_nodes,
+            &mut arena,
+        );
         Ok(tc)
         // let mut memory = NodesStorage::new();
         // let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;

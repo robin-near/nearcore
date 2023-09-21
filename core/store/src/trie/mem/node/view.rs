@@ -1,6 +1,7 @@
 use super::{MemTrieNodePtr, MemTrieNodeView};
 use crate::trie::mem::arena::Arena;
 use crate::trie::mem::flexible_data::children::ChildrenView;
+use crate::trie::mem::node::loading::MemTrieNodePtrMut;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
 use crate::trie::TRIE_COSTS;
 use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges};
@@ -13,26 +14,28 @@ pub type UpdatedMemTrieNodeId = usize;
 
 // Reference to either node in big trie or in small temporary trie.
 #[derive(Clone)]
-pub enum UpdatedNodeRef<'a> {
-    Old(MemTrieNodePtr<'a>),
+pub enum UpdatedNodeRef {
+    // Old(MemTrieNodePtr<'a>),
+    Old(usize), // raw ptr
     New(UpdatedMemTrieNodeId),
 }
 
 // Structure to handle new temporarily created nodes.
 #[derive(Clone)]
-pub enum UpdatedMemTrieNode<'a> {
+pub enum UpdatedMemTrieNode {
     // Fancy edge case. Used when we create an empty child and descend to it to create new node.
     Empty,
     Leaf { extension: Box<[u8]>, value: FlatStateValue },
-    Extension { extension: Box<[u8]>, child: UpdatedNodeRef<'a> },
+    Extension { extension: Box<[u8]>, child: UpdatedNodeRef },
     // United Branch&BranchWithValue because it is easier to write `match`.
-    Branch { children: Vec<Option<UpdatedNodeRef<'a>>>, value: Option<FlatStateValue> },
+    Branch { children: Vec<Option<UpdatedNodeRef>>, value: Option<FlatStateValue> },
 }
 
-#[derive(Default)]
 pub struct MemTrieUpdate<'a> {
-    pub refcount_changes: HashMap<MemTrieNodeId, i32>,
-    pub nodes_storage: Vec<Option<UpdatedMemTrieNode<'a>>>,
+    arena: &'a Arena,
+    // offset -> refcount
+    pub refcount_changes: HashMap<usize, i32>,
+    pub nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
 }
 
 fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
@@ -40,8 +43,9 @@ fn convert_children(view: ChildrenView) -> Vec<Option<UpdatedNodeRef>> {
     let mut j = 0;
     for i in 0..16 {
         children.push(if view.mask & (1 << i) != 0 {
-            let child =
-                Some(UpdatedNodeRef::Old(MemTrieNodePtr::from(view.children.read_ptr_at(j))));
+            let child = Some(UpdatedNodeRef::Old(
+                MemTrieNodePtr::from(view.children.read_ptr_at(j)).ptr.raw_offset(),
+            ));
             j += 8;
             child
         } else {
@@ -58,27 +62,32 @@ enum FlattenNodesCrumb {
 }
 
 impl<'a> MemTrieUpdate<'a> {
-    pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode<'a> {
+    pub fn new(arena: &'a Arena) -> Self {
+        Self { arena, ..Default::default() }
+    }
+
+    pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
         self.nodes_storage.get_mut(index).unwrap().take().unwrap()
     }
 
     // Replace node in place due to changes
-    pub fn store_at(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode<'a>) {
+    pub fn store_at(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode) {
         self.nodes_storage[index] = Some(node);
     }
 
     // Create new node
-    pub fn store(&mut self, node: UpdatedMemTrieNode<'a>) -> UpdatedMemTrieNodeId {
+    pub fn store(&mut self, node: UpdatedMemTrieNode) -> UpdatedMemTrieNodeId {
         let index = self.nodes_storage.len();
         self.nodes_storage.push(Some(node));
         index
     }
 
-    pub fn move_node_to_mutable(&mut self, node: &MemTrieNodePtr<'a>) -> usize {
-        if node.id().ptr == usize::MAX {
+    pub fn move_node_to_mutable(&mut self, node: usize) -> usize {
+        if node == usize::MAX {
             self.store(UpdatedMemTrieNode::Empty)
         } else {
-            *self.refcount_changes.entry(node.id()).or_insert_with(|| 0) -= 1;
+            *self.refcount_changes.entry(node).or_insert_with(|| 0) -= 1;
+            let node = MemTrieNodePtr::from(self.arena.memory().ptr(node));
             let updated_node = node.view().to_updated();
             self.store(updated_node)
         }
@@ -132,7 +141,7 @@ impl<'a> MemTrieUpdate<'a> {
                         let child = &mut new_children[partial.at(0) as usize];
                         let new_node_id = match child.take() {
                             Some(UpdatedNodeRef::Old(node_ptr)) => {
-                                self.move_node_to_mutable(&node_ptr)
+                                self.move_node_to_mutable(node_ptr)
                             }
                             Some(UpdatedNodeRef::New(node_id)) => node_id,
                             None => self.store(UpdatedMemTrieNode::Empty),
@@ -243,7 +252,7 @@ impl<'a> MemTrieUpdate<'a> {
                     } else if common_prefix == existing_key.len() {
                         // Dereference child and descend into it.
                         let child = match child {
-                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr.clone()),
                             UpdatedNodeRef::New(node_id) => node_id.clone(),
                         };
                         let node = UpdatedMemTrieNode::Extension {
@@ -330,7 +339,7 @@ impl<'a> MemTrieUpdate<'a> {
                             }
                         };
                         let new_node_id = match node {
-                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr.clone()),
                             UpdatedNodeRef::New(node_id) => node_id,
                         };
                         *child = Some(UpdatedNodeRef::New(new_node_id));
@@ -351,7 +360,7 @@ impl<'a> MemTrieUpdate<'a> {
                     };
                     if common_prefix == existing_len {
                         let new_node_id = match child {
-                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr.clone()),
                             UpdatedNodeRef::New(node_id) => node_id.clone(),
                         };
                         self.store_at(
@@ -439,7 +448,7 @@ impl<'a> MemTrieUpdate<'a> {
         &mut self,
         node_id: UpdatedMemTrieNodeId,
         key: Vec<u8>,
-        child: &UpdatedNodeRef<'a>,
+        child: &UpdatedNodeRef,
     ) {
         let child = match child {
             UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr),
@@ -488,7 +497,12 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
-    pub fn flatten_nodes(&self, root_id: UpdatedMemTrieNodeId) -> Vec<UpdatedMemTrieNodeId> {
+    pub fn flatten_nodes(
+        self,
+        root_id: UpdatedMemTrieNodeId,
+    ) -> (Vec<UpdatedMemTrieNodeId>, HashMap<usize, i32>, Vec<Option<UpdatedMemTrieNode>>) {
+        let Self { refcount_changes, nodes_storage, .. } = self;
+
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
         let mut ordered_nodes = vec![];
@@ -539,18 +553,18 @@ impl<'a> MemTrieUpdate<'a> {
             ordered_nodes.push(node);
         }
 
-        ordered_nodes
+        (ordered_nodes, refcount_changes, nodes_storage)
     }
 
     // Prepare Trie changes and update Arena right now.
     // Yeah it is not atomic, but enough for testing for now.
     pub fn prepare_changes(
-        self,
+        id_refcount_changes: HashMap<usize, i32>,
+        mut nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
         old_root: CryptoHash,
         nodes: Vec<UpdatedMemTrieNodeId>,
         arena: &mut Arena,
     ) -> TrieChanges {
-        let Self { refcount_changes: id_refcount_changes, mut nodes_storage } = self;
         let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
 
         let map_node = |node: UpdatedNodeRef,

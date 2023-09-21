@@ -13,7 +13,7 @@ use std::fmt::{Debug, Formatter};
 use super::arena::{Arena, ArenaMemory, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
-use crate::trie::mem::node::view::{
+pub use crate::trie::mem::node::view::{
     MemTrieUpdate, UpdatedMemTrieNode, UpdatedMemTrieNodeId, UpdatedNodeRef,
 };
 use crate::{NibbleSlice, TrieChanges};
@@ -69,29 +69,6 @@ impl<'a> MemTrieNodePtr<'a> {
 
     pub fn id(&self) -> MemTrieNodeId {
         MemTrieNodeId { ptr: self.ptr.raw_offset() }
-    }
-
-    // temporarily put &mut access here for testing
-    pub fn update<I>(&self, changes: I, arena: &mut Arena) -> TrieChanges
-    where
-        I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
-    {
-        let mut trie_update = MemTrieUpdate::default();
-        let root = trie_update.move_node_to_mutable(&self);
-
-        for (key, value) in changes {
-            match value {
-                Some(value) => {
-                    // ?! maybe just pass a vector?
-                    let flat_value = FlatStateValue::on_disk(&value);
-                    trie_update.insert(root, &key, flat_value)
-                }
-                None => trie_update.delete(root, &key),
-            };
-        }
-
-        let ordered_nodes = trie_update.flatten_nodes(root);
-        trie_update.prepare_changes(CryptoHash::default(), ordered_nodes, arena)
     }
 }
 
