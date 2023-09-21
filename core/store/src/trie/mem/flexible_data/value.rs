@@ -1,6 +1,7 @@
 use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut, BorshFixedSize};
 
 use super::FlexibleDataHeader;
+use crate::TrieStorage;
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::{FlatStateValue, ValueRef};
@@ -89,6 +90,13 @@ pub enum ValueView<'a> {
 }
 
 impl<'a> ValueView<'a> {
+    pub fn to_value(&self, storage: &dyn TrieStorage) -> Vec<u8> {
+        match self {
+            Self::Ref { hash, .. } => storage.retrieve_raw_bytes(hash).unwrap().to_vec(),
+            Self::Inlined(data) => data.as_slice().to_vec(),
+        }
+    }
+
     pub fn to_flat_value(&self) -> FlatStateValue {
         match self {
             Self::Ref { length, hash } => {

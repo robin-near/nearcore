@@ -98,7 +98,7 @@ impl<'a> MemTrieUpdate<'a> {
         } else {
             *self.refcount_changes.entry(node).or_insert_with(|| 0) -= 1;
             let node = MemTrieNodePtr::from(self.arena.memory().ptr(node));
-            let updated_node = node.view().to_updated();
+            let updated_node = node.view().to_updated(self.storage.as_ref());
             self.store(updated_node)
         }
     }
@@ -741,18 +741,18 @@ impl<'a> MemTrieNodeView<'a> {
         }
     }
 
-    pub fn to_updated(self) -> UpdatedMemTrieNode {
+    pub fn to_updated(self, storage: &dyn TrieStorage) -> UpdatedMemTrieNode {
         match self {
             Self::Leaf { extension, value } => UpdatedMemTrieNode::Leaf {
                 extension: extension.as_slice().to_vec().into_boxed_slice(),
-                value: value.to_flat_value(),
+                value: value.to_value(storage),
             },
             Self::Branch { children, .. } => {
                 UpdatedMemTrieNode::Branch { children: convert_children(children), value: None }
             }
             Self::BranchWithValue { children, value, .. } => UpdatedMemTrieNode::Branch {
                 children: convert_children(children),
-                value: Some(value.to_flat_value()),
+                value: Some(value.to_value(storage)),
             },
             Self::Extension { extension, child, .. } => UpdatedMemTrieNode::Extension {
                 extension: extension.as_slice().to_vec().into_boxed_slice(),
