@@ -123,6 +123,10 @@ impl<'a> ArenaPtr<'a> {
         self.arena
     }
 
+    pub fn arena_mut(&mut self) -> &'a mut ArenaMemory {
+        &mut self.arena
+    }
+
     pub fn read_usize(&self) -> usize {
         usize::try_from_slice(&self.arena.raw_slice(self.pos, 8)).unwrap()
     }

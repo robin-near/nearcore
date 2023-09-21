@@ -550,7 +550,7 @@ impl<'a> MemTrieUpdate<'a> {
             }
         };
 
-        let mut refcount_changes: HashMadp<CryptoHash, (Vec<u8>, i32)> = Default::default();
+        let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
         let mut last_node_hash = old_root; // last node must be new root, lol
         for node_id in nodes.into_iter() {
             let node = self.nodes_storage[node_id].unwrap();
@@ -586,7 +586,7 @@ impl<'a> MemTrieUpdate<'a> {
 
         let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
 
-        Ok(TrieChanges { old_root, new_root: last_node_hash, insertions, deletions })
+        TrieChanges { old_root, new_root: last_node_hash, insertions, deletions }
     }
 }
 

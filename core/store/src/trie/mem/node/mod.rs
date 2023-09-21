@@ -6,6 +6,7 @@ mod loading;
 mod tests;
 mod view;
 
+use near_primitives::errors::StorageError;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
@@ -13,7 +14,7 @@ use super::arena::{Arena, ArenaMemory, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
 use crate::trie::mem::node::view::{MemTrieUpdate, UpdatedNodeRef};
-use crate::NibbleSlice;
+use crate::{NibbleSlice, TrieChanges};
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
 
@@ -68,11 +69,26 @@ impl<'a> MemTrieNodePtr<'a> {
         MemTrieNodeId { ptr: self.ptr.raw_offset() }
     }
 
-    // todo: take state changes and gen trie updates
-    pub fn update(&self, key: &[u8], value: FlatStateValue) {
+    // temporarily put &mut access here for testing
+    pub fn update<I>(&self, changes: I, arena: &mut Arena) -> TrieChanges
+    where
+        I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+    {
         let mut trie_update = MemTrieUpdate::default();
         let root = trie_update.move_node_to_mutable(&self);
-        trie_update.insert(root, key, value);
+
+        for (key, value) in changes {
+            match value {
+                Some(value) => {
+                    // ?! maybe just pass a vector?
+                    let flat_value = FlatStateValue::on_disk(&value);
+                    trie_update.insert(root, &key, flat_value)
+                }
+                None => trie_update.delete(root, &key),
+            };
+        }
+        let ordered_nodes = trie_update.flatten_nodes(root);
+        trie_update.prepare_changes(CryptoHash::default(), ordered_nodes, arena)
     }
 }
 
