@@ -1045,6 +1045,8 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
+        eprintln!("0");
+        panic!("ttttt");
         // build mem trie from self
         let mut lock = RwLock::new(mem::Arena::new(1024 * 1024 * 1024));
         let mut arena = lock.write().unwrap();
