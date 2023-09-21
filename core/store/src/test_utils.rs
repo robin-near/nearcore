@@ -14,6 +14,7 @@ use near_primitives::account::id::AccountId;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::receipt::{DataReceipt, Receipt, ReceiptEnum};
 use near_primitives::shard_layout::{ShardUId, ShardVersion};
+use near_primitives::state_record::StateRecord;
 use near_primitives::types::{NumShards, StateRoot};
 use std::str::from_utf8;
 
@@ -78,6 +79,7 @@ pub fn test_populate_trie(
 ) -> CryptoHash {
     let trie = tries.get_trie_for_shard(shard_uid, *root);
     let trie_changes = trie.update(changes.iter().cloned()).unwrap();
+    eprintln!("INSERTIONS");
     for it in trie_changes.insertions() {
         eprintln!("{:?}", it);
     }
@@ -86,6 +88,10 @@ pub fn test_populate_trie(
     store_update.commit().unwrap();
     let deduped = simplify_changes(&changes);
     let trie = tries.get_trie_for_shard(shard_uid, root);
+    eprintln!("ITEMS");
+    for it in trie.iter().unwrap() {
+        eprintln!("{:?}", it.unwrap());
+    }
     for (key, value) in deduped {
         eprintln!("{:?} {:?}", key, value);
         assert_eq!(trie.get(&key), Ok(value));
