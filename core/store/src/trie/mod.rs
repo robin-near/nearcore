@@ -1046,7 +1046,6 @@ impl Trie {
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
         eprintln!("0");
-        panic!("ttttt");
         // build mem trie from self
         let mut lock = RwLock::new(mem::Arena::new(1024 * 1024 * 1024));
         let mut arena = lock.write().unwrap();
@@ -1054,7 +1053,7 @@ impl Trie {
         let path_end = self.find_state_part_boundary(1, 1).unwrap();
         let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
         let mut last_node_id = MemTrieNodeId::from(usize::MAX);
-        eprintln!("0");
+        eprintln!("0.25");
         for item in self
             .iter()
             .unwrap()
@@ -1099,6 +1098,7 @@ impl Trie {
             last_node_id = node_id;
             mapper.insert(hash, node_id);
         }
+        panic!("tttt");
         eprintln!("0.5");
         if last_node_id.ptr != usize::MAX {
             last_node_id.add_ref(&mut arena);
