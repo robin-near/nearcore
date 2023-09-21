@@ -4,11 +4,12 @@ use crate::trie::mem::flexible_data::children::ChildrenView;
 use crate::trie::mem::node::loading::MemTrieNodePtrMut;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
 use crate::trie::TRIE_COSTS;
-use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges};
+use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges, TrieStorage};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::state::FlatStateValue;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub type UpdatedMemTrieNodeId = usize;
 
@@ -33,8 +34,11 @@ pub enum UpdatedMemTrieNode {
 
 pub struct MemTrieUpdate<'a> {
     arena: &'a Arena,
+    // for values
+    storage: Rc<dyn TrieStorage>,
     // offset -> refcount
     pub refcount_changes: HashMap<usize, i32>,
+    pub value_removals: Vec<Vec<u8>>,
     pub nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
 }
 
@@ -62,8 +66,14 @@ enum FlattenNodesCrumb {
 }
 
 impl<'a> MemTrieUpdate<'a> {
-    pub fn new(arena: &'a Arena) -> Self {
-        Self { arena, refcount_changes: Default::default(), nodes_storage: vec![] }
+    pub fn new(arena: &'a Arena, storage: Rc<dyn TrieStorage>) -> Self {
+        Self {
+            arena,
+            storage,
+            refcount_changes: Default::default(),
+            value_removals: Default::default(),
+            nodes_storage: vec![],
+        }
     }
 
     pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
@@ -93,6 +103,15 @@ impl<'a> MemTrieUpdate<'a> {
         }
     }
 
+    fn get_value(&self, value: FlatStateValue) -> Vec<u8> {
+        match value {
+            FlatStateValue::Inlined(v) => v,
+            FlatStateValue::Ref(value_ref) => {
+                self.storage.retrieve_raw_bytes(&value_ref.hash).unwrap().to_vec()
+            }
+        }
+    }
+
     // INSERT/DELETE LOGIC
 
     // Starting from the root, insert `key` to trie, modifying nodes on the way from top to bottom.
@@ -114,7 +133,6 @@ impl<'a> MemTrieUpdate<'a> {
             let node = self.destroy(node_id);
             match node {
                 UpdatedMemTrieNode::Empty => {
-                    // store value somehow
                     let extension: Vec<_> = partial.encoded(true).into_vec();
                     let leaf_node = UpdatedMemTrieNode::Leaf {
                         extension: extension.into_boxed_slice(),
@@ -126,8 +144,8 @@ impl<'a> MemTrieUpdate<'a> {
                 UpdatedMemTrieNode::Branch { children, value: old_value } => {
                     if partial.is_empty() {
                         // Store value here.
-                        if let Some(_value) = old_value {
-                            // delete value somehow
+                        if let Some(value) = old_value {
+                            self.value_removals.push(self.get_value(value));
                         }
                         // store value somehow
                         // can't just move `value` because it happens inside a loop :(
@@ -165,7 +183,7 @@ impl<'a> MemTrieUpdate<'a> {
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
                         // Equivalent leaf, rewrite the value.
-                        // delete value somehow
+                        self.value_removals.push(self.get_value(old_value));
                         let node = UpdatedMemTrieNode::Leaf {
                             extension: key.clone(),
                             value: value.take().unwrap(),
@@ -300,15 +318,15 @@ impl<'a> MemTrieUpdate<'a> {
             path.push(node_id);
             let node = self.destroy(node_id);
 
-            match &node {
+            match node {
                 // finished
                 UpdatedMemTrieNode::Empty => {
                     self.store_at(node_id, UpdatedMemTrieNode::Empty);
                     break;
                 }
                 UpdatedMemTrieNode::Leaf { extension: key, value } => {
-                    if NibbleSlice::from_encoded(key).0 == partial {
-                        // delete value somehow
+                    if NibbleSlice::from_encoded(&key).0 == partial {
+                        self.value_removals.push(self.get_value(value));
                         self.store_at(node_id, UpdatedMemTrieNode::Empty);
                         break;
                     } else {
@@ -317,13 +335,13 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Branch { children, value } => {
                     if partial.is_empty() {
-                        let _value = match value {
+                        let value = match value {
                             Some(value) => value,
                             None => {
                                 panic!("no value for key {:?}", key);
                             }
                         };
-                        // delete value somehow
+                        self.value_removals.push(self.get_value(value));
                         // there must be at least 1 child, otherwise it shouldn't be a branch.
                         // could be even 2, but there is some weird case when 1
                         assert!(children.iter().filter(|x| x.is_some()).count() >= 1);

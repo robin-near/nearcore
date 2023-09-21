@@ -1105,7 +1105,7 @@ impl Trie {
         eprintln!("1");
         let (ordered_nodes, refcount_changes, mut nodes_storage) = {
             let ptr = last_node_id.ptr;
-            let mut trie_update = MemTrieUpdate::new(&arena);
+            let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
             let root = trie_update.move_node_to_mutable(ptr);
 
             for (key, value) in changes {
