@@ -507,7 +507,7 @@ impl<'a> MemTrieUpdate<'a> {
         stack.push((root_id, FlattenNodesCrumb::Entering));
         let mut ordered_nodes = vec![];
         'outer: while let Some((node, position)) = stack.pop() {
-            let updated_node = self.nodes_storage[node].as_ref().unwrap();
+            let updated_node = nodes_storage[node].as_ref().unwrap();
             match updated_node {
                 UpdatedMemTrieNode::Empty => {
                     // panic?!
