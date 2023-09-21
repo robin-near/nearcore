@@ -239,7 +239,7 @@ impl<'a> MemTrieUpdate<'a> {
                     } else if common_prefix == existing_key.len() {
                         // Dereference child and descend into it.
                         let child = match child {
-                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr),
+                            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
                             UpdatedNodeRef::New(node_id) => node_id.clone(),
                         };
                         let node = UpdatedMemTrieNode::Extension {
@@ -431,7 +431,12 @@ impl<'a> MemTrieUpdate<'a> {
 
     // If some branch has only one child, it may end up being squashed to extension.
     // Then we need to append some existing child to a key and put it into `node_id`.
-    fn extend_child(&mut self, node_id: UpdatedMemTrieNodeId, key: Vec<u8>, child: UpdatedNodeRef) {
+    fn extend_child(
+        &mut self,
+        node_id: UpdatedMemTrieNodeId,
+        key: Vec<u8>,
+        child: UpdatedNodeRef<'a>,
+    ) {
         let child = match child {
             UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
             UpdatedNodeRef::New(node_id) => node_id,
