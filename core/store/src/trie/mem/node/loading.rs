@@ -3,6 +3,7 @@ use crate::trie::mem::flexible_data::encoding::RawDecoderMut;
 
 use super::encoding::{CommonHeader, NodeKind, NonLeafHeader};
 use super::{MemTrieNodeId, MemTrieNodePtr};
+use crate::trie::mem::Arena;
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 
@@ -13,6 +14,10 @@ pub(crate) struct MemTrieNodePtrMut<'a> {
 impl MemTrieNodeId {
     pub(crate) fn as_ptr_mut<'a>(&self, arena: &'a mut ArenaMemory) -> MemTrieNodePtrMut<'a> {
         MemTrieNodePtrMut { ptr: arena.ptr_mut(self.ptr) }
+    }
+
+    pub(crate) fn as_ptr<'a>(&self, arena: &ArenaMemory) -> MemTrieNodePtr<'a> {
+        MemTrieNodePtr { ptr: arena.ptr(self.ptr) }
     }
 }
 

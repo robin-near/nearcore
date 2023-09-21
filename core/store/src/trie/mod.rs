@@ -16,7 +16,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_primitives::challenge::PartialState;
 use near_primitives::hash::{hash, CryptoHash};
 pub use near_primitives::shard_layout::ShardUId;
-use near_primitives::state::ValueRef;
+use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::state_record::StateRecord;
 use near_primitives::trie_key::TrieKey;
 pub use near_primitives::types::TrieNodesCount;
@@ -52,6 +52,7 @@ pub mod update;
 use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
+use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
 pub use from_flat::construct_trie_from_flat;
 
 const POISONED_LOCK_ERR: &str = "The lock was poisoned.";
@@ -1043,7 +1044,56 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
-        Ok(TrieChanges::empty(self.root.clone()))
+        // build mem trie from self
+        let mut arena = mem::Arena::new(1024 * 1024 * 1024);
+        let path_begin = self.find_state_part_boundary(0, 1).unwrap();
+        let path_end = self.find_state_part_boundary(1, 1).unwrap();
+        let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
+        let mut last_node_id = MemTrieNodeId::from(0);
+        for item in self
+            .iter()
+            .unwrap()
+            .visit_nodes_interval(&path_begin, &path_end)
+            .unwrap()
+            .into_iter()
+            .rev()
+        {
+            let hash = item.hash;
+            let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
+            let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
+            // convert...
+            let input_node = match raw_node.node {
+                RawTrieNode::Leaf(key, value_ref) => InputMemTrieNode::Leaf {
+                    value: FlatStateValue::Ref(value_ref), // inline???
+                    extension: key.into_boxed_slice(),
+                },
+                RawTrieNode::Extension(key, child) => InputMemTrieNode::Extension {
+                    extension: key.into_boxed_slice(),
+                    child: *mapper.get(&child).unwrap(),
+                },
+                RawTrieNode::BranchNoValue(children) => {
+                    let children =
+                        children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
+                    InputMemTrieNode::Branch { children }
+                }
+                RawTrieNode::BranchWithValue(value_ref, children) => {
+                    let children =
+                        children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
+                    InputMemTrieNode::BranchWithValue {
+                        children,
+                        value: FlatStateValue::Ref(value_ref),
+                    }
+                }
+            };
+            let node_id = MemTrieNodeId::new(&mut arena, input_node);
+            last_node_id = node_id;
+            mapper.insert(hash, node_id);
+        }
+        last_node_id.add_ref(&mut arena);
+
+        let ptr = last_node_id.as_ptr(arena.memory());
+        let tc = ptr.update(changes, &mut arena);
+        Ok(tc)
         // let mut memory = NodesStorage::new();
         // let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
         // for (key, value) in changes {

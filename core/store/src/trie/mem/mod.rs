@@ -1,4 +1,4 @@
-use self::arena::Arena;
+pub use self::arena::Arena;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
 use near_primitives::hash::CryptoHash;
 use std::collections::HashMap;
