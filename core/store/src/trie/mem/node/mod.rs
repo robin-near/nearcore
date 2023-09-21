@@ -13,7 +13,9 @@ use std::fmt::{Debug, Formatter};
 use super::arena::{Arena, ArenaMemory, ArenaPtr, ArenaSlice};
 use super::flexible_data::children::ChildrenView;
 use super::flexible_data::value::ValueView;
-use crate::trie::mem::node::view::{MemTrieUpdate, UpdatedNodeRef};
+use crate::trie::mem::node::view::{
+    MemTrieUpdate, UpdatedMemTrieNode, UpdatedMemTrieNodeId, UpdatedNodeRef,
+};
 use crate::{NibbleSlice, TrieChanges};
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
@@ -87,6 +89,7 @@ impl<'a> MemTrieNodePtr<'a> {
                 None => trie_update.delete(root, &key),
             };
         }
+
         let ordered_nodes = trie_update.flatten_nodes(root);
         trie_update.prepare_changes(CryptoHash::default(), ordered_nodes, arena)
     }

@@ -27,9 +27,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::rc::Rc;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 pub mod accounting_cache;
 mod config;
@@ -1045,7 +1046,8 @@ impl Trie {
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
         // build mem trie from self
-        let mut arena = mem::Arena::new(1024 * 1024 * 1024);
+        let mut lock = RwLock::new(mem::Arena::new(1024 * 1024 * 1024));
+        let mut arena = lock.write().unwrap();
         let path_begin = self.find_state_part_boundary(0, 1).unwrap();
         let path_end = self.find_state_part_boundary(1, 1).unwrap();
         let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
@@ -1090,9 +1092,13 @@ impl Trie {
             mapper.insert(hash, node_id);
         }
         last_node_id.add_ref(&mut arena);
+        drop(arena);
 
-        let ptr = last_node_id.as_ptr(arena.memory());
-        let tc = ptr.update(changes, &mut arena);
+        let arena1 = lock.read().unwrap();
+        let ptr = last_node_id.as_ptr(arena1.memory());
+
+        let mut arena2 = lock.write().unwrap();
+        let tc = ptr.update(changes, &mut arena2);
         Ok(tc)
         // let mut memory = NodesStorage::new();
         // let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;

@@ -484,7 +484,7 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
-    pub fn flatten_nodes(&mut self, root_id: UpdatedMemTrieNodeId) -> Vec<UpdatedMemTrieNodeId> {
+    pub fn flatten_nodes(&self, root_id: UpdatedMemTrieNodeId) -> Vec<UpdatedMemTrieNodeId> {
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
         let mut ordered_nodes = vec![];

@@ -1,11 +1,15 @@
 use crate::trie::mem::arena::{ArenaMemory, ArenaPtrMut};
 use crate::trie::mem::flexible_data::encoding::RawDecoderMut;
+use std::collections::HashMap;
 
 use super::encoding::{CommonHeader, NodeKind, NonLeafHeader};
 use super::{MemTrieNodeId, MemTrieNodePtr};
+use crate::trie::mem::node::view::{MemTrieUpdate, UpdatedMemTrieNode, UpdatedMemTrieNodeId};
 use crate::trie::mem::Arena;
+use crate::trie::update::TrieUpdates;
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
+use near_primitives::state::FlatStateValue;
 
 pub(crate) struct MemTrieNodePtrMut<'a> {
     ptr: ArenaPtrMut<'a>,
