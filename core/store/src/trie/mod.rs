@@ -1061,6 +1061,7 @@ impl Trie {
             .rev()
         {
             let hash = item.hash;
+            eprintln!("{}", hash);
             let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
             let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
             // convert...
