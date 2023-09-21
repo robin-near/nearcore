@@ -121,6 +121,7 @@ impl<'a> MemTrieUpdate<'a> {
                         value: value.take().unwrap(),
                     };
                     self.store_at(node_id, leaf_node);
+                    break;
                 }
                 UpdatedMemTrieNode::Branch { children, value: old_value } => {
                     if partial.is_empty() {
