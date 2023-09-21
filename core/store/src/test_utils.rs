@@ -78,6 +78,9 @@ pub fn test_populate_trie(
 ) -> CryptoHash {
     let trie = tries.get_trie_for_shard(shard_uid, *root);
     let trie_changes = trie.update(changes.iter().cloned()).unwrap();
+    for it in trie_changes.insertions() {
+        eprintln!("{:?}", it);
+    }
     let mut store_update = tries.store_update();
     let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
     store_update.commit().unwrap();
