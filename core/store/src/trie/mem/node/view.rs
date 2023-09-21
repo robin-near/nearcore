@@ -1,5 +1,5 @@
 use super::{MemTrieNodePtr, MemTrieNodeView};
-use crate::trie::mem::arena::Arena;
+use crate::trie::mem::arena::{Arena, ArenaPtr};
 use crate::trie::mem::flexible_data::children::ChildrenView;
 use crate::trie::mem::node::loading::MemTrieNodePtrMut;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
@@ -63,7 +63,7 @@ enum FlattenNodesCrumb {
 
 impl<'a> MemTrieUpdate<'a> {
     pub fn new(arena: &'a Arena) -> Self {
-        Self { arena, ..Default::default() }
+        Self { arena, refcount_changes: Default::default(), nodes_storage: vec![] }
     }
 
     pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
@@ -451,7 +451,7 @@ impl<'a> MemTrieUpdate<'a> {
         child: &UpdatedNodeRef,
     ) {
         let child = match child {
-            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr),
+            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr.clone()),
             UpdatedNodeRef::New(node_id) => node_id.clone(),
         };
         let child_node = self.destroy(child);
@@ -572,14 +572,13 @@ impl<'a> MemTrieUpdate<'a> {
          -> MemTrieNodeId {
             match node {
                 UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
-                UpdatedNodeRef::Old(ptr) => ptr.id().clone(),
+                UpdatedNodeRef::Old(ptr) => MemTrieNodeId::from(ptr),
             }
         };
 
         let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
         for (node_id, rc) in id_refcount_changes {
-            let node_mut = node_id.as_ptr_mut(arena.memory_mut());
-            let node = node_mut.as_const();
+            let node = MemTrieNodePtr::from(arena.memory().ptr(node_id));
             let view = node.view();
             let hash = view.node_hash();
             let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
