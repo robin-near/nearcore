@@ -387,7 +387,7 @@ impl<'a> MemTrieUpdate<'a> {
                     for child in children.iter_mut() {
                         if let Some(UpdatedNodeRef::New(child_node_id)) = child {
                             if let UpdatedMemTrieNode::Empty =
-                                self.nodes_storage[*child_node_id as usize].unwrap()
+                                self.nodes_storage[*child_node_id as usize].as_ref().unwrap()
                             {
                                 *child = None;
                             }
@@ -410,10 +410,10 @@ impl<'a> MemTrieUpdate<'a> {
                         let (idx, child) = children
                             .iter()
                             .enumerate()
-                            .filter(|(idx, node)| node.is_some())
+                            .filter(|(_, node)| node.is_some())
                             .next()
                             .unwrap();
-                        let child = child.unwrap();
+                        let child = child.as_ref().unwrap();
                         let key: Vec<_> = NibbleSlice::new(&[(idx << 4) as u8])
                             .encoded_leftmost(1, false)
                             .into_vec();
@@ -423,7 +423,7 @@ impl<'a> MemTrieUpdate<'a> {
                     }
                 }
                 UpdatedMemTrieNode::Extension { extension, child } => {
-                    self.extend_child(node_id, extension.to_vec(), child);
+                    self.extend_child(node_id, extension.to_vec(), &child);
                 }
             }
         }
@@ -435,11 +435,11 @@ impl<'a> MemTrieUpdate<'a> {
         &mut self,
         node_id: UpdatedMemTrieNodeId,
         key: Vec<u8>,
-        child: UpdatedNodeRef<'a>,
+        child: &UpdatedNodeRef<'a>,
     ) {
         let child = match child {
-            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(&ptr),
-            UpdatedNodeRef::New(node_id) => node_id,
+            UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr),
+            UpdatedNodeRef::New(node_id) => node_id.clone(),
         };
         let child_node = self.destroy(child);
         match child_node {
@@ -489,8 +489,8 @@ impl<'a> MemTrieUpdate<'a> {
         stack.push((root_id, FlattenNodesCrumb::Entering));
         let mut ordered_nodes = vec![];
         'outer: while let Some((node, position)) = stack.pop() {
-            let updated_node = self.nodes_storage[node].unwrap();
-            match &updated_node {
+            let updated_node = self.nodes_storage[node].as_ref().unwrap();
+            match updated_node {
                 UpdatedMemTrieNode::Empty => {
                     // panic?!
                     continue;
@@ -546,30 +546,47 @@ impl<'a> MemTrieUpdate<'a> {
         nodes: Vec<UpdatedMemTrieNodeId>,
         arena: &mut Arena,
     ) -> TrieChanges {
+        let Self { refcount_changes: id_refcount_changes, mut nodes_storage } = self;
         let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
 
-        let map_node = |node: UpdatedNodeRef| -> MemTrieNodeId {
+        let map_node = |node: UpdatedNodeRef,
+                        map: &HashMap<UpdatedMemTrieNodeId, MemTrieNodeId>|
+         -> MemTrieNodeId {
             match node {
-                UpdatedNodeRef::New(node) => mapped_nodes.get(&node).unwrap().clone(),
+                UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
                 UpdatedNodeRef::Old(ptr) => ptr.id().clone(),
             }
         };
 
         let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
+        for (node_id, rc) in id_refcount_changes {
+            let node_mut = node_id.as_ptr_mut(arena.memory_mut());
+            let node = node_mut.as_const();
+            let view = node.view();
+            let hash = view.node_hash();
+            let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
+            let (_, old_rc) =
+                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
+            *old_rc -= rc;
+        }
+
         let mut last_node_hash = old_root; // last node must be new root, lol
         for node_id in nodes.into_iter() {
-            let node = self.nodes_storage[node_id].unwrap();
+            let node = nodes_storage.get_mut(node_id).unwrap().take().unwrap();
             let node = match node {
                 UpdatedMemTrieNode::Empty => unreachable!(),
                 UpdatedMemTrieNode::Branch { children, value } => {
-                    let children = children.into_iter().map(|child| child.map(map_node)).collect();
+                    let children = children
+                        .into_iter()
+                        .map(|child| child.map(|c| map_node(c, &mapped_nodes)))
+                        .collect();
                     match value {
                         Some(value) => InputMemTrieNode::BranchWithValue { children, value },
                         None => InputMemTrieNode::Branch { children },
                     }
                 }
                 UpdatedMemTrieNode::Extension { extension, child } => {
-                    InputMemTrieNode::Extension { extension, child: map_node(child) }
+                    InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
                 }
                 UpdatedMemTrieNode::Leaf { extension, value } => {
                     InputMemTrieNode::Leaf { value, extension }
@@ -587,6 +604,8 @@ impl<'a> MemTrieUpdate<'a> {
             let (_, rc) =
                 refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
             *rc += 1;
+
+            last_node_hash = hash;
         }
 
         let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
