@@ -1206,7 +1206,8 @@ pub mod estimator {
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::test_utils::{
         create_test_store, create_tries, create_tries_complex, gen_changes, simplify_changes,
@@ -1482,7 +1483,8 @@ mod tests {
 
     #[test]
     fn test_refcounts() {
-        let mut rng = rand::thread_rng();
+        let mut rng: StdRng = SeedableRng::from_seed([1; 32]);
+        // let mut rng = rand::thread_rng();
         for _test_run in 0..10 {
             let num_iterations = rng.gen_range(1..20);
             let tries = create_tries();
