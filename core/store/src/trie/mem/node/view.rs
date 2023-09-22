@@ -198,16 +198,21 @@ impl<'a> MemTrieUpdate<'a> {
                     } else if common_prefix == 0 {
                         // split leaf to branch.
                         let mut children = vec![None; 16];
-                        let idx = existing_key.at(0) as usize;
-                        let new_extension: Vec<_> = existing_key.mid(1).encoded(true).into_vec();
-                        let new_leaf = UpdatedMemTrieNode::Leaf {
-                            extension: new_extension.into_boxed_slice(),
-                            value: old_value.clone(),
+                        let branch_node = if existing_key.is_empty() {
+                            // yeah it can be empty... if branch leads directly to value :(
+                            UpdatedMemTrieNode::Branch { children, value: Some(old_value)) }
+                        } else {
+                            let idx = existing_key.at(0) as usize;
+                            let new_extension: Vec<_> = existing_key.mid(1).encoded(true).into_vec();
+                            let new_leaf = UpdatedMemTrieNode::Leaf {
+                                extension: new_extension.into_boxed_slice(),
+                                value: old_value.clone(),
+                            };
+                            let new_node_id = self.store(new_leaf);
+                            children[idx] = Some(UpdatedNodeRef::New(new_node_id));
+                            // no value in current branch, as common prefix is 0
+                            UpdatedMemTrieNode::Branch { children, value: None }
                         };
-                        let new_node_id = self.store(new_leaf);
-                        children[idx] = Some(UpdatedNodeRef::New(new_node_id));
-                        // no value in current branch, as common prefix is 0
-                        let branch_node = UpdatedMemTrieNode::Branch { children, value: None };
                         self.store_at(node_id, branch_node);
                         // on next iteration, we will add the second child!
                         continue;
