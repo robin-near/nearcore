@@ -753,12 +753,17 @@ impl ShardTries {
         let mut guard = self.0.mem_tries.write().unwrap();
         guard.insert(shard_uid, Arc::new(RwLock::new(mem_tries)));
     }
+
+    pub fn get_mem_tries(&self, shard_uid: ShardUId) -> Arc<RwLock<MemTries>> {
+        let guard = self.0.mem_tries.write().unwrap();
+        guard.get(&shard_uid).unwrap().clone()
+    }
 }
 
 pub struct WrappedTrieChanges {
-    tries: ShardTries,
-    shard_uid: ShardUId,
-    trie_changes: TrieChanges,
+    pub tries: ShardTries,
+    pub shard_uid: ShardUId,
+    pub trie_changes: TrieChanges,
     state_changes: Vec<RawStateChangesWithTrieKey>,
     block_hash: CryptoHash,
 }

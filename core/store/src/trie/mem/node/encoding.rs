@@ -229,7 +229,7 @@ impl MemTrieNodeId {
         refcount.write_u32_at(0, new_refcount + 1);
     }
 
-    pub(crate) fn remove_ref(&self, arena: &mut Arena) {
+    pub(crate) fn remove_ref(&self, arena: &mut Arena) -> u32 {
         let mut refcount = arena.memory_mut().slice_mut(self.ptr, 4);
         let new_refcount = refcount.read_u32_at(0) - 1;
         refcount.write_u32_at(0, new_refcount);
@@ -245,6 +245,7 @@ impl MemTrieNodeId {
                 MemTrieNodeId::from(*child).remove_ref(arena);
             }
         }
+        new_refcount
     }
 }
 

@@ -54,8 +54,11 @@ use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
 use crate::trie::mem::lookup::MemTrieLookup;
-use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieUpdate};
-use crate::trie::mem::MemTries;
+use crate::trie::mem::node::{
+    InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieUpdate, UpdatedMemTrieNode,
+    UpdatedMemTrieNodeId, UpdatedNodeRef,
+};
+use crate::trie::mem::{Arena, MemTries};
 pub use from_flat::construct_trie_from_flat;
 
 const POISONED_LOCK_ERR: &str = "The lock was poisoned.";
@@ -332,7 +335,7 @@ impl std::fmt::Debug for TrieNode {
 
 pub struct AccountingMemTries {
     mem_tries: Arc<RwLock<MemTries>>,
-    cache: RefCell<HashSet<MemTrieNodeId>>,
+    cache: RefCell<HashSet<CryptoHash>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
@@ -406,6 +409,15 @@ impl Hash for TrieRefcountChange {
         state.write_u32(self.rc.into());
     }
 }
+
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
+pub struct MemTrieChanges {
+    ordered_nodes: Vec<UpdatedMemTrieNodeId>,
+    value_changes: HashMap<Vec<u8>, i32>,
+    refcount_changes: HashMap<usize, i32>,
+    nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
+}
+
 ///
 /// TrieChanges stores delta for refcount.
 /// Multiple versions of the state work the following way:
@@ -435,11 +447,20 @@ pub struct TrieChanges {
     pub new_root: StateRoot,
     insertions: Vec<TrieRefcountChange>,
     deletions: Vec<TrieRefcountChange>,
+    // super hack: if Some, computes all data above.
+    #[borsh_skip]
+    pub mem_changes: Option<MemTrieChanges>,
 }
 
 impl TrieChanges {
     pub fn empty(old_root: StateRoot) -> Self {
-        TrieChanges { old_root, new_root: old_root, insertions: vec![], deletions: vec![] }
+        TrieChanges {
+            old_root,
+            new_root: old_root,
+            insertions: vec![],
+            deletions: vec![],
+            mem_changes: Default::default(),
+        }
     }
 
     pub fn insertions(&self) -> &[TrieRefcountChange] {
@@ -448,6 +469,107 @@ impl TrieChanges {
 
     pub fn deletions(&self) -> &[TrieRefcountChange] {
         self.deletions.as_slice()
+    }
+
+    // Prepare Trie changes and update Arena right now.
+    // Yeah it is not atomic, but enough for testing for now.
+    pub fn apply_mem_changes(
+        &mut self,
+        mem_changes: MemTrieChanges,
+        arena: &mut Arena,
+    ) -> MemTrieNodeId {
+        let MemTrieChanges {
+            ordered_nodes: nodes,
+            refcount_changes: id_refcount_changes,
+            value_changes,
+            mut nodes_storage,
+        } = mem_changes;
+        let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
+
+        let map_node = |node: UpdatedNodeRef,
+                        map: &HashMap<UpdatedMemTrieNodeId, MemTrieNodeId>|
+         -> MemTrieNodeId {
+            match node {
+                UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
+                UpdatedNodeRef::Old(ptr) => MemTrieNodeId::from(ptr),
+            }
+        };
+
+        let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
+        for (node_id, rc) in id_refcount_changes {
+            let node = MemTrieNodePtr::from(arena.memory().ptr(node_id));
+            let view = node.view();
+            let hash = view.node_hash();
+            let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
+            let (_, old_rc) =
+                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
+            *old_rc += rc;
+        }
+        for (value, rc) in value_changes.into_iter() {
+            let (_, old_rc) = refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
+            *old_rc += rc;
+        }
+
+        let mut last_node_hash = self.old_root; // last node must be new root, lol
+        let mut last_node_id = MemTrieNodeId::from(0); // I'm tired
+        for node_id in nodes.into_iter() {
+            let node = nodes_storage.get_mut(node_id).unwrap().take().unwrap();
+            let node = match node {
+                UpdatedMemTrieNode::Empty => unreachable!(),
+                UpdatedMemTrieNode::Branch { children, value } => {
+                    let children = children
+                        .into_iter()
+                        .map(|child| child.map(|c| map_node(c, &mapped_nodes)))
+                        .collect();
+                    match value {
+                        Some(value) => {
+                            // let (_, old_rc) = refcount_changes
+                            //     .entry(hash(&value))
+                            //     .or_insert_with(|| (value.clone(), 0));
+                            // *old_rc += 1;
+                            InputMemTrieNode::BranchWithValue {
+                                children,
+                                value: FlatStateValue::on_disk(&value),
+                            }
+                        }
+                        None => InputMemTrieNode::Branch { children },
+                    }
+                }
+                UpdatedMemTrieNode::Extension { extension, child } => {
+                    InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
+                }
+                UpdatedMemTrieNode::Leaf { extension, value } => {
+                    // let (_, old_rc) =
+                    //     refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
+                    // *old_rc += 1;
+                    InputMemTrieNode::Leaf { value: FlatStateValue::on_disk(&value), extension }
+                }
+            };
+            let mem_node_id = MemTrieNodeId::new(arena, node);
+            mapped_nodes.insert(node_id, mem_node_id);
+
+            let mut node_ptr = mem_node_id.as_ptr_mut(arena.memory_mut());
+            node_ptr.compute_hash_recursively();
+            let node = node_ptr.as_const();
+            let view = node.view();
+            let hash = view.node_hash();
+            let raw_node = view.to_raw_trie_node_with_size();
+            let (_, rc) =
+                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
+            *rc += 1;
+
+            last_node_hash = hash;
+            last_node_id = mem_node_id;
+        }
+
+        let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
+
+        self.new_root = last_node_hash;
+        self.insertions = insertions;
+        self.deletions = deletions;
+        self.mem_changes = None;
+
+        last_node_id
     }
 }
 
@@ -1047,9 +1169,19 @@ impl Trie {
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         match self.get_ref(key, KeyLookupMode::FlatStorage)? {
-            Some(ValueRef { hash, .. }) => {
-                self.internal_retrieve_trie_node(&hash, true).map(|bytes| Some(bytes.to_vec()))
-            }
+            Some(ValueRef { hash, .. }) => match &self.mem_tries {
+                Some(acc_mem_tries) => {
+                    if acc_mem_tries.cache.borrow_mut().insert(hash) {
+                        acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
+                    } else {
+                        acc_mem_tries.nodes_count.borrow_mut().mem_reads += 1;
+                    }
+                    self.internal_retrieve_trie_node(&hash, false).map(|bytes| Some(bytes.to_vec()))
+                }
+                None => {
+                    self.internal_retrieve_trie_node(&hash, true).map(|bytes| Some(bytes.to_vec()))
+                }
+            },
             None => Ok(None),
         }
     }
@@ -1147,7 +1279,7 @@ impl Trie {
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.roots.get(&self.root).unwrap().clone();
                 let mut arena = &mut guard.arena;
-                let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
+                let mem_changes = {
                     let ptr = last_node_id.ptr;
                     let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
                     let root = trie_update.move_node_to_mutable(ptr);
@@ -1161,16 +1293,13 @@ impl Trie {
 
                     trie_update.flatten_nodes(root)
                 };
-
-                let tc = MemTrieUpdate::prepare_changes(
-                    refcount_changes,
-                    value_changes,
-                    nodes_storage,
-                    CryptoHash::default(),
-                    ordered_nodes,
-                    &mut arena,
-                );
-                Ok(tc)
+                Ok(TrieChanges {
+                    old_root: self.root,
+                    new_root: Default::default(),
+                    insertions: vec![],
+                    deletions: vec![],
+                    mem_changes: Some(mem_changes),
+                })
             }
             None => {
                 let mut memory = NodesStorage::new();

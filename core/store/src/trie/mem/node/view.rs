@@ -3,7 +3,7 @@ use crate::trie::mem::arena::{Arena, ArenaPtr};
 use crate::trie::mem::flexible_data::children::ChildrenView;
 use crate::trie::mem::node::loading::MemTrieNodePtrMut;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
-use crate::trie::TRIE_COSTS;
+use crate::trie::{MemTrieChanges, TRIE_COSTS};
 use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges, TrieStorage};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
@@ -22,7 +22,7 @@ pub enum UpdatedNodeRef {
 }
 
 // Structure to handle new temporarily created nodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdatedMemTrieNode {
     // Fancy edge case. Used when we create an empty child and descend to it to create new node.
     Empty,
@@ -540,16 +540,14 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
-    pub fn flatten_nodes(
-        self,
-        root_id: UpdatedMemTrieNodeId,
-    ) -> (
-        Vec<UpdatedMemTrieNodeId>,
-        HashMap<Vec<u8>, i32>,
-        HashMap<usize, i32>,
-        Vec<Option<UpdatedMemTrieNode>>,
-    ) {
-        let Self { refcount_changes, value_changes, nodes_storage, .. } = self;
+    pub fn flatten_nodes(self, root_id: UpdatedMemTrieNodeId) -> MemTrieChanges {
+        let Self {
+            arena: _arena,
+            storage: _storage,
+            refcount_changes,
+            value_changes,
+            nodes_storage,
+        } = self;
 
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
@@ -601,98 +599,7 @@ impl<'a> MemTrieUpdate<'a> {
             ordered_nodes.push(node);
         }
 
-        (ordered_nodes, value_changes, refcount_changes, nodes_storage)
-    }
-
-    // Prepare Trie changes and update Arena right now.
-    // Yeah it is not atomic, but enough for testing for now.
-    pub fn prepare_changes(
-        id_refcount_changes: HashMap<usize, i32>,
-        value_changes: HashMap<Vec<u8>, i32>,
-        mut nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
-        old_root: CryptoHash,
-        nodes: Vec<UpdatedMemTrieNodeId>,
-        arena: &mut Arena,
-    ) -> TrieChanges {
-        let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
-
-        let map_node = |node: UpdatedNodeRef,
-                        map: &HashMap<UpdatedMemTrieNodeId, MemTrieNodeId>|
-         -> MemTrieNodeId {
-            match node {
-                UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
-                UpdatedNodeRef::Old(ptr) => MemTrieNodeId::from(ptr),
-            }
-        };
-
-        let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
-        for (node_id, rc) in id_refcount_changes {
-            let node = MemTrieNodePtr::from(arena.memory().ptr(node_id));
-            let view = node.view();
-            let hash = view.node_hash();
-            let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
-            let (_, old_rc) =
-                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
-            *old_rc += rc;
-        }
-        for (value, rc) in value_changes.into_iter() {
-            let (_, old_rc) = refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
-            *old_rc += rc;
-        }
-
-        let mut last_node_hash = old_root; // last node must be new root, lol
-        for node_id in nodes.into_iter() {
-            let node = nodes_storage.get_mut(node_id).unwrap().take().unwrap();
-            let node = match node {
-                UpdatedMemTrieNode::Empty => unreachable!(),
-                UpdatedMemTrieNode::Branch { children, value } => {
-                    let children = children
-                        .into_iter()
-                        .map(|child| child.map(|c| map_node(c, &mapped_nodes)))
-                        .collect();
-                    match value {
-                        Some(value) => {
-                            // let (_, old_rc) = refcount_changes
-                            //     .entry(hash(&value))
-                            //     .or_insert_with(|| (value.clone(), 0));
-                            // *old_rc += 1;
-                            InputMemTrieNode::BranchWithValue {
-                                children,
-                                value: FlatStateValue::on_disk(&value),
-                            }
-                        }
-                        None => InputMemTrieNode::Branch { children },
-                    }
-                }
-                UpdatedMemTrieNode::Extension { extension, child } => {
-                    InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
-                }
-                UpdatedMemTrieNode::Leaf { extension, value } => {
-                    // let (_, old_rc) =
-                    //     refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
-                    // *old_rc += 1;
-                    InputMemTrieNode::Leaf { value: FlatStateValue::on_disk(&value), extension }
-                }
-            };
-            let mem_node_id = MemTrieNodeId::new(arena, node);
-            mapped_nodes.insert(node_id, mem_node_id);
-
-            let mut node_ptr = mem_node_id.as_ptr_mut(arena.memory_mut());
-            node_ptr.compute_hash_recursively();
-            let node = node_ptr.as_const();
-            let view = node.view();
-            let hash = view.node_hash();
-            let raw_node = view.to_raw_trie_node_with_size();
-            let (_, rc) =
-                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
-            *rc += 1;
-
-            last_node_hash = hash;
-        }
-
-        let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
-
-        TrieChanges { old_root, new_root: last_node_hash, insertions, deletions }
+        MemTrieChanges { ordered_nodes, refcount_changes, value_changes, nodes_storage }
     }
 }
 

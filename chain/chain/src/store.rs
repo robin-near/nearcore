@@ -55,6 +55,7 @@ use crate::chunks_store::ReadOnlyChunksStore;
 use crate::types::{Block, BlockHeader, LatestKnown};
 use near_store::db::{StoreStatistics, STATE_SYNC_DUMP_KEY};
 use near_store::flat::store_helper;
+use near_store::trie::mem::node::MemTrieUpdate;
 use std::sync::Arc;
 
 /// lru cache size
@@ -2077,7 +2078,22 @@ impl<'a> ChainStoreUpdate<'a> {
         self.chain_store_cache_update.outcome_ids.insert((*block_hash, shard_id), outcome_ids);
     }
 
-    pub fn save_trie_changes(&mut self, trie_changes: WrappedTrieChanges) {
+    pub fn save_trie_changes(&mut self, mut trie_changes: WrappedTrieChanges) {
+        {
+            let mut inner_trie_changes = &mut trie_changes.trie_changes;
+            match inner_trie_changes.mem_changes.take() {
+                Some(mem_changes) => {
+                    let lock_arena = trie_changes.tries.get_mem_tries(trie_changes.shard_uid);
+                    let mut guard = lock_arena.write().unwrap();
+                    let new_root_id = {
+                        let arena = &mut guard.arena;
+                        inner_trie_changes.apply_mem_changes(mem_changes, arena)
+                    };
+                    guard.insert_root(inner_trie_changes.new_root, new_root_id)
+                }
+                None => {}
+            }
+        }
         self.trie_changes.push(trie_changes);
     }
 

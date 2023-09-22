@@ -1,3 +1,4 @@
+use near_primitives::hash::CryptoHash;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -10,7 +11,8 @@ use super::node::{MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 
 pub struct MemTrieLookup<'a> {
     root: MemTrieNodePtr<'a>,
-    cache: RefCell<HashSet<MemTrieNodeId>>,
+    // There was MemTrieNodeId here, but on runtime there is accounting by hash...
+    cache: RefCell<HashSet<CryptoHash>>,
     nodes_count: RefCell<TrieNodesCount>,
 }
 
@@ -25,7 +27,7 @@ impl<'a> MemTrieLookup<'a> {
 
     pub fn new_with(
         root: MemTrieNodePtr<'a>,
-        cache: RefCell<HashSet<MemTrieNodeId>>,
+        cache: RefCell<HashSet<CryptoHash>>,
         nodes_count: RefCell<TrieNodesCount>,
     ) -> Self {
         Self { root, cache, nodes_count }
@@ -35,7 +37,7 @@ impl<'a> MemTrieLookup<'a> {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;
         loop {
-            if self.cache.borrow_mut().insert(node.id()) {
+            if self.cache.borrow_mut().insert(node.view().node_hash()) {
                 self.nodes_count.borrow_mut().db_reads += 1;
             } else {
                 self.nodes_count.borrow_mut().mem_reads += 1;
