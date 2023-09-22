@@ -1521,6 +1521,9 @@ mod tests {
             state_root =
                 test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
             assert_eq!(state_root, Trie::EMPTY_ROOT, "Trie must be empty");
+            for it in store.iter(DBCol::State) {
+                eprintln!("{:?}", it);
+            }
             assert!(store.iter(DBCol::State).peekable().peek().is_none(), "Storage must be empty");
         }
     }
