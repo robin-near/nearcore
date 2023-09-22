@@ -131,7 +131,7 @@ impl<'a> MemTrieUpdate<'a> {
         loop {
             // Destroy node as it will be changed anyway.
             let node = self.destroy(node_id);
-            eprintln!("node {:?}", node);
+            eprintln!("partial = {:?}, node {:?}", partial, node);
             match node {
                 UpdatedMemTrieNode::Empty => {
                     let extension: Vec<_> = partial.encoded(true).into_vec();
