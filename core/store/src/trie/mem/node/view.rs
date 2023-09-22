@@ -14,7 +14,7 @@ use std::rc::Rc;
 pub type UpdatedMemTrieNodeId = usize;
 
 // Reference to either node in big trie or in small temporary trie.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum UpdatedNodeRef {
     // Old(MemTrieNodePtr<'a>),
     Old(usize), // raw ptr
@@ -22,7 +22,7 @@ pub enum UpdatedNodeRef {
 }
 
 // Structure to handle new temporarily created nodes.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum UpdatedMemTrieNode {
     // Fancy edge case. Used when we create an empty child and descend to it to create new node.
     Empty,
@@ -310,6 +310,7 @@ impl<'a> MemTrieUpdate<'a> {
 
     // Delete
     pub fn delete(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8]) {
+        let DEBUG = (key == [100, 111]);
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
         let mut path = vec![];
@@ -317,7 +318,9 @@ impl<'a> MemTrieUpdate<'a> {
         loop {
             path.push(node_id);
             let node = self.destroy(node_id);
-
+            if DEBUG {
+                eprintln!("{} {:?}", node_id, node);
+            }
             match node {
                 // finished
                 UpdatedMemTrieNode::Empty => {
