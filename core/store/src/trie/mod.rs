@@ -1066,6 +1066,9 @@ impl Trie {
                 // empty trie edge case?
                 break;
             }
+            if item.key.is_some() {
+                continue;
+            }
             eprintln!("{}", hash);
             let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
             let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
