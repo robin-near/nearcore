@@ -11,7 +11,7 @@ pub mod lookup;
 pub mod node;
 
 pub struct MemTries {
-    arena: Arena,
+    pub arena: Arena,
     pub roots: HashMap<CryptoHash, MemTrieNodeId>,
 }
 

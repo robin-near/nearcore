@@ -23,6 +23,14 @@ impl<'a> MemTrieLookup<'a> {
         }
     }
 
+    pub fn new_with(
+        root: MemTrieNodePtr<'a>,
+        cache: RefCell<HashSet<MemTrieNodeId>>,
+        nodes_count: RefCell<TrieNodesCount>,
+    ) -> Self {
+        Self { root, cache, nodes_count }
+    }
+
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;

@@ -6,7 +6,7 @@ use crate::trie::mem::loading::load_trie_from_flat_state;
 use crate::trie::mem::MemTries;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
-use crate::trie::{TrieRefcountChange, POISONED_LOCK_ERR};
+use crate::trie::{AccountingMemTries, TrieRefcountChange, POISONED_LOCK_ERR};
 use crate::Mode;
 use crate::{checkpoint_hot_storage_and_cleanup_columns, metrics, DBCol, NodeStorage, PrefetchApi};
 use crate::{Store, StoreConfig, StoreUpdate, Trie, TrieChanges, TrieUpdate};
@@ -22,7 +22,9 @@ use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
     NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
 };
+use near_vm_runner::logic::TrieNodesCount;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -280,7 +282,12 @@ impl ShardTries {
             let guard = self.0.mem_tries.read().unwrap();
             guard.get(&shard_uid).unwrap().clone()
         };
-        Trie::new_with_mem_tries(storage, state_root, flat_storage_chunk_view, Some(mem_tries))
+        let acc_mem_tries = AccountingMemTries {
+            mem_tries,
+            cache: RefCell::new(Default::default()),
+            nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
+        };
+        Trie::new_with_mem_tries(storage, state_root, flat_storage_chunk_view, Some(acc_mem_tries))
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {

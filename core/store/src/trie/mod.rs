@@ -24,7 +24,7 @@ use near_primitives::types::{StateRoot, StateRootNode};
 use near_vm_runner::ContractCode;
 pub use raw_node::{Children, RawTrieNode, RawTrieNodeWithSize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -53,6 +53,7 @@ pub mod update;
 use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
+use crate::trie::mem::lookup::MemTrieLookup;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieUpdate};
 use crate::trie::mem::MemTries;
 pub use from_flat::construct_trie_from_flat;
@@ -329,10 +330,16 @@ impl std::fmt::Debug for TrieNode {
     }
 }
 
+pub struct AccountingMemTries {
+    mem_tries: Arc<RwLock<MemTries>>,
+    cache: RefCell<HashSet<MemTrieNodeId>>,
+    nodes_count: RefCell<TrieNodesCount>,
+}
+
 pub struct Trie {
     storage: Rc<dyn TrieStorage>,
     root: StateRoot,
-    mem_tries: Option<Arc<RwLock<MemTries>>>,
+    mem_tries: Option<AccountingMemTries>,
     /// If present, flat storage is used to look up keys (if asked for).
     /// Otherwise, we would crawl through the trie.
     flat_storage_chunk_view: Option<FlatStorageChunkView>,
@@ -477,7 +484,7 @@ impl Trie {
         storage: Rc<dyn TrieStorage>,
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
-        mem_tries: Option<Arc<RwLock<MemTries>>>,
+        mem_tries: Option<AccountingMemTries>,
     ) -> Self {
         let accounting_cache = match storage.as_caching_storage() {
             Some(caching_storage) => RefCell::new(TrieAccountingCache::new(Some((
@@ -1017,8 +1024,24 @@ impl Trie {
             }
             Ok(value_from_flat_storage)
         } else {
-            let key_nibbles = NibbleSlice::new(key);
-            self.lookup(key_nibbles, !self.skip_accounting_cache_for_trie_nodes)
+            // Don't care about recording storage for now...
+            match &self.mem_tries {
+                Some(acc_mem_tries) => {
+                    let mem_tries = acc_mem_tries.mem_tries.read().unwrap();
+                    let node_id = mem_tries.roots.get(&self.root).unwrap().clone();
+                    let node_ptr = node_id.as_ptr(&mem_tries.arena.memory());
+                    let lookuper = MemTrieLookup::new_with(
+                        node_ptr,
+                        acc_mem_tries.cache.clone(),
+                        acc_mem_tries.nodes_count.clone(),
+                    );
+                    Ok(lookuper.get_ref(&key).map(|fs_val| fs_val.to_value_ref()))
+                }
+                None => {
+                    let key_nibbles = NibbleSlice::new(key);
+                    self.lookup(key_nibbles, !self.skip_accounting_cache_for_trie_nodes)
+                }
+            }
         }
     }
 
@@ -1182,7 +1205,10 @@ impl Trie {
     }
 
     pub fn get_trie_nodes_count(&self) -> TrieNodesCount {
-        self.accounting_cache.borrow().get_trie_nodes_count()
+        match &self.mem_tries {
+            Some(acc_mem_tries) => acc_mem_tries.nodes_count.clone().into_inner(),
+            None => self.accounting_cache.borrow().get_trie_nodes_count(),
+        }
     }
 }
 
