@@ -1107,6 +1107,8 @@ impl Trie {
         eprintln!("0.5");
         if last_node_id.ptr != usize::MAX {
             last_node_id.add_ref(&mut arena);
+            let mut node_ptr = last_node_id.as_ptr_mut(arena.memory_mut());
+            node_ptr.compute_hash_recursively();
         }
 
         eprintln!("1");
