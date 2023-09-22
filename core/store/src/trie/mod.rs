@@ -1497,7 +1497,7 @@ mod tests {
             let store = tries.get_store();
             let mut state_root = Trie::EMPTY_ROOT;
             for _ in 0..num_iterations {
-                let trie_changes = 3; //gen_changes(&mut rng, 5);
+                let trie_changes = gen_changes(&mut rng, 5);
                 eprintln!("{:?}", trie_changes);
                 state_root =
                     test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
