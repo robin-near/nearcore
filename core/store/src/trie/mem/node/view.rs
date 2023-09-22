@@ -124,12 +124,14 @@ impl<'a> MemTrieUpdate<'a> {
     // todo: consider already dropping hash & mem usage. but maybe idc
     // todo: what are trie changes for values?
     pub fn insert(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8], value: Vec<u8>) {
+        eprintln!("insert {:?}", key);
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
 
         loop {
             // Destroy node as it will be changed anyway.
             let node = self.destroy(node_id);
+            eprintln!("node {:?}", node);
             match node {
                 UpdatedMemTrieNode::Empty => {
                     let extension: Vec<_> = partial.encoded(true).into_vec();
