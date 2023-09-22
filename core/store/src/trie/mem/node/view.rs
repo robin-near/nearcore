@@ -345,13 +345,13 @@ impl<'a> MemTrieUpdate<'a> {
                                 panic!("no value for key {:?}", key);
                             }
                         };
-                        self.value_removals.push(value.clone());
+                        self.value_removals.push(value);
                         // there must be at least 1 child, otherwise it shouldn't be a branch.
                         // could be even 2, but there is some weird case when 1
                         assert!(children.iter().filter(|x| x.is_some()).count() >= 1);
                         self.store_at(
                             node_id,
-                            UpdatedMemTrieNode::Branch { children, value: Some(value) },
+                            UpdatedMemTrieNode::Branch { children, value: None },
                         );
                         // if needed, branch will be squashed on the way back
                         break;
