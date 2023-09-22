@@ -668,6 +668,9 @@ impl<'a> MemTrieUpdate<'a> {
                     InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
                 }
                 UpdatedMemTrieNode::Leaf { extension, value } => {
+                    if extension.len() == 0 {
+                        eprintln!("!!!!!! {:?}", value);
+                    }
                     // let (_, old_rc) =
                     //     refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
                     // *old_rc += 1;
