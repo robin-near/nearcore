@@ -1509,6 +1509,19 @@ mod tests {
                 println!("New memory_usage: {memory_usage}");
             }
 
+            eprintln!("STATE CONTENTS:");
+            for it in store.iter(DBCol::State) {
+                let it = it.unwrap();
+                match RawTrieNodeWithSize::try_from_slice(&it.1) {
+                    Ok(node) => {
+                        eprintln!("NODE {:?}", node);
+                    }
+                    Err(_) => {
+                        eprintln!("SMTH {:?}", it);
+                    }
+                }
+                eprintln!("{:?}", it);
+            }
             let trie = tries.get_trie_for_shard(ShardUId::single_shard(), state_root);
             let trie_changes = trie
                 .iter()
@@ -1523,6 +1536,15 @@ mod tests {
             assert_eq!(state_root, Trie::EMPTY_ROOT, "Trie must be empty");
             eprintln!("STATE CONTENTS:");
             for it in store.iter(DBCol::State) {
+                let it = it.unwrap();
+                match RawTrieNodeWithSize::try_from_slice(&it.1) {
+                    Ok(node) => {
+                        eprintln!("NODE {:?}", node);
+                    }
+                    Err(_) => {
+                        eprintln!("SMTH {:?}", it);
+                    }
+                }
                 eprintln!("{:?}", it);
             }
             assert!(store.iter(DBCol::State).peekable().peek().is_none(), "Storage must be empty");
