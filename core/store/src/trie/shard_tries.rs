@@ -267,16 +267,19 @@ impl ShardTries {
         ));
         let flat_storage_chunk_view = block_hash
             .and_then(|block_hash| self.0.flat_storage_manager.chunk_view(shard_uid, block_hash));
-        let mem_tries = {
+        let acc_mem_tries = {
             let guard = self.0.mem_tries.read().unwrap();
-            guard.get(&shard_uid).unwrap().clone()
+            match guard.get(&shard_uid) {
+                Some(mem_tries) => Some(AccountingMemTries {
+                    mem_tries: mem_tries.clone(),
+                    cache: RefCell::new(Default::default()),
+                    nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
+                }),
+                None => None,
+            }
         };
-        let acc_mem_tries = AccountingMemTries {
-            mem_tries,
-            cache: RefCell::new(Default::default()),
-            nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
-        };
-        Trie::new_with_mem_tries(storage, state_root, flat_storage_chunk_view, Some(acc_mem_tries))
+
+        Trie::new_with_mem_tries(storage, state_root, flat_storage_chunk_view, acc_mem_tries)
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {
