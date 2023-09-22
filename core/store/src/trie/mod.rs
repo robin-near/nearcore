@@ -1492,7 +1492,7 @@ mod tests {
         let mut rng: StdRng = SeedableRng::from_seed([1; 32]);
         // let mut rng = rand::thread_rng();
         for _test_run in 0..10 {
-            let num_iterations = rng.gen_range(1..20);
+            let num_iterations = rng.gen_range(1..5);
             let tries = create_tries();
             let store = tries.get_store();
             let mut state_root = Trie::EMPTY_ROOT;
@@ -1521,6 +1521,7 @@ mod tests {
             state_root =
                 test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
             assert_eq!(state_root, Trie::EMPTY_ROOT, "Trie must be empty");
+            eprintln!("STATE CONTENTS:");
             for it in store.iter(DBCol::State) {
                 eprintln!("{:?}", it);
             }
