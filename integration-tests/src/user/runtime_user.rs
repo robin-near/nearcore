@@ -128,7 +128,7 @@ impl RuntimeUser {
                     .insert(outcome_with_id.id, outcome_with_id.outcome.into());
             }
             let mut update = client.tries.store_update();
-            client.tries.apply_all(
+            client.state_root = client.tries.apply_all(
                 &apply_result.trie_changes,
                 ShardUId::single_shard(),
                 &mut update,
@@ -138,7 +138,7 @@ impl RuntimeUser {
                     .apply_to_flat_state(&mut update, ShardUId::single_shard());
             }
             update.commit().unwrap();
-            client.state_root = apply_result.state_root;
+            // client.state_root = apply_result.state_root;
             if apply_result.outgoing_receipts.is_empty() {
                 return Ok(());
             }
