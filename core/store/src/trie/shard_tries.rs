@@ -478,8 +478,9 @@ impl ShardTries {
         shard_uid: ShardUId,
         store_update: &mut StoreUpdate,
     ) -> StateRoot {
+        let flag = trie_changes.mem_changes.is_some();
         let mut trie_changes = trie_changes.clone();
-        {
+        if flag {
             let lock_arena = self.get_mem_tries(shard_uid);
             let mut guard = lock_arena.write().unwrap();
             let arena = &mut guard.arena;
