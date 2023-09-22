@@ -54,6 +54,7 @@ use self::accounting_cache::TrieAccountingCache;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieUpdate};
+use crate::trie::mem::MemTries;
 pub use from_flat::construct_trie_from_flat;
 
 const POISONED_LOCK_ERR: &str = "The lock was poisoned.";
@@ -331,6 +332,7 @@ impl std::fmt::Debug for TrieNode {
 pub struct Trie {
     storage: Rc<dyn TrieStorage>,
     root: StateRoot,
+    mem_tries: Option<Arc<RwLock<MemTries>>>,
     /// If present, flat storage is used to look up keys (if asked for).
     /// Otherwise, we would crawl through the trie.
     flat_storage_chunk_view: Option<FlatStorageChunkView>,
@@ -468,6 +470,15 @@ impl Trie {
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
     ) -> Self {
+        Self::new_with_mem_tries(storage, root, flat_storage_chunk_view, None)
+    }
+
+    pub fn new_with_mem_tries(
+        storage: Rc<dyn TrieStorage>,
+        root: StateRoot,
+        flat_storage_chunk_view: Option<FlatStorageChunkView>,
+        mem_tries: Option<Arc<RwLock<MemTries>>>,
+    ) -> Self {
         let accounting_cache = match storage.as_caching_storage() {
             Some(caching_storage) => RefCell::new(TrieAccountingCache::new(Some((
                 caching_storage.shard_uid,
@@ -478,8 +489,9 @@ impl Trie {
         Trie {
             storage,
             root,
+            mem_tries,
             flat_storage_chunk_view,
-            accounting_cache: accounting_cache,
+            accounting_cache,
             recorder: None,
             skip_accounting_cache_for_trie_nodes: false,
         }

@@ -31,7 +31,7 @@ use std::sync::{Arc, RwLock, TryLockError};
 struct ShardTriesInner {
     store: Store,
     trie_config: TrieConfig,
-    mem_tries: RwLock<HashMap<ShardUId, RwLock<MemTries>>>,
+    mem_tries: RwLock<HashMap<ShardUId, Arc<RwLock<MemTries>>>>,
     /// Cache reserved for client actor to use
     caches: RwLock<HashMap<ShardUId, TrieCache>>,
     /// Cache for readers.
@@ -150,7 +150,7 @@ impl ShardTries {
                 let state_root = flat_head_state_root(&store, shard_uid);
                 let mem_tries =
                     load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
-                (shard_uid.clone(), RwLock::new(mem_tries))
+                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
             })
             .collect();
         println!("Heavy work done!");
@@ -276,8 +276,11 @@ impl ShardTries {
         ));
         let flat_storage_chunk_view = block_hash
             .and_then(|block_hash| self.0.flat_storage_manager.chunk_view(shard_uid, block_hash));
-
-        Trie::new(storage, state_root, flat_storage_chunk_view)
+        let mem_tries = {
+            let guard = self.0.mem_tries.read().unwrap();
+            guard.get(&shard_uid).unwrap().clone()
+        };
+        Trie::new_with_mem_tries(storage, state_root, flat_storage_chunk_view, Some(mem_tries))
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {
