@@ -634,12 +634,9 @@ impl<'a> MemTrieUpdate<'a> {
             let view = node.view();
             let hash = view.node_hash();
             let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
-            if hash == CryptoHash::default() {
-                eprintln!("!!! {} {:?}", hash, raw_node);
-            }
             let (_, old_rc) =
                 refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
-            *old_rc -= rc;
+            *old_rc += rc;
         }
         for (value, rc) in value_changes.into_iter() {
             let (_, old_rc) = refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
