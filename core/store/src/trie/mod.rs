@@ -1144,11 +1144,12 @@ impl Trie {
         // }
         match &self.mem_tries {
             Some(acc_mem_tries) => {
-                let guard = acc_mem_tries.mem_tries.read().unwrap();
+                let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.roots.get(&self.root).unwrap().clone();
+                let mut arena = &mut guard.arena;
                 let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
                     let ptr = last_node_id.ptr;
-                    let mut trie_update = MemTrieUpdate::new(&guard.arena, self.storage.clone());
+                    let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
                     let root = trie_update.move_node_to_mutable(ptr);
 
                     for (key, value) in changes {
