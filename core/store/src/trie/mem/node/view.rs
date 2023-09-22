@@ -183,6 +183,7 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Leaf { extension: key, value: old_value } => {
                     let existing_key = NibbleSlice::from_encoded(key.as_ref()).0;
+                    eprintln!("existing_key = {:?}", existing_key);
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
                         // Equivalent leaf, rewrite the value.
