@@ -310,7 +310,6 @@ impl<'a> MemTrieUpdate<'a> {
 
     // Delete
     pub fn delete(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8]) {
-        let DEBUG = (key == [100, 111]);
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
         let mut path = vec![];
@@ -318,9 +317,7 @@ impl<'a> MemTrieUpdate<'a> {
         loop {
             path.push(node_id);
             let node = self.destroy(node_id);
-            if DEBUG {
-                eprintln!("{} {:?}", node_id, node);
-            }
+
             match node {
                 // finished
                 UpdatedMemTrieNode::Empty => {
