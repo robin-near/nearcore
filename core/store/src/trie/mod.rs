@@ -1084,103 +1084,111 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
+        // --- Some cool code for testing trie-related logic. Build MemTries from trie. ---
         // build mem trie from self
-        let mut arena = mem::Arena::new(1024 * 1024 * 1024);
-        let path_begin = self.find_state_part_boundary(0, 1).unwrap();
-        let path_end = self.find_state_part_boundary(1, 1).unwrap();
-        let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
-        let mut last_node_id = MemTrieNodeId::from(usize::MAX);
-        for item in self
-            .iter()
-            .unwrap()
-            .visit_nodes_interval(&path_begin, &path_end)
-            .unwrap()
-            .into_iter()
-            .rev()
-        {
-            let hash = item.hash;
-            if hash == CryptoHash::default() {
-                // empty trie edge case?
-                break;
-            }
-            if item.key.is_some() {
-                continue;
-            }
-            let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
-            let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
-            // convert...
-            let input_node = match raw_node.node {
-                RawTrieNode::Leaf(key, value_ref) => InputMemTrieNode::Leaf {
-                    value: FlatStateValue::Ref(value_ref), // inline???
-                    extension: key.into_boxed_slice(),
-                },
-                RawTrieNode::Extension(key, child) => InputMemTrieNode::Extension {
-                    extension: key.into_boxed_slice(),
-                    child: *mapper.get(&child).unwrap(),
-                },
-                RawTrieNode::BranchNoValue(children) => {
-                    let children =
-                        children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
-                    InputMemTrieNode::Branch { children }
-                }
-                RawTrieNode::BranchWithValue(value_ref, children) => {
-                    let children =
-                        children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
-                    InputMemTrieNode::BranchWithValue {
-                        children,
-                        value: FlatStateValue::Ref(value_ref),
-                    }
-                }
-            };
-            let node_id = MemTrieNodeId::new(&mut arena, input_node);
-            last_node_id = node_id;
-            mapper.insert(hash, node_id);
-        }
-        if last_node_id.ptr != usize::MAX {
-            last_node_id.add_ref(&mut arena);
-            let mut node_ptr = last_node_id.as_ptr_mut(arena.memory_mut());
-            node_ptr.compute_hash_recursively();
-        }
-
-        let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
-            let ptr = last_node_id.ptr;
-            let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
-            let root = trie_update.move_node_to_mutable(ptr);
-
-            for (key, value) in changes {
-                match value {
-                    Some(value) => trie_update.insert(root, &key, value),
-                    None => trie_update.delete(root, &key),
-                };
-            }
-
-            trie_update.flatten_nodes(root)
-        };
-
-        let tc = MemTrieUpdate::prepare_changes(
-            refcount_changes,
-            value_changes,
-            nodes_storage,
-            CryptoHash::default(),
-            ordered_nodes,
-            &mut arena,
-        );
-        Ok(tc)
-        // let mut memory = NodesStorage::new();
-        // let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
-        // for (key, value) in changes {
-        //     let key = NibbleSlice::new(&key);
-        //     root_node = match value {
-        //         Some(arr) => self.insert(&mut memory, root_node, key, arr),
-        //         None => self.delete(&mut memory, root_node, key),
-        //     }?;
-        // }
-        //
-        // #[cfg(test)]
+        // let mut arena = mem::Arena::new(1024 * 1024 * 1024);
+        // let path_begin = self.find_state_part_boundary(0, 1).unwrap();
+        // let path_end = self.find_state_part_boundary(1, 1).unwrap();
+        // let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
+        // let mut last_node_id = MemTrieNodeId::from(usize::MAX);
+        // for item in self
+        //     .iter()
+        //     .unwrap()
+        //     .visit_nodes_interval(&path_begin, &path_end)
+        //     .unwrap()
+        //     .into_iter()
+        //     .rev()
         // {
-        //     self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+        //     let hash = item.hash;
+        //     if hash == CryptoHash::default() {
+        //         // empty trie edge case?
+        //         break;
+        //     }
+        //     if item.key.is_some() {
+        //         continue;
+        //     }
+        //     let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
+        //     let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
+        //     // convert...
+        //     let input_node = match raw_node.node {
+        //         RawTrieNode::Leaf(key, value_ref) => InputMemTrieNode::Leaf {
+        //             value: FlatStateValue::Ref(value_ref), // inline???
+        //             extension: key.into_boxed_slice(),
+        //         },
+        //         RawTrieNode::Extension(key, child) => InputMemTrieNode::Extension {
+        //             extension: key.into_boxed_slice(),
+        //             child: *mapper.get(&child).unwrap(),
+        //         },
+        //         RawTrieNode::BranchNoValue(children) => {
+        //             let children =
+        //                 children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
+        //             InputMemTrieNode::Branch { children }
+        //         }
+        //         RawTrieNode::BranchWithValue(value_ref, children) => {
+        //             let children =
+        //                 children.0.iter().map(|c| c.map(|h| *mapper.get(&h).unwrap())).collect();
+        //             InputMemTrieNode::BranchWithValue {
+        //                 children,
+        //                 value: FlatStateValue::Ref(value_ref),
+        //             }
+        //         }
+        //     };
+        //     let node_id = MemTrieNodeId::new(&mut arena, input_node);
+        //     last_node_id = node_id;
+        //     mapper.insert(hash, node_id);
         // }
-        // Trie::flatten_nodes(&self.root, memory, root_node)
+        // if last_node_id.ptr != usize::MAX {
+        //     last_node_id.add_ref(&mut arena);
+        //     let mut node_ptr = last_node_id.as_ptr_mut(arena.memory_mut());
+        //     node_ptr.compute_hash_recursively();
+        // }
+        match &self.mem_tries {
+            Some(acc_mem_tries) => {
+                let guard = acc_mem_tries.mem_tries.read().unwrap();
+                let last_node_id = guard.roots.get(&self.root).unwrap().clone();
+                let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
+                    let ptr = last_node_id.ptr;
+                    let mut trie_update = MemTrieUpdate::new(&guard.arena, self.storage.clone());
+                    let root = trie_update.move_node_to_mutable(ptr);
+
+                    for (key, value) in changes {
+                        match value {
+                            Some(value) => trie_update.insert(root, &key, value),
+                            None => trie_update.delete(root, &key),
+                        };
+                    }
+
+                    trie_update.flatten_nodes(root)
+                };
+
+                let tc = MemTrieUpdate::prepare_changes(
+                    refcount_changes,
+                    value_changes,
+                    nodes_storage,
+                    CryptoHash::default(),
+                    ordered_nodes,
+                    &mut arena,
+                );
+                Ok(tc)
+            }
+            None => {
+                let mut memory = NodesStorage::new();
+                let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
+                for (key, value) in changes {
+                    let key = NibbleSlice::new(&key);
+                    root_node = match value {
+                        Some(arr) => self.insert(&mut memory, root_node, key, arr),
+                        None => self.delete(&mut memory, root_node, key),
+                    }?;
+                }
+
+                #[cfg(test)]
+                {
+                    self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+                }
+                Trie::flatten_nodes(&self.root, memory, root_node)
+            }
+        }
     }
 
     pub fn iter<'a>(&'a self) -> Result<TrieIterator<'a>, StorageError> {

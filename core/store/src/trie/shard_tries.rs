@@ -145,22 +145,11 @@ impl ShardTries {
     ) -> Self {
         let caches = Self::create_initial_caches(&trie_config, &shard_uids, false);
         let view_caches = Self::create_initial_caches(&trie_config, &shard_uids, true);
-        println!("Heavy work! Loading tries to memory...");
-        let mem_tries: Vec<_> = shard_uids
-            .into_par_iter()
-            .map(|shard_uid| {
-                let state_root = flat_head_state_root(&store, shard_uid);
-                let mem_tries =
-                    load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
-                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
-            })
-            .collect();
-        println!("Heavy work done!");
         metrics::HAS_STATE_SNAPSHOT.set(0);
         ShardTries(Arc::new(ShardTriesInner {
             store,
             trie_config,
-            mem_tries: RwLock::new(HashMap::from_iter(mem_tries.into_iter())),
+            mem_tries: RwLock::new(Default::default()),
             caches: RwLock::new(caches),
             view_caches: RwLock::new(view_caches),
             flat_storage_manager,
@@ -755,6 +744,11 @@ impl ShardTries {
                 Ok(())
             }
         }
+    }
+
+    pub fn set_shard_tries(&self, shard_uid: ShardUId, mem_tries: MemTries) {
+        let mut guard = self.0.mem_tries.write().unwrap();
+        guard.insert(shard_uid, Arc::new(RwLock::new(mem_tries)));
     }
 }
 
