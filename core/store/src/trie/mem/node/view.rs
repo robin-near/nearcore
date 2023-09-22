@@ -330,6 +330,7 @@ impl<'a> MemTrieUpdate<'a> {
                         self.store_at(node_id, UpdatedMemTrieNode::Empty);
                         break;
                     } else {
+                        panic!("key = {:?}, partial = {:?}, don't match", key, partial);
                         // ??? throw an error because key does not exist?
                     }
                 }
@@ -341,31 +342,32 @@ impl<'a> MemTrieUpdate<'a> {
                                 panic!("no value for key {:?}", key);
                             }
                         };
-                        self.value_removals.push(value);
+                        self.value_removals.push(value.clone());
                         // there must be at least 1 child, otherwise it shouldn't be a branch.
                         // could be even 2, but there is some weird case when 1
                         assert!(children.iter().filter(|x| x.is_some()).count() >= 1);
+                        self.store_at(
+                            node_id,
+                            UpdatedMemTrieNode::Branch { children, value: Some(value) },
+                        );
                         // if needed, branch will be squashed on the way back
                         break;
                     } else {
                         let mut children = children.clone();
                         let child = &mut children[partial.at(0) as usize];
-                        let node = match child.take() {
+                        let node_ref = match child.take() {
                             Some(node) => node,
                             None => {
                                 // again, wtf? need to panic.
                                 panic!("no value for key {:?}", key);
                             }
                         };
-                        let new_node_id = match node {
+                        let new_node_id = match node_ref {
                             UpdatedNodeRef::Old(ptr) => self.move_node_to_mutable(ptr.clone()),
                             UpdatedNodeRef::New(node_id) => node_id,
                         };
                         *child = Some(UpdatedNodeRef::New(new_node_id));
-                        self.store_at(
-                            node_id,
-                            UpdatedMemTrieNode::Branch { children, value: value.clone() },
-                        );
+                        self.store_at(node_id, UpdatedMemTrieNode::Branch { children, value });
 
                         node_id = new_node_id;
                         partial = partial.mid(1);
