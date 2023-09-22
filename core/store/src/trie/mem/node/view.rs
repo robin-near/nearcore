@@ -330,8 +330,12 @@ impl<'a> MemTrieUpdate<'a> {
                         self.store_at(node_id, UpdatedMemTrieNode::Empty);
                         break;
                     } else {
-                        panic!("key = {:?}, partial = {:?}, don't match", key, partial);
+                        // well, current tests assume that it's okay to delete non-existing value.
+                        // then let's follow current logic.
+                        self.store_at(node_id, UpdatedMemTrieNode::Leaf { extension: key, value });
+                        break;
                         // ??? throw an error because key does not exist?
+                        // panic!("key = {:?}, partial = {:?}, don't match", key, partial);
                     }
                 }
                 UpdatedMemTrieNode::Branch { children, value } => {
@@ -358,8 +362,13 @@ impl<'a> MemTrieUpdate<'a> {
                         let node_ref = match child.take() {
                             Some(node) => node,
                             None => {
-                                // again, wtf? need to panic.
-                                panic!("no value for key {:?}", key);
+                                // again, restore node and stop...
+                                // panic!("no value for key {:?}", key);
+                                self.store_at(
+                                    node_id,
+                                    UpdatedMemTrieNode::Branch { children, value },
+                                );
+                                break;
                             }
                         };
                         let new_node_id = match node_ref {
@@ -396,7 +405,12 @@ impl<'a> MemTrieUpdate<'a> {
                         partial = partial.mid(existing_len);
                         continue;
                     } else {
-                        panic!("can't go down by {} in partial = {:?}", key.len(), partial);
+                        // panic!("can't go down by {} in partial = {:?}", key.len(), partial);
+                        self.store_at(
+                            node_id,
+                            UpdatedMemTrieNode::Extension { extension: key, child },
+                        );
+                        break;
                     }
                 }
             }
