@@ -14,7 +14,7 @@ use std::rc::Rc;
 pub type UpdatedMemTrieNodeId = usize;
 
 // Reference to either node in big trie or in small temporary trie.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdatedNodeRef {
     // Old(MemTrieNodePtr<'a>),
     Old(usize), // raw ptr
