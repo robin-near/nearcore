@@ -2,6 +2,8 @@ use crate::db::STATE_SNAPSHOT_KEY;
 use crate::flat::FlatStorageManager;
 use crate::option_to_not_found;
 use crate::trie::config::TrieConfig;
+use crate::trie::mem::loading::load_trie_from_flat_state;
+use crate::trie::mem::MemTries;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
 use crate::trie::{TrieRefcountChange, POISONED_LOCK_ERR};
@@ -15,11 +17,12 @@ use near_primitives::errors::EpochError;
 use near_primitives::errors::StorageError;
 use near_primitives::errors::StorageError::StorageInconsistentState;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::{self, ShardUId, ShardVersion};
+use near_primitives::shard_layout::{self, get_block_shard_uid, ShardUId, ShardVersion};
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
     NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
 };
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -28,6 +31,7 @@ use std::sync::{Arc, RwLock, TryLockError};
 struct ShardTriesInner {
     store: Store,
     trie_config: TrieConfig,
+    mem_tries: RwLock<HashMap<ShardUId, RwLock<MemTries>>>,
     /// Cache reserved for client actor to use
     caches: RwLock<HashMap<ShardUId, TrieCache>>,
     /// Cache for readers.
@@ -114,6 +118,21 @@ pub enum StateSnapshotConfig {
     },
 }
 
+pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    match crate::flat::store_helper::get_flat_storage_status(store, *shard_uid).unwrap() {
+        crate::flat::FlatStorageStatus::Ready(status) => status.flat_head.hash,
+        other => panic!("invalid flat storage status {other:?}"),
+    }
+}
+
+pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+        .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store, shard_uid), shard_uid))
+        .unwrap()
+        .unwrap();
+    *chunk.state_root()
+}
+
 impl ShardTries {
     pub fn new_with_state_snapshot(
         store: Store,
@@ -124,10 +143,22 @@ impl ShardTries {
     ) -> Self {
         let caches = Self::create_initial_caches(&trie_config, &shard_uids, false);
         let view_caches = Self::create_initial_caches(&trie_config, &shard_uids, true);
+        println!("Heavy work! Loading tries to memory...");
+        let mem_tries: Vec<_> = shard_uids
+            .into_par_iter()
+            .map(|shard_uid| {
+                let state_root = flat_head_state_root(&store, shard_uid);
+                let mem_tries =
+                    load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
+                (shard_uid.clone(), RwLock::new(mem_tries))
+            })
+            .collect();
+        println!("Heavy work done!");
         metrics::HAS_STATE_SNAPSHOT.set(0);
         ShardTries(Arc::new(ShardTriesInner {
             store,
             trie_config,
+            mem_tries: RwLock::new(HashMap::from_iter(mem_tries.into_iter())),
             caches: RwLock::new(caches),
             view_caches: RwLock::new(view_caches),
             flat_storage_manager,
