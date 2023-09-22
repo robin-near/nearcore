@@ -38,7 +38,7 @@ pub struct MemTrieUpdate<'a> {
     storage: Rc<dyn TrieStorage>,
     // offset -> refcount
     pub refcount_changes: HashMap<usize, i32>,
-    pub value_removals: Vec<Vec<u8>>,
+    pub value_changes: HashMap<Vec<u8>, i32>,
     pub nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
 }
 
@@ -71,7 +71,7 @@ impl<'a> MemTrieUpdate<'a> {
             arena,
             storage,
             refcount_changes: Default::default(),
-            value_removals: Default::default(),
+            value_changes: Default::default(),
             nodes_storage: vec![],
         }
     }
@@ -124,7 +124,6 @@ impl<'a> MemTrieUpdate<'a> {
     // todo: consider already dropping hash & mem usage. but maybe idc
     // todo: what are trie changes for values?
     pub fn insert(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8], value: Vec<u8>) {
-        let mut value = Some(value);
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
 
@@ -136,24 +135,26 @@ impl<'a> MemTrieUpdate<'a> {
                     let extension: Vec<_> = partial.encoded(true).into_vec();
                     let leaf_node = UpdatedMemTrieNode::Leaf {
                         extension: extension.into_boxed_slice(),
-                        value: value.take().unwrap(),
+                        value: value.clone(),
                     };
                     self.store_at(node_id, leaf_node);
+                    *self.value_changes.entry(value).or_insert_with(|| 0) += 1;
                     break;
                 }
                 UpdatedMemTrieNode::Branch { children, value: old_value } => {
                     if partial.is_empty() {
                         // Store value here.
                         if let Some(value) = old_value {
-                            self.value_removals.push(value);
+                            *self.value_changes.entry(value).or_insert_with(|| 0) -= 1;
                         }
                         // store value somehow
                         // can't just move `value` because it happens inside a loop :(
                         let new_node = UpdatedMemTrieNode::Branch {
                             children: children.clone(),
-                            value: value.take(),
+                            value: Some(value.clone()),
                         };
                         self.store_at(node_id, new_node);
+                        *self.value_changes.entry(value).or_insert_with(|| 0) += 1;
                         break;
                     } else {
                         let mut new_children = children.clone();
@@ -183,11 +184,12 @@ impl<'a> MemTrieUpdate<'a> {
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
                         // Equivalent leaf, rewrite the value.
-                        self.value_removals.push(old_value);
+                        *self.value_changes.entry(old_value).or_insert_with(|| 0) -= 1;
                         let node = UpdatedMemTrieNode::Leaf {
                             extension: key.clone(),
-                            value: value.take().unwrap(),
+                            value: value.clone(),
                         };
+                        *self.value_changes.entry(value).or_insert_with(|| 0) += 1;
                         self.store_at(node_id, node);
                         break;
                     } else if common_prefix == 0 {
@@ -326,7 +328,7 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Leaf { extension: key, value } => {
                     if NibbleSlice::from_encoded(&key).0 == partial {
-                        self.value_removals.push(value);
+                        *self.value_changes.entry(value).or_insert_with(|| 0) -= 1;
                         self.store_at(node_id, UpdatedMemTrieNode::Empty);
                         break;
                     } else {
@@ -346,7 +348,7 @@ impl<'a> MemTrieUpdate<'a> {
                                 panic!("no value for key {:?}", key);
                             }
                         };
-                        self.value_removals.push(value);
+                        *self.value_changes.entry(value).or_insert_with(|| 0) -= 1;
                         // there must be at least 1 child, otherwise it shouldn't be a branch.
                         // could be even 2, but there is some weird case when 1
                         assert!(children.iter().filter(|x| x.is_some()).count() >= 1);
@@ -537,11 +539,11 @@ impl<'a> MemTrieUpdate<'a> {
         root_id: UpdatedMemTrieNodeId,
     ) -> (
         Vec<UpdatedMemTrieNodeId>,
-        Vec<Vec<u8>>,
+        HashMap<Vec<u8>, i32>,
         HashMap<usize, i32>,
         Vec<Option<UpdatedMemTrieNode>>,
     ) {
-        let Self { refcount_changes, value_removals, nodes_storage, .. } = self;
+        let Self { refcount_changes, value_changes, nodes_storage, .. } = self;
 
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
@@ -593,14 +595,14 @@ impl<'a> MemTrieUpdate<'a> {
             ordered_nodes.push(node);
         }
 
-        (ordered_nodes, value_removals, refcount_changes, nodes_storage)
+        (ordered_nodes, value_changes, refcount_changes, nodes_storage)
     }
 
     // Prepare Trie changes and update Arena right now.
     // Yeah it is not atomic, but enough for testing for now.
     pub fn prepare_changes(
         id_refcount_changes: HashMap<usize, i32>,
-        value_removals: Vec<Vec<u8>>,
+        value_changes: HashMap<Vec<u8>, i32>,
         mut nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
         old_root: CryptoHash,
         nodes: Vec<UpdatedMemTrieNodeId>,
@@ -627,9 +629,9 @@ impl<'a> MemTrieUpdate<'a> {
                 refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
             *old_rc -= rc;
         }
-        for value in value_removals.into_iter() {
+        for (value, rc) in value_changes.into_iter() {
             let (_, old_rc) = refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
-            *old_rc -= 1;
+            *old_rc += rc;
         }
 
         let mut last_node_hash = old_root; // last node must be new root, lol
@@ -644,10 +646,10 @@ impl<'a> MemTrieUpdate<'a> {
                         .collect();
                     match value {
                         Some(value) => {
-                            let (_, old_rc) = refcount_changes
-                                .entry(hash(&value))
-                                .or_insert_with(|| (value.clone(), 0));
-                            *old_rc += 1;
+                            // let (_, old_rc) = refcount_changes
+                            //     .entry(hash(&value))
+                            //     .or_insert_with(|| (value.clone(), 0));
+                            // *old_rc += 1;
                             InputMemTrieNode::BranchWithValue {
                                 children,
                                 value: FlatStateValue::on_disk(&value),
@@ -660,9 +662,9 @@ impl<'a> MemTrieUpdate<'a> {
                     InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
                 }
                 UpdatedMemTrieNode::Leaf { extension, value } => {
-                    let (_, old_rc) =
-                        refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
-                    *old_rc += 1;
+                    // let (_, old_rc) =
+                    //     refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
+                    // *old_rc += 1;
                     InputMemTrieNode::Leaf { value: FlatStateValue::on_disk(&value), extension }
                 }
             };

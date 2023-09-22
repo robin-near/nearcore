@@ -1110,7 +1110,7 @@ impl Trie {
         }
 
         eprintln!("1");
-        let (ordered_nodes, value_removals, refcount_changes, mut nodes_storage) = {
+        let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
             let ptr = last_node_id.ptr;
             let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
             let root = trie_update.move_node_to_mutable(ptr);
@@ -1127,7 +1127,7 @@ impl Trie {
 
         let tc = MemTrieUpdate::prepare_changes(
             refcount_changes,
-            value_removals,
+            value_changes,
             nodes_storage,
             CryptoHash::default(),
             ordered_nodes,
