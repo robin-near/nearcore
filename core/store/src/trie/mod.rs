@@ -1234,6 +1234,7 @@ mod tests {
         let trie = tries.get_trie_for_shard(shard_uid, root);
         store_update.commit().unwrap();
         for (key, _) in changes {
+            eprintln!("{:?} {:?}", key, trie.get(&key));
             assert_eq!(trie.get(&key), Ok(None));
         }
         root
