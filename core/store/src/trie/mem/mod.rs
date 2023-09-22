@@ -32,6 +32,7 @@ impl MemTries {
     }
 
     pub fn insert_root(&mut self, state_root: StateRoot, mem_root: MemTrieNodeId) {
+        println!("INSERT ROOT {}", state_root);
         self.roots.insert(state_root, mem_root);
         mem_root.add_ref(&mut self.arena);
     }
@@ -41,6 +42,7 @@ impl MemTries {
     }
 
     pub fn delete_root(&mut self, state_root: &CryptoHash) {
+        println!("DELETE ROOT {}", state_root);
         if let Some(id) = self.roots.get(state_root) {
             let new_ref = id.remove_ref(&mut self.arena);
             if new_ref == 0 {

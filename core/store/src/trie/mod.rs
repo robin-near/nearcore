@@ -1150,6 +1150,7 @@ impl Trie {
             match &self.mem_tries {
                 Some(acc_mem_tries) => {
                     let mem_tries = acc_mem_tries.mem_tries.read().unwrap();
+                    println!("GET ROOT {}", self.root);
                     let node_id = mem_tries.roots.get(&self.root).unwrap().clone();
                     let node_ptr = node_id.as_ptr(&mem_tries.arena.memory());
                     let lookuper = MemTrieLookup::new_with(
