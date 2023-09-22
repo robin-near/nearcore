@@ -1484,15 +1484,15 @@ mod tests {
 
     #[test]
     fn test_refcounts() {
-        let mut rng: StdRng = SeedableRng::from_seed([1; 32]);
-        // let mut rng = rand::thread_rng();
+        // let mut rng: StdRng = SeedableRng::from_seed([1; 32]);
+        let mut rng = rand::thread_rng();
         for _test_run in 0..10 {
-            let num_iterations = 1; //rng.gen_range(1..5);
+            let num_iterations = rng.gen_range(1..20);
             let tries = create_tries();
             let store = tries.get_store();
             let mut state_root = Trie::EMPTY_ROOT;
             for _ in 0..num_iterations {
-                let trie_changes = gen_changes(&mut rng, 5);
+                let trie_changes = gen_changes(&mut rng, 20);
                 state_root =
                     test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
                 let memory_usage = tries
