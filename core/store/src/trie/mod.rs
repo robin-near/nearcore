@@ -473,11 +473,12 @@ impl TrieChanges {
 
     // Prepare Trie changes and update Arena right now.
     // Yeah it is not atomic, but enough for testing for now.
-    pub fn apply_mem_changes(
-        &mut self,
-        mem_changes: MemTrieChanges,
-        arena: &mut Arena,
-    ) -> MemTrieNodeId {
+    pub fn apply_mem_changes(&mut self, arena: &mut Arena) -> MemTrieNodeId {
+        if self.mem_changes.is_none() {
+            return MemTrieNodeId::from(0);
+        }
+
+        let mem_changes = self.mem_changes.take().unwrap();
         let MemTrieChanges {
             ordered_nodes: nodes,
             refcount_changes: id_refcount_changes,

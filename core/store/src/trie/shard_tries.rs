@@ -478,7 +478,16 @@ impl ShardTries {
         shard_uid: ShardUId,
         store_update: &mut StoreUpdate,
     ) -> StateRoot {
-        self.apply_all_inner(trie_changes, shard_uid, true, store_update)
+        let mut trie_changes = trie_changes.clone();
+        {
+            let lock_arena = self.get_mem_tries(shard_uid);
+            let mut guard = lock_arena.write().unwrap();
+            let arena = &mut guard.arena;
+            let new_root_id = trie_changes.apply_mem_changes(arena);
+            guard.insert_root(trie_changes.new_root, new_root_id);
+        }
+
+        self.apply_all_inner(&trie_changes, shard_uid, true, store_update)
     }
 
     /// Makes a snapshot of the current state of the DB.

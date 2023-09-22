@@ -2080,18 +2080,14 @@ impl<'a> ChainStoreUpdate<'a> {
 
     pub fn save_trie_changes(&mut self, mut trie_changes: WrappedTrieChanges) {
         {
-            let mut inner_trie_changes = &mut trie_changes.trie_changes;
-            match inner_trie_changes.mem_changes.take() {
-                Some(mem_changes) => {
-                    let lock_arena = trie_changes.tries.get_mem_tries(trie_changes.shard_uid);
-                    let mut guard = lock_arena.write().unwrap();
-                    let new_root_id = {
-                        let arena = &mut guard.arena;
-                        inner_trie_changes.apply_mem_changes(mem_changes, arena)
-                    };
-                    guard.insert_root(inner_trie_changes.new_root, new_root_id)
-                }
-                None => {}
+            let flag = trie_changes.trie_changes.mem_changes.is_some();
+            if flag {
+                let inner_trie_changes = &mut trie_changes.trie_changes;
+                let lock_arena = trie_changes.tries.get_mem_tries(trie_changes.shard_uid);
+                let mut guard = lock_arena.write().unwrap();
+                let arena = &mut guard.arena;
+                let new_root_id = inner_trie_changes.apply_mem_changes(arena);
+                guard.insert_root(inner_trie_changes.new_root, new_root_id);
             }
         }
         self.trie_changes.push(trie_changes);
