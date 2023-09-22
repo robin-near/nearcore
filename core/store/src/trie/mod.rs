@@ -1227,12 +1227,25 @@ mod tests {
     ) -> CryptoHash {
         let delete_changes: TrieChanges =
             changes.iter().map(|(key, _)| (key.clone(), None)).collect();
-        let trie_changes =
-            tries.get_trie_for_shard(shard_uid, *root).update(delete_changes).unwrap();
+        let trie = tries.get_trie_for_shard(shard_uid, *root);
+
+        eprintln!("ITEMS");
+        for it in trie.iter().unwrap() {
+            eprintln!("{:?}", it.unwrap());
+        }
+
+        let trie_changes = trie.update(delete_changes).unwrap();
+
         let mut store_update = tries.store_update();
         let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
         let trie = tries.get_trie_for_shard(shard_uid, root);
         store_update.commit().unwrap();
+
+        eprintln!("ITEMS");
+        for it in trie.iter().unwrap() {
+            eprintln!("{:?}", it.unwrap());
+        }
+
         for (key, _) in changes {
             eprintln!("{:?} {:?}", key, trie.get(&key));
             assert_eq!(trie.get(&key), Ok(None));
