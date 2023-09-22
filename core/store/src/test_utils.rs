@@ -79,25 +79,12 @@ pub fn test_populate_trie(
 ) -> CryptoHash {
     let trie = tries.get_trie_for_shard(shard_uid, *root);
     let trie_changes = trie.update(changes.iter().cloned()).unwrap();
-    eprintln!("INSERTIONS");
-    for it in trie_changes.insertions() {
-        eprintln!("{:?}", it);
-    }
-    eprintln!("DELETIONS");
-    for it in trie_changes.deletions() {
-        eprintln!("{:?}", it);
-    }
     let mut store_update = tries.store_update();
     let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
     store_update.commit().unwrap();
     let deduped = simplify_changes(&changes);
     let trie = tries.get_trie_for_shard(shard_uid, root);
-    // eprintln!("ITEMS");
-    // for it in trie.iter().unwrap() {
-    //     eprintln!("{:?}", it.unwrap());
-    // }
     for (key, value) in deduped {
-        // eprintln!("{:?} {:?}", key, value);
         assert_eq!(trie.get(&key), Ok(value));
     }
     root

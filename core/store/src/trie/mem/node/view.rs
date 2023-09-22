@@ -124,14 +124,12 @@ impl<'a> MemTrieUpdate<'a> {
     // todo: consider already dropping hash & mem usage. but maybe idc
     // todo: what are trie changes for values?
     pub fn insert(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8], value: Vec<u8>) {
-        eprintln!("insert {:?}", key);
         let mut node_id = root_id;
         let mut partial = NibbleSlice::new(key);
 
         loop {
             // Destroy node as it will be changed anyway.
             let node = self.destroy(node_id);
-            eprintln!("partial = {:?}, node {:?}", partial, node);
             match node {
                 UpdatedMemTrieNode::Empty => {
                     let extension: Vec<_> = partial.encoded(true).into_vec();
@@ -183,7 +181,6 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Leaf { extension: key, value: old_value } => {
                     let existing_key = NibbleSlice::from_encoded(key.as_ref()).0;
-                    eprintln!("existing_key = {:?}", existing_key);
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
                         // Equivalent leaf, rewrite the value.
@@ -671,9 +668,6 @@ impl<'a> MemTrieUpdate<'a> {
                     InputMemTrieNode::Extension { extension, child: map_node(child, &mapped_nodes) }
                 }
                 UpdatedMemTrieNode::Leaf { extension, value } => {
-                    if extension.len() == 0 {
-                        eprintln!("!!!!!! {:?}", value);
-                    }
                     // let (_, old_rc) =
                     //     refcount_changes.entry(hash(&value)).or_insert_with(|| (value.clone(), 0));
                     // *old_rc += 1;
@@ -689,9 +683,6 @@ impl<'a> MemTrieUpdate<'a> {
             let view = node.view();
             let hash = view.node_hash();
             let raw_node = view.to_raw_trie_node_with_size();
-            if hash == CryptoHash::default() {
-                eprintln!("!!! {} {:?}", hash, raw_node);
-            }
             let (_, rc) =
                 refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
             *rc += 1;

@@ -1049,14 +1049,12 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
-        eprintln!("0");
         // build mem trie from self
         let mut arena = mem::Arena::new(1024 * 1024 * 1024);
         let path_begin = self.find_state_part_boundary(0, 1).unwrap();
         let path_end = self.find_state_part_boundary(1, 1).unwrap();
         let mut mapper: HashMap<CryptoHash, MemTrieNodeId> = Default::default();
         let mut last_node_id = MemTrieNodeId::from(usize::MAX);
-        eprintln!("0.25");
         for item in self
             .iter()
             .unwrap()
@@ -1073,7 +1071,6 @@ impl Trie {
             if item.key.is_some() {
                 continue;
             }
-            eprintln!("{}", hash);
             let node = self.storage.retrieve_raw_bytes(&hash).unwrap();
             let raw_node: RawTrieNodeWithSize = RawTrieNodeWithSize::try_from_slice(&node).unwrap();
             // convert...
@@ -1104,14 +1101,12 @@ impl Trie {
             last_node_id = node_id;
             mapper.insert(hash, node_id);
         }
-        eprintln!("0.5");
         if last_node_id.ptr != usize::MAX {
             last_node_id.add_ref(&mut arena);
             let mut node_ptr = last_node_id.as_ptr_mut(arena.memory_mut());
             node_ptr.compute_hash_recursively();
         }
 
-        eprintln!("1");
         let (ordered_nodes, value_changes, refcount_changes, mut nodes_storage) = {
             let ptr = last_node_id.ptr;
             let mut trie_update = MemTrieUpdate::new(&arena, self.storage.clone());
@@ -1498,7 +1493,6 @@ mod tests {
             let mut state_root = Trie::EMPTY_ROOT;
             for _ in 0..num_iterations {
                 let trie_changes = gen_changes(&mut rng, 5);
-                eprintln!("{:?}", trie_changes);
                 state_root =
                     test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
                 let memory_usage = tries
@@ -1509,19 +1503,6 @@ mod tests {
                 println!("New memory_usage: {memory_usage}");
             }
 
-            eprintln!("STATE CONTENTS:");
-            for it in store.iter(DBCol::State) {
-                let it = it.unwrap();
-                match RawTrieNodeWithSize::try_from_slice(&it.1) {
-                    Ok(node) => {
-                        eprintln!("NODE {:?}", node);
-                    }
-                    Err(_) => {
-                        eprintln!("SMTH {:?}", it);
-                    }
-                }
-                eprintln!("{:?}", it);
-            }
             let trie = tries.get_trie_for_shard(ShardUId::single_shard(), state_root);
             let trie_changes = trie
                 .iter()
@@ -1534,19 +1515,6 @@ mod tests {
             state_root =
                 test_populate_trie(&tries, &state_root, ShardUId::single_shard(), trie_changes);
             assert_eq!(state_root, Trie::EMPTY_ROOT, "Trie must be empty");
-            eprintln!("STATE CONTENTS:");
-            for it in store.iter(DBCol::State) {
-                let it = it.unwrap();
-                match RawTrieNodeWithSize::try_from_slice(&it.1) {
-                    Ok(node) => {
-                        eprintln!("NODE {:?}", node);
-                    }
-                    Err(_) => {
-                        eprintln!("SMTH {:?}", it);
-                    }
-                }
-                eprintln!("{:?}", it);
-            }
             assert!(store.iter(DBCol::State).peekable().peek().is_none(), "Storage must be empty");
         }
     }
