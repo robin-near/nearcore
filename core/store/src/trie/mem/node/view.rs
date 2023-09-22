@@ -200,10 +200,11 @@ impl<'a> MemTrieUpdate<'a> {
                         let mut children = vec![None; 16];
                         let branch_node = if existing_key.is_empty() {
                             // yeah it can be empty... if branch leads directly to value :(
-                            UpdatedMemTrieNode::Branch { children, value: Some(old_value)) }
+                            UpdatedMemTrieNode::Branch { children, value: Some(old_value) }
                         } else {
                             let idx = existing_key.at(0) as usize;
-                            let new_extension: Vec<_> = existing_key.mid(1).encoded(true).into_vec();
+                            let new_extension: Vec<_> =
+                                existing_key.mid(1).encoded(true).into_vec();
                             let new_leaf = UpdatedMemTrieNode::Leaf {
                                 extension: new_extension.into_boxed_slice(),
                                 value: old_value.clone(),
