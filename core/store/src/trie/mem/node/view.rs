@@ -651,7 +651,7 @@ impl<'a> MemTrieUpdate<'a> {
 
         let mut node_ids_with_hashes = vec![];
         for node_id in ordered_nodes.into_iter() {
-            let node = nodes_storage.get_mut(node_id).unwrap().unwrap();
+            let node = nodes_storage.get(node_id).unwrap().clone().unwrap();
             let (node, memory_usage) = match node {
                 UpdatedMemTrieNode::Empty => unreachable!(),
                 UpdatedMemTrieNode::Branch { children, value } => {

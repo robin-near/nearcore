@@ -496,7 +496,7 @@ impl ShardTries {
             let node_ids_with_hashes = &mem_changes.node_ids_with_hashes;
 
             for (node_id, node_hash) in node_ids_with_hashes.iter() {
-                let node = nodes_storage.get(*node_id).unwrap().unwrap();
+                let node = nodes_storage.get(*node_id).unwrap().clone().unwrap();
                 let node = match node {
                     UpdatedMemTrieNode::Empty => unreachable!(),
                     UpdatedMemTrieNode::Branch { children, value } => {

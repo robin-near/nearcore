@@ -1176,7 +1176,7 @@ impl Trie {
             Some(acc_mem_tries) => {
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.roots.get(&self.root).unwrap().clone();
-                let mut arena = &mut guard.arena;
+                let arena = &mut guard.arena;
                 {
                     let mut trie_update =
                         MemTrieUpdate::new(last_node_id, &arena, self.storage.clone());
