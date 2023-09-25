@@ -1385,6 +1385,7 @@ mod test {
             let mut store_update = self.store.store_update();
             let flat_state_changes =
                 FlatStateChanges::from_state_changes(&result.trie_changes.state_changes());
+            result.trie_changes.apply_mem_changes();
             result.trie_changes.insertions_into(&mut store_update);
             result.trie_changes.state_changes_into(&mut store_update);
 

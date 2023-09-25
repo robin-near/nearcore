@@ -478,7 +478,7 @@ impl Trie {
                 new_root: *state_root,
                 insertions,
                 deletions,
-                mem_changes: None,
+                mem_trie_changes: None,
             },
             flat_state_delta,
             contract_codes,

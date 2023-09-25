@@ -3,11 +3,11 @@ use crate::trie::mem::arena::{Arena, ArenaPtr};
 use crate::trie::mem::flexible_data::children::ChildrenView;
 use crate::trie::mem::node::loading::MemTrieNodePtrMut;
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId};
-use crate::trie::{MemTrieChanges, TRIE_COSTS};
+use crate::trie::{Children, MemTrieChanges, TRIE_COSTS};
 use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges, TrieStorage};
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
-use near_primitives::state::FlatStateValue;
+use near_primitives::state::{FlatStateValue, ValueRef};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -32,12 +32,18 @@ pub enum UpdatedMemTrieNode {
     Branch { children: Vec<Option<UpdatedNodeRef>>, value: Option<Vec<u8>> },
 }
 
+pub struct UpdatedMemTrieNodeWithMetadata {
+    node: UpdatedMemTrieNode,
+    hash: CryptoHash,
+}
+
 pub struct MemTrieUpdate<'a> {
+    root: MemTrieNodeId,
     arena: &'a Arena,
     // for values
     storage: Rc<dyn TrieStorage>,
     // offset -> refcount
-    pub refcount_changes: HashMap<usize, i32>,
+    pub id_refcount_changes: HashMap<usize, i32>,
     pub value_changes: HashMap<Vec<u8>, i32>,
     pub nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
 }
@@ -66,14 +72,17 @@ enum FlattenNodesCrumb {
 }
 
 impl<'a> MemTrieUpdate<'a> {
-    pub fn new(arena: &'a Arena, storage: Rc<dyn TrieStorage>) -> Self {
-        Self {
+    pub fn new(root: MemTrieNodeId, arena: &'a Arena, storage: Rc<dyn TrieStorage>) -> Self {
+        let mut trie_update = Self {
+            root,
             arena,
             storage,
-            refcount_changes: Default::default(),
+            id_refcount_changes: Default::default(),
             value_changes: Default::default(),
             nodes_storage: vec![],
-        }
+        };
+        assert_eq!(trie_update.move_node_to_mutable(root.ptr), 0usize);
+        trie_update
     }
 
     pub fn destroy(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
@@ -92,11 +101,12 @@ impl<'a> MemTrieUpdate<'a> {
         index
     }
 
+    // actually, "copy to mutable"
     pub fn move_node_to_mutable(&mut self, node: usize) -> usize {
         if node == usize::MAX {
             self.store(UpdatedMemTrieNode::Empty)
         } else {
-            *self.refcount_changes.entry(node).or_insert_with(|| 0) -= 1;
+            *self.id_refcount_changes.entry(node).or_insert_with(|| 0) -= 1;
             let node = MemTrieNodePtr::from(self.arena.memory().ptr(node));
             let updated_node = node.view().to_updated(self.storage.as_ref());
             self.store(updated_node)
@@ -113,6 +123,7 @@ impl<'a> MemTrieUpdate<'a> {
     }
 
     // INSERT/DELETE LOGIC
+    // ASSUMPTION: root = 0usize. Seem to hold in the whole code
 
     // Starting from the root, insert `key` to trie, modifying nodes on the way from top to bottom.
     // Combination of different operations:
@@ -123,8 +134,8 @@ impl<'a> MemTrieUpdate<'a> {
     // ! No need to return anything. `root_id` stays as is
     // todo: consider already dropping hash & mem usage. but maybe idc
     // todo: what are trie changes for values?
-    pub fn insert(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8], value: Vec<u8>) {
-        let mut node_id = root_id;
+    pub fn insert(&mut self, key: &[u8], value: Vec<u8>) {
+        let mut node_id = 0; // root
         let mut partial = NibbleSlice::new(key);
 
         loop {
@@ -317,8 +328,8 @@ impl<'a> MemTrieUpdate<'a> {
     }
 
     // Delete
-    pub fn delete(&mut self, root_id: UpdatedMemTrieNodeId, key: &[u8]) {
-        let mut node_id = root_id;
+    pub fn delete(&mut self, key: &[u8]) {
+        let mut node_id = 0; // root
         let mut partial = NibbleSlice::new(key);
         let mut path = vec![];
 
@@ -540,14 +551,16 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
-    pub fn flatten_nodes(self, root_id: UpdatedMemTrieNodeId) -> MemTrieChanges {
+    pub fn flatten_nodes(self) -> TrieChanges {
         let Self {
-            arena: _arena,
+            root,
+            arena,
             storage: _storage,
-            refcount_changes,
+            id_refcount_changes,
             value_changes,
-            nodes_storage,
+            mut nodes_storage,
         } = self;
+        let root_id = 0;
 
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
@@ -599,7 +612,114 @@ impl<'a> MemTrieUpdate<'a> {
             ordered_nodes.push(node);
         }
 
-        MemTrieChanges { ordered_nodes, refcount_changes, value_changes, nodes_storage }
+        // And now, compute hashes and memory usage, because it is heavy, and we are outside of
+        // main block processing thread.
+        let mut last_node_id = 0; // root id
+                                  // In the end it should be root hash.
+                                  // If there are no updates, it will be hash of the old root.
+        let old_root = root.as_ptr(arena.memory()).view().node_hash();
+        let mut last_node_hash = old_root;
+        let mut buffer: Vec<u8> = Vec::new();
+
+        let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, (CryptoHash, u64)> = Default::default();
+        let map_node = |node: UpdatedNodeRef,
+                        map: &HashMap<UpdatedMemTrieNodeId, (CryptoHash, u64)>|
+         -> (CryptoHash, u64) {
+            match node {
+                UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
+                UpdatedNodeRef::Old(ptr) => {
+                    let view = MemTrieNodeId::from(ptr).as_ptr(arena.memory()).view();
+                    (view.node_hash(), view.memory_usage())
+                }
+            }
+        };
+
+        let mut refcount_changes: HashMap<CryptoHash, (Vec<u8>, i32)> = Default::default();
+        for (node_id, rc) in id_refcount_changes {
+            let node = MemTrieNodePtr::from(arena.memory().ptr(node_id));
+            let view = node.view();
+            let hash = view.node_hash();
+            let raw_node = view.to_raw_trie_node_with_size(); // can we skip this? rc < 0, value not needed
+            let (_, old_rc) =
+                refcount_changes.entry(hash).or_insert_with(|| (raw_node.try_to_vec().unwrap(), 0));
+            *old_rc += rc;
+        }
+        for (value, rc) in value_changes.into_iter() {
+            let (_, old_rc) = refcount_changes.entry(hash(&value)).or_insert_with(|| (value, 0));
+            *old_rc += rc;
+        }
+
+        let mut node_ids_with_hashes = vec![];
+        for node_id in ordered_nodes.into_iter() {
+            let node = nodes_storage.get_mut(node_id).unwrap().unwrap();
+            let (node, memory_usage) = match node {
+                UpdatedMemTrieNode::Empty => unreachable!(),
+                UpdatedMemTrieNode::Branch { children, value } => {
+                    let mut memory_usage = TRIE_COSTS.node_cost;
+                    let mut child_hashes = vec![];
+                    for child in children.into_iter() {
+                        match child {
+                            Some(child) => {
+                                let (child_hash, child_memory_usage) =
+                                    map_node(child, &mapped_nodes);
+                                child_hashes.push(Some(child_hash));
+                                memory_usage += child_memory_usage;
+                            }
+                            None => {
+                                child_hashes.push(None);
+                            }
+                        }
+                    }
+                    let children = Children(child_hashes.as_slice().try_into().unwrap());
+                    let value_ref = value.map(|value| ValueRef::new(&value));
+                    memory_usage += match &value_ref {
+                        Some(value_ref) => {
+                            value_ref.length as u64 * TRIE_COSTS.byte_of_value
+                                + TRIE_COSTS.node_cost
+                        }
+                        None => 0,
+                    };
+                    (RawTrieNode::branch(children, value_ref), memory_usage)
+                }
+                UpdatedMemTrieNode::Extension { extension, child } => {
+                    let (child_hash, child_memory_usage) = map_node(child, &mapped_nodes);
+                    let memory_usage = TRIE_COSTS.node_cost
+                        + extension.len() as u64 * TRIE_COSTS.byte_of_key
+                        + child_memory_usage;
+                    (RawTrieNode::Extension(extension.to_vec(), child_hash), memory_usage)
+                }
+                UpdatedMemTrieNode::Leaf { extension, value } => {
+                    let memory_usage = TRIE_COSTS.node_cost
+                        + extension.len() as u64 * TRIE_COSTS.byte_of_key
+                        + value.len() as u64 * TRIE_COSTS.byte_of_value
+                        + TRIE_COSTS.node_cost;
+                    (RawTrieNode::Leaf(extension.to_vec(), ValueRef::new(&value)), memory_usage)
+                }
+            };
+
+            let raw_node_with_size = RawTrieNodeWithSize { node, memory_usage };
+            raw_node_with_size.serialize(&mut buffer).unwrap();
+            let node_hash = hash(&buffer);
+            mapped_nodes.insert(node_id, (node_hash, memory_usage));
+
+            let (_, rc) = refcount_changes.entry(node_hash).or_insert_with(|| (buffer.clone(), 0));
+            *rc += 1;
+            buffer.clear();
+
+            last_node_hash = node_hash;
+            last_node_id = node_id;
+            node_ids_with_hashes.push((node_id, node_hash));
+        }
+
+        let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(refcount_changes);
+
+        TrieChanges {
+            old_root,
+            new_root: last_node_hash,
+            insertions,
+            deletions,
+            mem_trie_changes: Some(MemTrieChanges { node_ids_with_hashes, nodes_storage }),
+        }
     }
 }
 

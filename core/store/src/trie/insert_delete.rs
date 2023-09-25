@@ -617,7 +617,7 @@ impl Trie {
             new_root: last_hash,
             insertions,
             deletions,
-            mem_changes: None,
+            mem_trie_changes: None,
         })
     }
 

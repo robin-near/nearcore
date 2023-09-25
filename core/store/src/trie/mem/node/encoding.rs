@@ -38,8 +38,8 @@ pub(crate) struct NonLeafHeader {
 }
 
 impl NonLeafHeader {
-    pub(crate) fn new(memory_usage: u64) -> Self {
-        Self { hash: CryptoHash::default(), memory_usage }
+    pub(crate) fn new(hash: CryptoHash, memory_usage: u64) -> Self {
+        Self { hash, memory_usage }
     }
 }
 
@@ -105,7 +105,13 @@ impl BorshFixedSize for BranchWithValueHeader {
 
 impl MemTrieNodeId {
     /// Encodes the data.
-    pub(crate) fn new_impl(arena: &mut Arena, node: InputMemTrieNode) -> Self {
+    pub(crate) fn new_impl(
+        arena: &mut Arena,
+        node: InputMemTrieNode,
+        // In the live construction, hash is computed before nodes are pushed to memory.
+        hash: Option<CryptoHash>,
+    ) -> Self {
+        let hash = hash.unwrap_or(CryptoHash::default());
         match &node {
             InputMemTrieNode::Extension { child, .. } => {
                 child.add_ref(arena);
@@ -179,7 +185,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(ExtensionHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::Extension },
-                    nonleaf: NonLeafHeader::new(memory_usage),
+                    nonleaf: NonLeafHeader::new(hash, memory_usage),
                     child: child.ptr,
                     extension: extension_header,
                 });
@@ -194,7 +200,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(BranchHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::Branch },
-                    nonleaf: NonLeafHeader::new(memory_usage),
+                    nonleaf: NonLeafHeader::new(hash, memory_usage),
                     children: children_header,
                 });
                 data.encode_flexible(&children_header, children);
@@ -211,7 +217,7 @@ impl MemTrieNodeId {
                 );
                 data.encode(BranchWithValueHeader {
                     common: CommonHeader { refcount: 1, kind: NodeKind::BranchWithValue },
-                    nonleaf: NonLeafHeader::new(memory_usage),
+                    nonleaf: NonLeafHeader::new(hash, memory_usage),
                     children: children_header,
                     value: value_header,
                 });

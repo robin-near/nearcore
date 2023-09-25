@@ -3,6 +3,9 @@ use crate::flat::FlatStorageManager;
 use crate::option_to_not_found;
 use crate::trie::config::TrieConfig;
 use crate::trie::mem::loading::load_trie_from_flat_state;
+use crate::trie::mem::node::{
+    InputMemTrieNode, MemTrieNodeId, UpdatedMemTrieNode, UpdatedMemTrieNodeId, UpdatedNodeRef,
+};
 use crate::trie::mem::MemTries;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
@@ -18,6 +21,7 @@ use near_primitives::errors::StorageError;
 use near_primitives::errors::StorageError::StorageInconsistentState;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{self, get_block_shard_uid, ShardUId, ShardVersion};
+use near_primitives::state::FlatStateValue;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
     NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
@@ -472,22 +476,65 @@ impl ShardTries {
         self.apply_deletions_inner(&trie_changes.insertions, shard_uid, store_update)
     }
 
+    pub fn apply_mem_changes(&self, trie_changes: &TrieChanges, shard_uid: ShardUId) {
+        if let Some(mem_changes) = &trie_changes.mem_trie_changes {
+            let lock_arena = self.get_mem_tries(shard_uid);
+            let mut guard = lock_arena.write().unwrap();
+            let arena = &mut guard.arena;
+
+            let map_node = |node: UpdatedNodeRef,
+                            map: &HashMap<UpdatedMemTrieNodeId, MemTrieNodeId>|
+             -> MemTrieNodeId {
+                match node {
+                    UpdatedNodeRef::New(node) => map.get(&node).unwrap().clone(),
+                    UpdatedNodeRef::Old(ptr) => MemTrieNodeId::from(ptr),
+                }
+            };
+
+            let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
+            let nodes_storage = &mem_changes.nodes_storage;
+            let node_ids_with_hashes = &mem_changes.node_ids_with_hashes;
+
+            for (node_id, node_hash) in node_ids_with_hashes.iter() {
+                let node = nodes_storage.get(*node_id).unwrap().unwrap();
+                let node = match node {
+                    UpdatedMemTrieNode::Empty => unreachable!(),
+                    UpdatedMemTrieNode::Branch { children, value } => {
+                        let children = children
+                            .into_iter()
+                            .map(|child| child.map(|c| map_node(c, &mapped_nodes)))
+                            .collect();
+                        match value {
+                            Some(value) => InputMemTrieNode::BranchWithValue {
+                                children,
+                                value: FlatStateValue::on_disk(&value),
+                            },
+                            None => InputMemTrieNode::Branch { children },
+                        }
+                    }
+                    UpdatedMemTrieNode::Extension { extension, child } => {
+                        InputMemTrieNode::Extension {
+                            extension,
+                            child: map_node(child, &mapped_nodes),
+                        }
+                    }
+                    UpdatedMemTrieNode::Leaf { extension, value } => {
+                        InputMemTrieNode::Leaf { value: FlatStateValue::on_disk(&value), extension }
+                    }
+                };
+                let mem_node_id = MemTrieNodeId::new_with_hash(arena, node, *node_hash);
+                mapped_nodes.insert(*node_id, mem_node_id);
+            }
+        }
+    }
+
     pub fn apply_all(
         &self,
         trie_changes: &TrieChanges,
         shard_uid: ShardUId,
         store_update: &mut StoreUpdate,
     ) -> StateRoot {
-        let flag = trie_changes.mem_changes.is_some();
-        let mut trie_changes = trie_changes.clone();
-        if flag {
-            let lock_arena = self.get_mem_tries(shard_uid);
-            let mut guard = lock_arena.write().unwrap();
-            let arena = &mut guard.arena;
-            let new_root_id = trie_changes.apply_mem_changes(arena);
-            guard.insert_root(trie_changes.new_root, new_root_id);
-        }
-
+        self.apply_mem_changes(&trie_changes, shard_uid);
         self.apply_all_inner(&trie_changes, shard_uid, true, store_update)
     }
 
@@ -805,6 +852,10 @@ impl WrappedTrieChanges {
 
     pub fn state_changes(&self) -> &[RawStateChangesWithTrieKey] {
         &self.state_changes
+    }
+
+    pub fn apply_mem_changes(&self) {
+        self.tries.apply_mem_changes(&self.trie_changes, self.shard_uid);
     }
 
     /// Save insertions of trie nodes into Store.
