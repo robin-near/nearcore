@@ -563,7 +563,7 @@ impl<'a> MemTrieUpdate<'a> {
         };
         crate::metrics::MEM_TRIE_UPDATE_CREATIONS
             .with_label_values(&[&shard_id.to_string()])
-            .inc_by(nodes_storage.len() as i64);
+            .inc_by(nodes_storage.len() as u64);
         let mut stack: Vec<(UpdatedMemTrieNodeId, FlattenNodesCrumb)> = Vec::new();
         stack.push((root_id, FlattenNodesCrumb::Entering));
         let mut ordered_nodes = vec![];
