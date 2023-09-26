@@ -454,9 +454,10 @@ fn test_flat_storage_iter() {
     println!("2");
     let mut env = setup_env(&genesis, store.clone());
     println!("3");
-    panic!("STOP!");
     for height in 1..START_HEIGHT {
+        println!("ht {}", height);
         env.produce_block(0, height);
+        panic!("STOP!");
     }
     println!("4");
 
