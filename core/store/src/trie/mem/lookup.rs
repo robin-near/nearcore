@@ -1,6 +1,7 @@
 use near_primitives::hash::CryptoHash;
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use near_primitives::state::FlatStateValue;
 use near_vm_runner::logic::TrieNodesCount;
@@ -12,23 +13,23 @@ use super::node::{MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
 pub struct MemTrieLookup<'a> {
     root: MemTrieNodePtr<'a>,
     // There was MemTrieNodeId here, but on runtime there is accounting by hash...
-    cache: RefCell<HashSet<CryptoHash>>,
-    nodes_count: RefCell<TrieNodesCount>,
+    cache: Arc<RefCell<HashSet<CryptoHash>>>,
+    nodes_count: Arc<RefCell<TrieNodesCount>>,
 }
 
 impl<'a> MemTrieLookup<'a> {
     pub fn new(root: MemTrieNodePtr<'a>) -> Self {
         Self {
             root,
-            cache: RefCell::new(HashSet::new()),
-            nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
+            cache: Arc::new(RefCell::new(HashSet::new())),
+            nodes_count: Arc::new(RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 })),
         }
     }
 
     pub fn new_with(
         root: MemTrieNodePtr<'a>,
-        cache: RefCell<HashSet<CryptoHash>>,
-        nodes_count: RefCell<TrieNodesCount>,
+        cache: Arc<RefCell<HashSet<CryptoHash>>>,
+        nodes_count: Arc<RefCell<TrieNodesCount>>,
     ) -> Self {
         Self { root, cache, nodes_count }
     }

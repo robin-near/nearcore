@@ -276,8 +276,11 @@ impl ShardTries {
             match guard.get(&shard_uid) {
                 Some(mem_tries) => Some(AccountingMemTries {
                     mem_tries: mem_tries.clone(),
-                    cache: RefCell::new(Default::default()),
-                    nodes_count: RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 }),
+                    cache: Arc::new(RefCell::new(Default::default())),
+                    nodes_count: Arc::new(RefCell::new(TrieNodesCount {
+                        db_reads: 0,
+                        mem_reads: 0,
+                    })),
                 }),
                 None => None,
             }

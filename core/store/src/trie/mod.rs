@@ -335,8 +335,8 @@ impl std::fmt::Debug for TrieNode {
 
 pub struct AccountingMemTries {
     mem_tries: Arc<RwLock<MemTries>>,
-    cache: RefCell<HashSet<CryptoHash>>,
-    nodes_count: RefCell<TrieNodesCount>,
+    cache: Arc<RefCell<HashSet<CryptoHash>>>,
+    nodes_count: Arc<RefCell<TrieNodesCount>>,
 }
 
 pub struct Trie {
