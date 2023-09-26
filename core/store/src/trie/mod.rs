@@ -23,6 +23,7 @@ pub use near_primitives::types::TrieNodesCount;
 use near_primitives::types::{StateRoot, StateRootNode};
 use near_vm_runner::ContractCode;
 pub use raw_node::{Children, RawTrieNode, RawTrieNodeWithSize};
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -1234,7 +1235,7 @@ impl Trie {
 
     pub fn get_trie_nodes_count(&self) -> TrieNodesCount {
         match &self.mem_tries {
-            Some(acc_mem_tries) => acc_mem_tries.nodes_count.clone().into_inner(),
+            Some(acc_mem_tries) => acc_mem_tries.nodes_count.borrow().into_inner().clone(),
             None => self.accounting_cache.borrow().get_trie_nodes_count(),
         }
     }
