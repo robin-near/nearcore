@@ -33,12 +33,18 @@ impl MemTries {
 
     pub fn insert_root(&mut self, state_root: StateRoot, mem_root: MemTrieNodeId) {
         println!("INSERT ROOT {}", state_root);
-        self.roots.insert(state_root, mem_root);
-        mem_root.add_ref(&mut self.arena);
+        if state_root != CryptoHash::default() {
+            self.roots.insert(state_root, mem_root);
+            mem_root.add_ref(&mut self.arena);
+        }
     }
 
     pub fn get_root<'a>(&'a self, state_root: &CryptoHash) -> Option<MemTrieNodePtr<'a>> {
-        self.roots.get(state_root).map(|id| id.to_ref(self.arena.memory()))
+        if state_root != &CryptoHash::default() {
+            self.roots.get(state_root).map(|id| id.to_ref(self.arena.memory()))
+        } else {
+            Some(MemTrieNodeId::from(usize::MAX).to_ref(self.arena.memory()))
+        }
     }
 
     pub fn delete_root(&mut self, state_root: &CryptoHash) {
