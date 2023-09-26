@@ -903,7 +903,7 @@ impl ShardTries {
                 }
 
                 println!("Done gen for {}", shard_uid);
-                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)), all_trie_changes)
+                (shard_uid.clone(), mem_tries, all_trie_changes)
             })
             .collect();
 
