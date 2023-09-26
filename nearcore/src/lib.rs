@@ -246,6 +246,8 @@ pub fn start_with_config_and_synchronization(
         EpochManager::new_arc_handle(storage.get_hot_store(), &config.genesis.config);
     let shard_tracker =
         ShardTracker::new(TrackedConfig::from_config(&config.client_config), epoch_manager.clone());
+    // hack
+    config.config.store.load_mem_tries = true;
     let runtime = NightshadeRuntime::from_config(
         home_dir,
         storage.get_hot_store(),
@@ -258,6 +260,7 @@ pub fn start_with_config_and_synchronization(
     let split_store = get_split_store(&config, &storage)?;
     let (view_epoch_manager, view_shard_tracker, view_runtime) =
         if let Some(split_store) = &split_store {
+            config.config.store.load_mem_tries = false;
             let view_epoch_manager =
                 EpochManager::new_arc_handle(split_store.clone(), &config.genesis.config);
             let view_shard_tracker = ShardTracker::new(

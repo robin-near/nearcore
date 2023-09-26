@@ -364,23 +364,11 @@ impl GenesisStateApplier {
         // We flush those writes and return the new state root to the caller.
         let state_root = storage.flush();
 
-        // println!("Heavy work! Loading tries to memory...");
-        // let mem_tries: Vec<_> = shard_uids
-        //     .into_par_iter()
-        //     .map(|shard_uid| {
-        //         let state_root = flat_head_state_root(&store, shard_uid);
-        //         let mem_tries =
-        //             load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
-        //         (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
-        //     })
-        //     .collect();
-        // println!("Heavy work done!");
-
         // what to do when not genesis?!
         let mem_tries =
             load_trie_from_flat_state(&tries.get_store(), shard_uid.clone(), state_root.clone())
                 .unwrap();
-        tries.set_shard_tries(shard_uid, mem_tries);
+        tries.set_mem_tries(shard_uid, mem_tries);
         state_root
     }
 }

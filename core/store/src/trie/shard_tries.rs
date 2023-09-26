@@ -1,4 +1,5 @@
 use crate::db::STATE_SNAPSHOT_KEY;
+use crate::flat::store_helper::get_all_deltas_metadata;
 use crate::flat::FlatStorageManager;
 use crate::option_to_not_found;
 use crate::trie::config::TrieConfig;
@@ -29,6 +30,7 @@ use near_primitives::types::{
 use near_vm_runner::logic::TrieNodesCount;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -812,7 +814,7 @@ impl ShardTries {
         }
     }
 
-    pub fn set_shard_tries(&self, shard_uid: ShardUId, mem_tries: MemTries) {
+    pub fn set_mem_tries(&self, shard_uid: ShardUId, mem_tries: MemTries) {
         let mut guard = self.0.mem_tries.write().unwrap();
         guard.insert(shard_uid, Arc::new(RwLock::new(mem_tries)));
     }
@@ -820,6 +822,29 @@ impl ShardTries {
     pub fn get_mem_tries(&self, shard_uid: ShardUId) -> Arc<RwLock<MemTries>> {
         let guard = self.0.mem_tries.write().unwrap();
         guard.get(&shard_uid).unwrap().clone()
+    }
+
+    pub fn load_mem_tries(&self, shard_uids: &[ShardUId]) {
+        let store = self.0.store.clone();
+        let guard = self.0.mem_tries.write().unwrap();
+        println!("Heavy work! Loading tries to memory...");
+        let mem_tries: Vec<_> = shard_uids
+            .into_par_iter()
+            .map(|shard_uid| {
+                // Load base
+                let state_root = flat_head_state_root(&store, shard_uid);
+                let mem_tries =
+                    load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
+
+                let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash)> = Default::default();
+                for delta in get_all_deltas_metadata(&store, shard_uid).unwrap() {
+                    sorted_deltas.insert((delta.block.height, delta.block.hash));
+                }
+
+                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
+            })
+            .collect();
+        println!("Heavy work done!");
     }
 }
 

@@ -30,6 +30,7 @@ pub struct TrieConfig {
     pub sweat_prefetch_receivers: Vec<AccountId>,
     /// List of allowed predecessor accounts for SWEAT prefetching.
     pub sweat_prefetch_senders: Vec<AccountId>,
+    pub load_mem_tries: bool,
 }
 
 impl TrieConfig {
@@ -39,6 +40,7 @@ impl TrieConfig {
 
         this.shard_cache_config = config.trie_cache.clone();
         this.view_shard_cache_config = config.view_trie_cache.clone();
+        this.load_mem_tries = config.load_mem_tries;
 
         this.enable_receipt_prefetching = config.enable_receipt_prefetching;
         for account in &config.sweat_prefetch_receivers {

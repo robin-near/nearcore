@@ -40,8 +40,11 @@ pub fn initialize_genesis_state(store: Store, genesis: &Genesis, home_dir: Optio
             if let GenesisContents::Records { .. } = &genesis.contents {
                 warn!(target: "store", "Found both records in genesis config and the state dump file. Will ignore the records.");
             }
+            // mem tries ignore it
             genesis_state_from_dump(store.clone(), home_dir.unwrap())
         } else {
+            // mem tries load it inside but they are not used later!!!
+            // so mem tries are ignored
             genesis_state_from_genesis(store.clone(), genesis)
         };
         let genesis_hash = genesis.json_hash();

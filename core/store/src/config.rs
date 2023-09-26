@@ -105,6 +105,7 @@ pub struct StoreConfig {
     // State Snapshot compaction usually is a good thing.
     // It makes state snapshots tiny (10GB) over the course of an epoch.
     pub state_snapshot_compaction_enabled: bool,
+    pub load_mem_tries: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -250,6 +251,8 @@ impl Default for StoreConfig {
 
             // Compaction involves a lot of IO and takes considerable amount of time.
             state_snapshot_compaction_enabled: false,
+
+            load_mem_tries: false,
         }
     }
 }

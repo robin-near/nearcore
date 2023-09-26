@@ -164,6 +164,8 @@ impl NightshadeRuntime {
         epoch_manager: Arc<EpochManagerHandle>,
         runtime_config_store: RuntimeConfigStore,
     ) -> Arc<Self> {
+        let mut trie_config = Default::default();
+        trie_config.load_mem_tries = true;
         Self::new(
             store,
             genesis_config,
@@ -172,7 +174,7 @@ impl NightshadeRuntime {
             None,
             Some(runtime_config_store),
             DEFAULT_GC_NUM_EPOCHS_TO_KEEP,
-            Default::default(),
+            trie_config,
             StateSnapshotConfig::Enabled {
                 home_dir: home_dir.to_path_buf(),
                 hot_store_path: PathBuf::from("data"),

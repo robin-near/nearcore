@@ -708,6 +708,11 @@ impl Chain {
         };
         store_update.commit()?;
 
+        let shard_tries = runtime_adapter.get_tries();
+        let shard_uids =
+            &epoch_manager.get_shard_layout(&store.head().unwrap().epoch_id)?.get_shard_uids();
+        shard_tries.load_mem_tries(shard_uids);
+
         info!(target: "chain", "Init: header head @ #{} {}; block head @ #{} {}",
               header_head.height, header_head.last_block_hash,
               block_head.height, block_head.last_block_hash);
