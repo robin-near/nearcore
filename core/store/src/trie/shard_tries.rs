@@ -1233,6 +1233,7 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries: false,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();
@@ -1282,6 +1283,7 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries: false,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();
