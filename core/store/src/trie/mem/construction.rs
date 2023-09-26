@@ -215,6 +215,9 @@ impl<'a> TrieConstructor<'a> {
         while self.segments.len() > 1 {
             self.pop_segment();
         }
-        self.segments.into_iter().next().unwrap().into_node(self.arena)
+        match self.segments.into_iter().next() {
+            Some(node) => node.into_node(self.arena),
+            None => MemTrieNodeId::from(usize::MAX),
+        }
     }
 }

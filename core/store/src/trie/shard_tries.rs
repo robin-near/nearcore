@@ -848,7 +848,7 @@ impl ShardTries {
                         delta.block.prev_hash,
                     ));
                 }
-                for (height, hash, prev_hash) in sorted_deltas.into_iter() {
+                for (_height, hash, prev_hash) in sorted_deltas.into_iter() {
                     let delta = get_delta_changes(&store, *shard_uid, hash).unwrap();
                     if let Some(changes) = delta {
                         let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
