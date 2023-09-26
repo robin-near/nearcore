@@ -1235,7 +1235,7 @@ impl Trie {
 
     pub fn get_trie_nodes_count(&self) -> TrieNodesCount {
         match &self.mem_tries {
-            Some(acc_mem_tries) => acc_mem_tries.nodes_count.borrow().into_inner().clone(),
+            Some(acc_mem_tries) => acc_mem_tries.nodes_count.as_ref().borrow().clone(),
             None => self.accounting_cache.borrow().get_trie_nodes_count(),
         }
     }
