@@ -853,7 +853,8 @@ impl ShardTries {
                         delta.block.prev_hash,
                     ));
                 }
-                for (_height, hash, prev_hash) in sorted_deltas.into_iter() {
+                println!("{} deltas for {}", sorted_deltas.len(), shard_uid);
+                for (height, hash, prev_hash) in sorted_deltas.into_iter() {
                     let delta = get_delta_changes(&store, *shard_uid, hash).unwrap();
                     if let Some(changes) = delta {
                         let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
@@ -897,8 +898,10 @@ impl ShardTries {
                         assert_eq!(trie_changes.new_root, new_root);
                         self.apply_mem_changes(&trie_changes, *shard_uid);
                     }
+                    println!("Done {} for {}", height, shard_uid);
                 }
 
+                println!("Done {}", shard_uid);
                 (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
             })
             .collect();
