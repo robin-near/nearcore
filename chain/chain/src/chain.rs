@@ -87,6 +87,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::thread::sleep;
 use std::time::{Duration as TimeDuration, Instant};
 use tracing::{debug, error, info, warn, Span};
 
@@ -3860,8 +3861,6 @@ impl Chain {
         incoming_receipts: &HashMap<u64, Vec<ReceiptProof>>,
         state_patch: SandboxStatePatch,
     ) -> Result<Option<ApplyChunkJob>, Error> {
-        panic!("STOP GET JOB!");
-
         let shard_id = shard_id as ShardId;
         let prev_hash = block.header().prev_hash();
         let cares_about_shard_this_epoch =
@@ -3957,6 +3956,11 @@ impl Chain {
         epoch_manager: Arc<dyn EpochManagerAdapter>,
         split_state_roots: Option<HashMap<ShardUId, CryptoHash>>,
     ) -> Result<Option<ApplyChunkJob>, Error> {
+        if shard_uid.shard_id() == 2 {
+            println!("SLEEP!");
+            sleep(Duration::from_secs(5));
+            panic!("STOP APPLY!");
+        }
         let prev_hash = block.header().prev_hash();
         let shard_id = shard_uid.shard_id();
 
