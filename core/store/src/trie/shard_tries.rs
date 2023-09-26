@@ -1,18 +1,19 @@
 use crate::db::STATE_SNAPSHOT_KEY;
-use crate::flat::store_helper::get_all_deltas_metadata;
+use crate::flat::store_helper::{get_all_deltas_metadata, get_delta_changes};
 use crate::flat::FlatStorageManager;
-use crate::option_to_not_found;
 use crate::trie::config::TrieConfig;
 use crate::trie::mem::loading::load_trie_from_flat_state;
 use crate::trie::mem::node::{
-    InputMemTrieNode, MemTrieNodeId, UpdatedMemTrieNode, UpdatedMemTrieNodeId, UpdatedNodeRef,
+    InputMemTrieNode, MemTrieNodeId, MemTrieUpdate, UpdatedMemTrieNode, UpdatedMemTrieNodeId,
+    UpdatedNodeRef,
 };
 use crate::trie::mem::MemTries;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
 use crate::trie::{AccountingMemTries, TrieRefcountChange, POISONED_LOCK_ERR};
-use crate::Mode;
 use crate::{checkpoint_hot_storage_and_cleanup_columns, metrics, DBCol, NodeStorage, PrefetchApi};
+use crate::{option_to_not_found, TrieDBStorage};
+use crate::{Mode, TrieStorage};
 use crate::{Store, StoreConfig, StoreUpdate, Trie, TrieChanges, TrieUpdate};
 use borsh::BorshSerialize;
 use near_primitives::block::Block;
@@ -25,7 +26,7 @@ use near_primitives::shard_layout::{self, get_block_shard_uid, ShardUId, ShardVe
 use near_primitives::state::FlatStateValue;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
-    NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
+    BlockHeight, NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
 };
 use near_vm_runner::logic::TrieNodesCount;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -826,24 +827,80 @@ impl ShardTries {
 
     pub fn load_mem_tries(&self, shard_uids: &[ShardUId]) {
         let store = self.0.store.clone();
-        let guard = self.0.mem_tries.write().unwrap();
+        let mut guard = self.0.mem_tries.write().unwrap();
         println!("Heavy work! Loading tries to memory...");
         let mem_tries: Vec<_> = shard_uids
             .into_par_iter()
             .map(|shard_uid| {
                 // Load base
+                println!("Heavy work! Loading trie for {}...", shard_uid);
                 let state_root = flat_head_state_root(&store, shard_uid);
-                let mem_tries =
+                let mut mem_tries =
                     load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
 
-                let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash)> = Default::default();
+                println!("Heavy work! Loading deltas for {}...", shard_uid);
+                let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash, CryptoHash)> =
+                    Default::default();
                 for delta in get_all_deltas_metadata(&store, *shard_uid).unwrap() {
-                    sorted_deltas.insert((delta.block.height, delta.block.hash));
+                    sorted_deltas.insert((
+                        delta.block.height,
+                        delta.block.hash,
+                        delta.block.prev_hash,
+                    ));
+                }
+                for (height, hash, prev_hash) in sorted_deltas.into_iter() {
+                    let delta = get_delta_changes(&store, *shard_uid, hash).unwrap();
+                    if let Some(changes) = delta {
+                        let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+                            .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&prev_hash, shard_uid))
+                            .unwrap()
+                            .unwrap();
+                        let old_root = *chunk.state_root();
+
+                        let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+                            .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&hash, shard_uid))
+                            .unwrap()
+                            .unwrap();
+                        let new_root = *chunk.state_root();
+
+                        let root_id = mem_tries.roots.get(&old_root).unwrap().clone();
+                        let arena = &mut mem_tries.arena;
+                        let trie_changes = {
+                            let storage = Rc::new(TrieDBStorage::new(store.clone(), *shard_uid));
+                            let mut trie_update =
+                                MemTrieUpdate::new(root_id, &arena, storage.clone());
+
+                            for (key, value) in changes.0 {
+                                match value {
+                                    Some(value) => {
+                                        let raw_value = match value {
+                                            FlatStateValue::Ref(value_ref) => storage
+                                                .retrieve_raw_bytes(&value_ref.hash)
+                                                .unwrap()
+                                                .to_vec(),
+                                            FlatStateValue::Inlined(value) => value,
+                                        };
+                                        trie_update.insert(&key, raw_value)
+                                    }
+                                    None => trie_update.delete(&key),
+                                };
+                            }
+
+                            trie_update.flatten_nodes()
+                        };
+
+                        assert_eq!(trie_changes.new_root, new_root);
+                        self.apply_mem_changes(&trie_changes, *shard_uid);
+                    }
                 }
 
                 (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
             })
             .collect();
+
+        for (shard_uid, mem_tries) in mem_tries.into_iter() {
+            guard.insert(shard_uid, mem_tries);
+        }
         println!("Heavy work done!");
     }
 }
