@@ -724,13 +724,17 @@ impl Chain {
         };
         store_update.commit()?;
 
-        let shard_tries = runtime_adapter.get_tries();
-        let shard_uids =
-            &epoch_manager.get_shard_layout(&store.head().unwrap().epoch_id)?.get_shard_uids();
-        for shard_uid in shard_uids {
-            println!("{:?}", flat_head_state_root(store.store(), shard_uid));
+        // really hacky way to know if runtime is KV.
+        // chain is created many times in tests :(
+        if runtime_adapter.get_flat_storage_manager().is_some() {
+            let shard_tries = runtime_adapter.get_tries();
+            let shard_uids =
+                &epoch_manager.get_shard_layout(&store.head().unwrap().epoch_id)?.get_shard_uids();
+            for shard_uid in shard_uids {
+                println!("{:?}", flat_head_state_root(store.store(), shard_uid));
+            }
+            shard_tries.load_mem_tries(shard_uids);
         }
-        shard_tries.load_mem_tries(shard_uids);
 
         info!(target: "chain", "Init: header head @ #{} {}; block head @ #{} {}",
               header_head.height, header_head.last_block_hash,

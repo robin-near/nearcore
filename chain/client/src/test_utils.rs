@@ -1235,6 +1235,7 @@ pub fn setup_synchronous_shards_manager(
     // ShardsManager. This way we don't have to wait to construct the Client first.
     // TODO(#8324): This should just be refactored so that we can construct Chain first
     // before anything else.
+    // chain with key value runtime???
     let chain = Chain::new(
         epoch_manager.clone(),
         shard_tracker.clone(),

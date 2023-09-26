@@ -827,6 +827,10 @@ impl ShardTries {
     }
 
     pub fn load_mem_tries(&self, shard_uids: &[ShardUId]) {
+        if !self.0.trie_config.load_mem_tries {
+            return;
+        }
+
         let store = self.0.store.clone();
         let mut guard = self.0.mem_tries.write().unwrap();
         println!("Heavy work! Loading tries to memory...");
