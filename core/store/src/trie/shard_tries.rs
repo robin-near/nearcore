@@ -837,7 +837,7 @@ impl ShardTries {
                     load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
 
                 let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash)> = Default::default();
-                for delta in get_all_deltas_metadata(&store, shard_uid).unwrap() {
+                for delta in get_all_deltas_metadata(&store, *shard_uid).unwrap() {
                     sorted_deltas.insert((delta.block.height, delta.block.hash));
                 }
 
