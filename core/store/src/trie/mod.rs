@@ -1182,18 +1182,23 @@ impl Trie {
             Some(acc_mem_tries) => {
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.roots.get(&self.root).unwrap().clone();
+                println!("update for {:?}", last_node_id);
                 let arena = &mut guard.arena;
                 {
                     let mut trie_update =
                         MemTrieUpdate::new(last_node_id, &arena, self.storage.clone());
 
                     for (key, value) in changes {
+                        println!("kv {:?} {:?}", key, value);
                         match value {
                             Some(value) => trie_update.insert(&key, value),
                             None => trie_update.delete(&key),
                         };
                     }
 
+                    if self.root == CryptoHash::default() {
+                        panic!("STOP!");
+                    }
                     Ok(trie_update.flatten_nodes())
                 }
             }
