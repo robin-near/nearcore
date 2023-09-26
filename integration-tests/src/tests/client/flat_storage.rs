@@ -436,6 +436,7 @@ fn test_catchup_succeeds_even_if_no_new_blocks() {
 /// Tests the flat storage iterator. Running on a chain with 3 shards, and couple blocks produced.
 #[test]
 fn test_flat_storage_iter() {
+    println!("1");
     init_test_logger();
     let num_shards = 3;
     let shard_layout =
@@ -450,10 +451,13 @@ fn test_flat_storage_iter() {
 
     let store = create_test_store();
 
+    println!("2");
     let mut env = setup_env(&genesis, store.clone());
+    println!("3");
     for height in 1..START_HEIGHT {
         env.produce_block(0, height);
     }
+    println!("4");
 
     for shard_id in 0..3 {
         let shard_uid = ShardUId::from_shard_id_and_layout(shard_id, &shard_layout);
