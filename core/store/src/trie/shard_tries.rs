@@ -494,7 +494,7 @@ impl ShardTries {
             let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
             let nodes_storage = &mem_changes.nodes_storage;
             let node_ids_with_hashes = &mem_changes.node_ids_with_hashes;
-
+            let mut last_node_id = guard.get_root(&trie_changes.old_root).unwrap();
             for (node_id, node_hash) in node_ids_with_hashes.iter() {
                 let node = nodes_storage.get(*node_id).unwrap().clone().unwrap();
                 let node = match node {
@@ -524,7 +524,10 @@ impl ShardTries {
                 };
                 let mem_node_id = MemTrieNodeId::new_with_hash(arena, node, *node_hash);
                 mapped_nodes.insert(*node_id, mem_node_id);
+                last_node_id = mem_node_id;
             }
+
+            guard.insert_root(trie_changes.new_root, last_node_id);
         }
     }
 
