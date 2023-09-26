@@ -36,6 +36,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock, TryLockError};
+use std::thread::sleep;
 
 struct ShardTriesInner {
     store: Store,
