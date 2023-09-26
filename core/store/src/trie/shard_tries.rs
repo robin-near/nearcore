@@ -832,7 +832,6 @@ impl ShardTries {
         }
 
         let store = self.0.store.clone();
-        let mut guard = self.0.mem_tries.write().unwrap();
         println!("Heavy work! Loading tries to memory...");
         let mem_tries: Vec<_> = shard_uids
             .into_par_iter()
@@ -853,6 +852,8 @@ impl ShardTries {
                         delta.block.prev_hash,
                     ));
                 }
+                let mut all_trie_changes = vec![];
+
                 println!("{} deltas for {}", sorted_deltas.len(), shard_uid);
                 for (height, hash, prev_hash) in sorted_deltas.into_iter() {
                     let delta = get_delta_changes(&store, *shard_uid, hash).unwrap();
@@ -896,18 +897,22 @@ impl ShardTries {
                         };
 
                         assert_eq!(trie_changes.new_root, new_root);
-                        self.apply_mem_changes(&trie_changes, *shard_uid);
+                        all_trie_changes.push(trie_changes);
                     }
-                    println!("Done {} for {}", height, shard_uid);
+                    println!("Gen changes for {} and {}", height, shard_uid);
                 }
 
-                println!("Done {}", shard_uid);
-                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)))
+                println!("Done gen for {}", shard_uid);
+                (shard_uid.clone(), Arc::new(RwLock::new(mem_tries)), all_trie_changes)
             })
             .collect();
 
-        for (shard_uid, mem_tries) in mem_tries.into_iter() {
-            guard.insert(shard_uid, mem_tries);
+        for (shard_uid, mem_tries, all_trie_changes) in mem_tries.into_iter() {
+            self.set_mem_tries(shard_uid, mem_tries);
+            for trie_changes in all_trie_changes.into_iter() {
+                self.apply_mem_changes(&trie_changes, shard_uid);
+            }
+            println!("All done for {}", shard_uid);
         }
         println!("Heavy work done!");
     }
