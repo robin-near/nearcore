@@ -1180,6 +1180,7 @@ impl Trie {
         // }
         match &self.mem_tries {
             Some(acc_mem_tries) => {
+                return Ok(TrieChanges::empty(self.root));
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.roots.get(&self.root).unwrap().clone();
                 println!("update for {:?}", last_node_id);

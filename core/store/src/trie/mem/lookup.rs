@@ -38,6 +38,7 @@ impl<'a> MemTrieLookup<'a> {
     }
 
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
+        return None;
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;
         if node.id().ptr == usize::MAX {
