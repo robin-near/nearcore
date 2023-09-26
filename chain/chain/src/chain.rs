@@ -3956,8 +3956,8 @@ impl Chain {
         epoch_manager: Arc<dyn EpochManagerAdapter>,
         split_state_roots: Option<HashMap<ShardUId, CryptoHash>>,
     ) -> Result<Option<ApplyChunkJob>, Error> {
-        if shard_uid.shard_id() == 2 {
-            println!("SLEEP!");
+        if shard_uid.shard_id() < 100 {
+            println!("SLEEP {}!", shard_uid.shard_id());
             sleep(std::time::Duration::from_secs(5));
             panic!("STOP APPLY!");
         }
