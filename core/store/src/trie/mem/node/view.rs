@@ -551,6 +551,7 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
+    // TODO: how does it work for empty state?
     pub fn flatten_nodes(self) -> TrieChanges {
         let Self {
             root,
@@ -617,7 +618,7 @@ impl<'a> MemTrieUpdate<'a> {
         let mut last_node_id = 0; // root id
                                   // In the end it should be root hash.
                                   // If there are no updates, it will be hash of the old root.
-        let old_root = root.as_ptr(arena.memory()).view().node_hash();
+        let old_root = nodes_storage.get(last_node_id).unwrap().clone().unwrap();
         let mut last_node_hash = old_root;
         let mut buffer: Vec<u8> = Vec::new();
 
