@@ -480,6 +480,7 @@ impl ShardTries {
         if let Some(mem_changes) = &trie_changes.mem_trie_changes {
             let lock_arena = self.get_mem_tries(shard_uid);
             let mut guard = lock_arena.write().unwrap();
+            let mut last_node_id = guard.get_root(&trie_changes.old_root).unwrap().id();
             let arena = &mut guard.arena;
 
             let map_node = |node: UpdatedNodeRef,
@@ -494,7 +495,6 @@ impl ShardTries {
             let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, MemTrieNodeId> = Default::default();
             let nodes_storage = &mem_changes.nodes_storage;
             let node_ids_with_hashes = &mem_changes.node_ids_with_hashes;
-            let mut last_node_id = guard.get_root(&trie_changes.old_root).unwrap().id();
             for (node_id, node_hash) in node_ids_with_hashes.iter() {
                 let node = nodes_storage.get(*node_id).unwrap().clone().unwrap();
                 let node = match node {
