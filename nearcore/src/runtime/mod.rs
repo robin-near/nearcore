@@ -164,7 +164,7 @@ impl NightshadeRuntime {
         epoch_manager: Arc<EpochManagerHandle>,
         runtime_config_store: RuntimeConfigStore,
     ) -> Arc<Self> {
-        let mut trie_config = Default::default();
+        let mut trie_config = TrieConfig::default();
         trie_config.load_mem_tries = true;
         Self::new(
             store,
