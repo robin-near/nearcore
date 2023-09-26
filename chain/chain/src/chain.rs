@@ -3958,7 +3958,7 @@ impl Chain {
     ) -> Result<Option<ApplyChunkJob>, Error> {
         if shard_uid.shard_id() == 2 {
             println!("SLEEP!");
-            sleep(Duration::from_secs(5));
+            sleep(std::time::Duration::from_secs(5));
             panic!("STOP APPLY!");
         }
         let prev_hash = block.header().prev_hash();
