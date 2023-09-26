@@ -3959,7 +3959,7 @@ impl Chain {
         if shard_uid.shard_id() < 100 {
             println!("SLEEP {}!", shard_uid.shard_id());
             sleep(std::time::Duration::from_secs(5));
-            panic!("STOP APPLY!");
+            // panic!("STOP APPLY!");
         }
         let prev_hash = block.header().prev_hash();
         let shard_id = shard_uid.shard_id();

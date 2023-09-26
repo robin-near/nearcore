@@ -1197,7 +1197,7 @@ impl Trie {
                     }
 
                     if self.root == CryptoHash::default() {
-                        panic!("STOP!");
+                        // panic!("STOP!");
                     }
                     Ok(trie_update.flatten_nodes())
                 }
