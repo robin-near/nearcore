@@ -3860,6 +3860,8 @@ impl Chain {
         incoming_receipts: &HashMap<u64, Vec<ReceiptProof>>,
         state_patch: SandboxStatePatch,
     ) -> Result<Option<ApplyChunkJob>, Error> {
+        panic!("STOP GET JOB!");
+
         let shard_id = shard_id as ShardId;
         let prev_hash = block.header().prev_hash();
         let cares_about_shard_this_epoch =
