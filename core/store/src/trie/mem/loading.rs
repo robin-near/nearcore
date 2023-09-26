@@ -42,6 +42,10 @@ pub fn load_trie_from_flat_state(
             }
         }
         let root_id = recon.finalize();
+        if root_id.ptr == usize::MAX {
+            let ptr = root_id.to_ref(arena.memory());
+            return Ok(ptr.id());
+        }
 
         println!(
             "[{:?}] Loaded {} keys; computing hash and memory usage...",
