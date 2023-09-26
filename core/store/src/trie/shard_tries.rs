@@ -870,12 +870,12 @@ impl ShardTries {
                             .unwrap();
                         let new_root = *chunk.state_root();
 
-                        {
+                        let trie_changes = {
                             let mem_tries = self.get_mem_tries(*shard_uid);
                             let mut lock = mem_tries.write().unwrap();
                             let root_id = lock.get_root(&old_root).unwrap().id();
                             let arena = &mut lock.arena;
-                            let trie_changes = {
+                            {
                                 let storage =
                                     Rc::new(TrieDBStorage::new(store.clone(), *shard_uid));
                                 let mut trie_update =
@@ -898,8 +898,8 @@ impl ShardTries {
                                 }
 
                                 trie_update.flatten_nodes()
-                            };
-                        }
+                            }
+                        };
 
                         assert_eq!(trie_changes.new_root, new_root);
                         self.apply_mem_changes(&trie_changes, *shard_uid);
