@@ -1051,11 +1051,15 @@ impl Trie {
                     println!("GET ROOT {}", self.root);
                     let node_id = mem_tries.roots.get(&self.root).unwrap().clone();
                     let node_ptr = node_id.as_ptr(&mem_tries.arena.memory());
-                    let lookuper = MemTrieLookup::new_with(
-                        node_ptr,
-                        acc_mem_tries.cache.clone(),
-                        acc_mem_tries.nodes_count.clone(),
-                    );
+                    let lookuper = if self.skip_accounting_cache_for_trie_nodes {
+                        MemTrieLookup::new(node_ptr)
+                    } else {
+                        MemTrieLookup::new_with(
+                            node_ptr,
+                            acc_mem_tries.cache.clone(),
+                            acc_mem_tries.nodes_count.clone(),
+                        )
+                    };
                     Ok(lookuper.get_ref(&key).map(|fs_val| fs_val.to_value_ref()))
                 }
                 None => {
@@ -1070,6 +1074,7 @@ impl Trie {
         match self.get_ref(key, KeyLookupMode::FlatStorage)? {
             Some(ValueRef { hash, .. }) => match &self.mem_tries {
                 Some(acc_mem_tries) => {
+                    // accounting enabled
                     if acc_mem_tries.cache.borrow_mut().insert(hash) {
                         acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
                     } else {
