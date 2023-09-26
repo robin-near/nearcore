@@ -833,14 +833,15 @@ impl ShardTries {
 
         let store = self.0.store.clone();
         println!("Heavy work! Loading tries to memory...");
-        let mem_tries: Vec<_> = shard_uids
+        let _results: Vec<_> = shard_uids
             .into_par_iter()
             .map(|shard_uid| {
                 // Load base
                 println!("Heavy work! Loading trie for {}...", shard_uid);
                 let state_root = flat_head_state_root(&store, shard_uid);
-                let mut mem_tries =
+                let mem_tries =
                     load_trie_from_flat_state(&store, shard_uid.clone(), state_root).unwrap();
+                self.set_mem_tries(*shard_uid, mem_tries);
 
                 println!("Heavy work! Loading deltas for {}...", shard_uid);
                 let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash, CryptoHash)> =
@@ -852,7 +853,6 @@ impl ShardTries {
                         delta.block.prev_hash,
                     ));
                 }
-                let mut all_trie_changes = vec![];
 
                 println!("{} deltas for {}", sorted_deltas.len(), shard_uid);
                 for (height, hash, prev_hash) in sorted_deltas.into_iter() {
@@ -870,50 +870,47 @@ impl ShardTries {
                             .unwrap();
                         let new_root = *chunk.state_root();
 
-                        let root_id = mem_tries.get_root(&old_root).unwrap().id();
-                        let arena = &mut mem_tries.arena;
-                        let trie_changes = {
-                            let storage = Rc::new(TrieDBStorage::new(store.clone(), *shard_uid));
-                            let mut trie_update =
-                                MemTrieUpdate::new(root_id, &arena, storage.clone());
+                        {
+                            let mem_tries = self.get_mem_tries(*shard_uid);
+                            let mut lock = mem_tries.write().unwrap();
+                            let root_id = lock.get_root(&old_root).unwrap().id();
+                            let arena = &mut lock.arena;
+                            let trie_changes = {
+                                let storage =
+                                    Rc::new(TrieDBStorage::new(store.clone(), *shard_uid));
+                                let mut trie_update =
+                                    MemTrieUpdate::new(root_id, &arena, storage.clone());
 
-                            for (key, value) in changes.0 {
-                                match value {
-                                    Some(value) => {
-                                        let raw_value = match value {
-                                            FlatStateValue::Ref(value_ref) => storage
-                                                .retrieve_raw_bytes(&value_ref.hash)
-                                                .unwrap()
-                                                .to_vec(),
-                                            FlatStateValue::Inlined(value) => value,
-                                        };
-                                        trie_update.insert(&key, raw_value)
-                                    }
-                                    None => trie_update.delete(&key),
-                                };
-                            }
+                                for (key, value) in changes.0 {
+                                    match value {
+                                        Some(value) => {
+                                            let raw_value = match value {
+                                                FlatStateValue::Ref(value_ref) => storage
+                                                    .retrieve_raw_bytes(&value_ref.hash)
+                                                    .unwrap()
+                                                    .to_vec(),
+                                                FlatStateValue::Inlined(value) => value,
+                                            };
+                                            trie_update.insert(&key, raw_value)
+                                        }
+                                        None => trie_update.delete(&key),
+                                    };
+                                }
 
-                            trie_update.flatten_nodes()
-                        };
+                                trie_update.flatten_nodes()
+                            };
+                        }
 
                         assert_eq!(trie_changes.new_root, new_root);
-                        all_trie_changes.push(trie_changes);
+                        self.apply_mem_changes(&trie_changes, *shard_uid);
                     }
                     println!("Gen changes for {} and {}", height, shard_uid);
                 }
 
                 println!("Done gen for {}", shard_uid);
-                (shard_uid.clone(), mem_tries, all_trie_changes)
             })
             .collect();
 
-        for (shard_uid, mem_tries, all_trie_changes) in mem_tries.into_iter() {
-            self.set_mem_tries(shard_uid, mem_tries);
-            for trie_changes in all_trie_changes.into_iter() {
-                self.apply_mem_changes(&trie_changes, shard_uid);
-            }
-            println!("All done for {}", shard_uid);
-        }
         println!("Heavy work done!");
     }
 }
