@@ -864,7 +864,7 @@ impl ShardTries {
                             .unwrap();
                         let new_root = *chunk.state_root();
 
-                        let root_id = mem_tries.roots.get(&old_root).unwrap().clone();
+                        let root_id = mem_tries.get_root(&old_root).unwrap().id();
                         let arena = &mut mem_tries.arena;
                         let trie_changes = {
                             let storage = Rc::new(TrieDBStorage::new(store.clone(), *shard_uid));

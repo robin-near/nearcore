@@ -1049,8 +1049,7 @@ impl Trie {
                 Some(acc_mem_tries) => {
                     let mem_tries = acc_mem_tries.mem_tries.read().unwrap();
                     println!("GET ROOT {}", self.root);
-                    let node_id = mem_tries.roots.get(&self.root).unwrap().clone();
-                    let node_ptr = node_id.as_ptr(&mem_tries.arena.memory());
+                    let node_ptr = mem_tries.get_root(&self.root).unwrap().clone();
                     let enable = !self.skip_accounting_cache_for_trie_nodes
                         && self.accounting_cache.borrow().enable;
                     let lookuper = MemTrieLookup::new_with(
@@ -1182,7 +1181,7 @@ impl Trie {
             Some(acc_mem_tries) => {
                 return Ok(TrieChanges::empty(self.root));
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
-                let last_node_id = guard.roots.get(&self.root).unwrap().clone();
+                let last_node_id = guard.get_root(&self.root).unwrap().id();
                 println!("update for {:?}", last_node_id);
                 let arena = &mut guard.arena;
                 {
