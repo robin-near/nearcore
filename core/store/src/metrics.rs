@@ -386,6 +386,28 @@ pub(crate) static GET_STATE_PART_WITH_FS_NODES: Lazy<IntCounterVec> = Lazy::new(
     .unwrap()
 });
 
+pub static MEM_TRIE_ROOTS: Lazy<IntGaugeVec> = Lazy::new(|| {
+    try_create_int_gauge_vec("near_mem_trie_roots", "near_mem_trie_roots", &["shard_id"]).unwrap()
+});
+
+pub static MEM_TRIE_LOOKUPS: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec("near_mem_trie_lookups", "near_mem_trie_lookups", &["shard_id"])
+        .unwrap()
+});
+
+pub static MEM_TRIE_UPDATE_CREATIONS: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_mem_trie_update_creations",
+        "near_mem_trie_update_creations",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static MEM_TRIE_ALLOC: Lazy<IntGaugeVec> = Lazy::new(|| {
+    try_create_int_gauge_vec("near_mem_trie_alloc", "near_mem_trie_alloc", &["shard_id"]).unwrap()
+});
+
 pub mod flat_state_metrics {
     use super::*;
 

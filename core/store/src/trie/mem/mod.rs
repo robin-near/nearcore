@@ -1,6 +1,7 @@
 pub use self::arena::Arena;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
 use near_primitives::hash::CryptoHash;
+use near_primitives::shard_layout::ShardUId;
 use near_primitives::types::StateRoot;
 use std::collections::HashMap;
 
@@ -14,11 +15,16 @@ pub mod node;
 pub struct MemTries {
     pub arena: Arena,
     pub roots: HashMap<StateRoot, MemTrieNodeId>,
+    shard_uid: ShardUId,
 }
 
 impl MemTries {
-    pub fn new(arena_size_in_pages: usize) -> Self {
-        Self { arena: Arena::new(arena_size_in_pages), roots: HashMap::new() }
+    pub fn new(arena_size_in_pages: usize, shard_uid: ShardUId) -> Self {
+        Self {
+            arena: Arena::new_with(arena_size_in_pages, shard_uid),
+            roots: HashMap::new(),
+            shard_uid,
+        }
     }
 
     pub fn construct_root<Error>(
@@ -37,6 +43,9 @@ impl MemTries {
             self.roots.insert(state_root, mem_root);
             mem_root.add_ref(&mut self.arena);
         }
+        crate::metrics::MEM_TRIE_ROOTS
+            .with_label_values(&[&self.shard_uid.shard_id.to_string()])
+            .set(self.roots.len() as i64);
     }
 
     pub fn get_root<'a>(&'a self, state_root: &CryptoHash) -> Option<MemTrieNodePtr<'a>> {
@@ -56,5 +65,8 @@ impl MemTries {
                 self.roots.remove(state_root);
             }
         }
+        crate::metrics::MEM_TRIE_ROOTS
+            .with_label_values(&[&self.shard_uid.shard_id.to_string()])
+            .set(self.roots.len() as i64);
     }
 }

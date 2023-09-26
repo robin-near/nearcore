@@ -1052,6 +1052,14 @@ impl Trie {
                     let node_ptr = mem_tries.get_root(&self.root).unwrap().clone();
                     let enable = !self.skip_accounting_cache_for_trie_nodes
                         && self.accounting_cache.borrow().enable;
+                    let shard_id = if let Some(cs) = self.storage.as_caching_storage() {
+                        cs.shard_uid.shard_id.clone()
+                    } else {
+                        0
+                    };
+                    crate::metrics::MEM_TRIE_LOOKUPS
+                        .with_label_values(&[&shard_id.to_string()])
+                        .inc();
                     let lookuper = MemTrieLookup::new_with(
                         node_ptr,
                         acc_mem_tries.cache.clone(),

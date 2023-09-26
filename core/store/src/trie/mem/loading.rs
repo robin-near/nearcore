@@ -18,7 +18,7 @@ pub fn load_trie_from_flat_state(
     shard_uid: ShardUId,
     state_root: CryptoHash,
 ) -> anyhow::Result<MemTries> {
-    let mut tries = MemTries::new(64 * 1024 * 1024 * 1024);
+    let mut tries = MemTries::new(20 * 1024 * 1024 * 1024, shard_uid);
 
     tries.construct_root(state_root, |arena| -> anyhow::Result<MemTrieNodeId> {
         println!("Loading trie from flat state...");

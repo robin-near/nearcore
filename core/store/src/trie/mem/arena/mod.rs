@@ -2,6 +2,7 @@ mod alloc;
 use self::alloc::Allocator;
 use borsh::{BorshDeserialize, BorshSerialize};
 use mmap_rs::{MmapFlags, MmapMut, MmapOptions};
+use near_primitives::shard_layout::ShardUId;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::mem::size_of;
@@ -9,6 +10,7 @@ use std::mem::size_of;
 pub struct Arena {
     memory: ArenaMemory,
     allocator: Allocator,
+    shard_uid: ShardUId,
 }
 
 pub struct ArenaMemory {
@@ -59,14 +61,28 @@ impl ArenaMemory {
 
 impl Arena {
     pub fn new(max_size_in_bytes: usize) -> Self {
-        Self { memory: ArenaMemory::new(max_size_in_bytes), allocator: Allocator::new() }
+        Self {
+            memory: ArenaMemory::new(max_size_in_bytes),
+            allocator: Allocator::new(),
+            shard_uid: ShardUId::single_shard(),
+        }
+    }
+
+    pub fn new_with(max_size_in_bytes: usize, shard_uid: ShardUId) -> Self {
+        Self { memory: ArenaMemory::new(max_size_in_bytes), allocator: Allocator::new(), shard_uid }
     }
 
     pub fn alloc<'a>(&'a mut self, size: usize) -> ArenaSliceMut<'a> {
+        crate::metrics::MEM_TRIE_ALLOC
+            .with_label_values(&[&self.shard_uid.shard_id.to_string()])
+            .add(size.clone() as i64);
         self.allocator.allocate(&mut self.memory, size)
     }
 
     pub fn dealloc(&mut self, pos: usize, len: usize) {
+        crate::metrics::MEM_TRIE_ALLOC
+            .with_label_values(&[&self.shard_uid.shard_id.to_string()])
+            .sub(len.clone() as i64);
         self.allocator.deallocate(self.memory.slice_mut(pos, len));
     }
 
