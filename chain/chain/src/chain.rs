@@ -50,7 +50,7 @@ use near_primitives::merkle::{
 use near_primitives::receipt::Receipt;
 use near_primitives::sandbox::state_patch::SandboxStatePatch;
 use near_primitives::shard_layout::{
-    account_id_to_shard_id, account_id_to_shard_uid, ShardLayout, ShardUId,
+    account_id_to_shard_id, account_id_to_shard_uid, get_block_shard_uid, ShardLayout, ShardUId,
 };
 use near_primitives::sharding::{
     ChunkHash, ChunkHashHeight, EncodedShardChunk, ReceiptList, ReceiptProof, ShardChunk,
@@ -77,7 +77,7 @@ use near_primitives::views::{
     LightClientBlockView, SignedTransactionView,
 };
 use near_store::flat::{store_helper, FlatStorageReadyStatus, FlatStorageStatus};
-use near_store::get_genesis_state_roots;
+use near_store::{get_genesis_state_roots, Store};
 use near_store::{DBCol, ShardTries};
 use once_cell::sync::OnceCell;
 use rand::seq::SliceRandom;
@@ -511,6 +511,21 @@ pub enum VerifyBlockHashAndSignatureResult {
     CannotVerifyBecauseBlockIsOrphan,
 }
 
+pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+        .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store, shard_uid), shard_uid))
+        .unwrap()
+        .unwrap();
+    *chunk.state_root()
+}
+
+pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
+    match store_helper::get_flat_storage_status(store, *shard_uid).unwrap() {
+        near_store::flat::FlatStorageStatus::Ready(status) => status.flat_head.hash,
+        other => panic!("invalid flat storage status {other:?}"),
+    }
+}
+
 impl Chain {
     pub fn make_genesis_block(
         epoch_manager: &dyn EpochManagerAdapter,
@@ -712,6 +727,9 @@ impl Chain {
         let shard_tries = runtime_adapter.get_tries();
         let shard_uids =
             &epoch_manager.get_shard_layout(&store.head().unwrap().epoch_id)?.get_shard_uids();
+        for shard_uid in shard_uids {
+            println!("{:?}", flat_head_state_root(store.store(), shard_uid));
+        }
         shard_tries.load_mem_tries(shard_uids);
 
         info!(target: "chain", "Init: header head @ #{} {}; block head @ #{} {}",
