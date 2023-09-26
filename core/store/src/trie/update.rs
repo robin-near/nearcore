@@ -47,10 +47,14 @@ impl<'a> TrieUpdateValuePtr<'a> {
             TrieUpdateValuePtr::MemoryRef(value) => Ok(value.to_vec()),
             TrieUpdateValuePtr::HashAndSize(trie, _, hash) => {
                 if let Some(acc_mem_tries) = &trie.mem_tries {
-                    if acc_mem_tries.cache.borrow_mut().insert(*hash) {
-                        acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
+                    if trie.accounting_cache.borrow().enable {
+                        if acc_mem_tries.cache.borrow_mut().insert(*hash) {
+                            acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
+                        } else {
+                            acc_mem_tries.nodes_count.borrow_mut().mem_reads += 1;
+                        }
                     } else {
-                        acc_mem_tries.nodes_count.borrow_mut().mem_reads += 1;
+                        acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
                     }
                 }
                 trie.internal_retrieve_trie_node(hash, true).map(|bytes| bytes.to_vec())

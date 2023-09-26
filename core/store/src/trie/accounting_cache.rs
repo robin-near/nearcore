@@ -42,7 +42,7 @@ use crate::{metrics, TrieStorage};
 pub struct TrieAccountingCache {
     /// Whether the cache is enabled. By default it is not, but it can be
     /// turned on or off on the fly.
-    enable: bool,
+    pub enable: bool,
     /// Cache of trie node hash -> trie node body, or a leaf value hash ->
     /// leaf value.
     cache: HashMap<CryptoHash, Arc<[u8]>>,

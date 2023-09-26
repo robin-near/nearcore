@@ -15,6 +15,7 @@ pub struct MemTrieLookup<'a> {
     // There was MemTrieNodeId here, but on runtime there is accounting by hash...
     cache: Arc<RefCell<HashSet<CryptoHash>>>,
     nodes_count: Arc<RefCell<TrieNodesCount>>,
+    enable_accounting_cache: bool,
 }
 
 impl<'a> MemTrieLookup<'a> {
@@ -23,6 +24,7 @@ impl<'a> MemTrieLookup<'a> {
             root,
             cache: Arc::new(RefCell::new(HashSet::new())),
             nodes_count: Arc::new(RefCell::new(TrieNodesCount { db_reads: 0, mem_reads: 0 })),
+            enable_accounting_cache: true,
         }
     }
 
@@ -30,18 +32,23 @@ impl<'a> MemTrieLookup<'a> {
         root: MemTrieNodePtr<'a>,
         cache: Arc<RefCell<HashSet<CryptoHash>>>,
         nodes_count: Arc<RefCell<TrieNodesCount>>,
+        enable_accounting_cache: bool,
     ) -> Self {
-        Self { root, cache, nodes_count }
+        Self { root, cache, nodes_count, enable_accounting_cache }
     }
 
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;
         loop {
-            if self.cache.borrow_mut().insert(node.view().node_hash()) {
-                self.nodes_count.borrow_mut().db_reads += 1;
+            if self.enable_accounting_cache {
+                if self.cache.borrow_mut().insert(node.view().node_hash()) {
+                    self.nodes_count.borrow_mut().db_reads += 1;
+                } else {
+                    self.nodes_count.borrow_mut().mem_reads += 1;
+                }
             } else {
-                self.nodes_count.borrow_mut().mem_reads += 1;
+                self.nodes_count.borrow_mut().db_reads += 1;
             }
             match node.view() {
                 MemTrieNodeView::Leaf { extension, value } => {

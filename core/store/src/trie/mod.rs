@@ -1051,15 +1051,14 @@ impl Trie {
                     println!("GET ROOT {}", self.root);
                     let node_id = mem_tries.roots.get(&self.root).unwrap().clone();
                     let node_ptr = node_id.as_ptr(&mem_tries.arena.memory());
-                    let lookuper = if self.skip_accounting_cache_for_trie_nodes {
-                        MemTrieLookup::new(node_ptr)
-                    } else {
-                        MemTrieLookup::new_with(
-                            node_ptr,
-                            acc_mem_tries.cache.clone(),
-                            acc_mem_tries.nodes_count.clone(),
-                        )
-                    };
+                    let enable = !self.skip_accounting_cache_for_trie_nodes
+                        && self.accounting_cache.borrow().enable;
+                    let lookuper = MemTrieLookup::new_with(
+                        node_ptr,
+                        acc_mem_tries.cache.clone(),
+                        acc_mem_tries.nodes_count.clone(),
+                        enable,
+                    );
                     Ok(lookuper.get_ref(&key).map(|fs_val| fs_val.to_value_ref()))
                 }
                 None => {
@@ -1072,20 +1071,21 @@ impl Trie {
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         match self.get_ref(key, KeyLookupMode::FlatStorage)? {
-            Some(ValueRef { hash, .. }) => match &self.mem_tries {
-                Some(acc_mem_tries) => {
-                    // accounting enabled
-                    if acc_mem_tries.cache.borrow_mut().insert(hash) {
-                        acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
+            Some(ValueRef { hash, .. }) => {
+                if let Some(acc_mem_tries) = &self.mem_tries {
+                    if self.accounting_cache.borrow().enable {
+                        // accounting enabled
+                        if acc_mem_tries.cache.borrow_mut().insert(hash) {
+                            acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
+                        } else {
+                            acc_mem_tries.nodes_count.borrow_mut().mem_reads += 1;
+                        }
                     } else {
-                        acc_mem_tries.nodes_count.borrow_mut().mem_reads += 1;
+                        acc_mem_tries.nodes_count.borrow_mut().db_reads += 1;
                     }
-                    self.internal_retrieve_trie_node(&hash, false).map(|bytes| Some(bytes.to_vec()))
                 }
-                None => {
-                    self.internal_retrieve_trie_node(&hash, true).map(|bytes| Some(bytes.to_vec()))
-                }
-            },
+                self.internal_retrieve_trie_node(&hash, true).map(|bytes| Some(bytes.to_vec()))
+            }
             None => Ok(None),
         }
     }
