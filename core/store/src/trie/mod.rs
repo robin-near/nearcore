@@ -1048,7 +1048,7 @@ impl Trie {
             match &self.mem_tries {
                 Some(acc_mem_tries) => {
                     let mem_tries = acc_mem_tries.mem_tries.read().unwrap();
-                    println!("GET ROOT {}", self.root);
+                    // println!("GET ROOT {}", self.root);
                     let node_ptr = mem_tries.get_root(&self.root).unwrap().clone();
                     let enable = !self.skip_accounting_cache_for_trie_nodes
                         && self.accounting_cache.borrow().enable;
@@ -1182,23 +1182,23 @@ impl Trie {
                 // return Ok(TrieChanges::empty(self.root));
                 let mut guard = acc_mem_tries.mem_tries.write().unwrap();
                 let last_node_id = guard.get_root(&self.root).unwrap().id();
-                println!("update for {:?}", last_node_id);
+                // println!("update for {:?}", last_node_id);
                 let arena = &mut guard.arena;
                 {
                     let mut trie_update =
                         MemTrieUpdate::new(last_node_id, &arena, self.storage.clone());
 
                     for (key, value) in changes {
-                        println!("kv {:?} {:?}", key, value);
+                        // println!("kv {:?} {:?}", key, value);
                         match value {
                             Some(value) => trie_update.insert(&key, value),
                             None => trie_update.delete(&key),
                         };
                     }
 
-                    if self.root == CryptoHash::default() {
-                        // panic!("STOP!");
-                    }
+                    // if self.root == CryptoHash::default() {
+                    // panic!("STOP!");
+                    // }
                     Ok(trie_update.flatten_nodes())
                 }
             }
