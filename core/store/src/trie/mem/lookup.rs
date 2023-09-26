@@ -40,6 +40,10 @@ impl<'a> MemTrieLookup<'a> {
     pub fn get_ref(&self, path: &[u8]) -> Option<FlatStateValue> {
         let mut nibbles = NibbleSlice::new(path);
         let mut node = self.root;
+        if node.id().ptr == usize::MAX {
+            return None;
+        }
+
         loop {
             if self.enable_accounting_cache {
                 if self.cache.borrow_mut().insert(node.view().node_hash()) {

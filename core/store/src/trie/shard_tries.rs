@@ -902,6 +902,8 @@ impl ShardTries {
             guard.insert(shard_uid, mem_tries);
         }
         println!("Heavy work done!");
+        println!("SLEEP!");
+        sleep(std::time::Duration::from_secs(5));
     }
 }
 
