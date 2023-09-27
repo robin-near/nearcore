@@ -5,61 +5,61 @@ use near_primitives::state::FlatStateValue;
 use super::arena::Arena;
 use super::node::MemTrieNodeId;
 
-/// Algorithm to construct a trie from a given stream of sorted leaf values.
-///
-/// This is a bottom-up algorithm that avoids constructing trie nodes until
-/// they are complete.
-///
-/// The algorithm maintains a list of segments, where each segment represents
-/// a subpath of the last key (where path means a sequence of nibbles), and
-/// the segments' subpaths join together to form the last key.
-///
-/// To understand the algorithm, conceptually imagine a tree like this:
-///                  
-///                X
-///               / \
-///              O   X
-///                 / \
-///                /   \
-///               O     \
-///              / \     \
-///             O   O     X
-///                      / \
-///                     O   X
-/// Nodes marked with X are `TrieConstructionSegment`s, whereas nodes marked
-/// with O are already constructed, `MemTrieNodeId`s. As we build out the trie,
-/// X's will become O's. A `TrieConstructionSegment` represents an `X` along
-/// with the tail segment(s) immediately below it (as opposed to above). So
-/// the first segment in the above drawing would represent:
-///
-///                X
-///               / \
-///              O
-///
-/// this is a branch node (possibly with a leaf value), with a single child
-/// on the left (so `children` array has a single element), with the current
-/// `trail` being the edge sticking out to the right.
-///
-/// Notice that the X's always form the rightmost path of the trie. This is
-/// because anything to the left have already been determined so they are
-/// immutable. The algorithm assumes that keys are ingested in order, so we
-/// are always constructing further to the right. Suppose we encounter a new
-/// key that shares a prefix with the first segment but diverges in the middle
-/// of the second segment, like so:
-///
-///                X                                 X
-///               / \                               / \
-///              O   X                             O   X
-///                 / \                               / \
-///                /   \ <--- diverges here          /   X----+
-///               O     \                           O     \    \
-///              / \     \                         / \     \    \
-///             O   O     X         ====>         O   O     O    X
-///                      / \                               / \
-///                     O   X                             O   O
-///
-/// As the bottom two segments are no longer part of the right-most path, they
-/// are converted to concrete TrieMemNodeId's.
+// Algorithm to construct a trie from a given stream of sorted leaf values.
+//
+// This is a bottom-up algorithm that avoids constructing trie nodes until
+// they are complete.
+//
+// The algorithm maintains a list of segments, where each segment represents
+// a subpath of the last key (where path means a sequence of nibbles), and
+// the segments' subpaths join together to form the last key.
+//
+// To understand the algorithm, conceptually imagine a tree like this:
+//
+//                X
+//               / \
+//              O   X
+//                 / \
+//                /   \
+//               O     \
+//              / \     \
+//             O   O     X
+//                      / \
+//                     O   X
+// Nodes marked with X are `TrieConstructionSegment`s, whereas nodes marked
+// with O are already constructed, `MemTrieNodeId`s. As we build out the trie,
+// X's will become O's. A `TrieConstructionSegment` represents an `X` along
+// with the tail segment(s) immediately below it (as opposed to above). So
+// the first segment in the above drawing would represent:
+//
+//                X
+//               / \
+//              O
+//
+// this is a branch node (possibly with a leaf value), with a single child
+// on the left (so `children` array has a single element), with the current
+// `trail` being the edge sticking out to the right.
+//
+// Notice that the X's always form the rightmost path of the trie. This is
+// because anything to the left have already been determined so they are
+// immutable. The algorithm assumes that keys are ingested in order, so we
+// are always constructing further to the right. Suppose we encounter a new
+// key that shares a prefix with the first segment but diverges in the middle
+// of the second segment, like so:
+//
+//                X                                 X
+//               / \                               / \
+//              O   X                             O   X
+//                 / \                               / \
+//                /   \ <--- diverges here          /   X----+
+//               O     \                           O     \    \
+//              / \     \                         / \     \    \
+//             O   O     X         ====>         O   O     O    X
+//                      / \                               / \
+//                     O   X                             O   O
+//
+// As the bottom two segments are no longer part of the right-most path, they
+// are converted to concrete TrieMemNodeId's.
 pub struct TrieConstructor<'a> {
     arena: &'a mut Arena,
     segments: Vec<TrieConstructionSegment>,
@@ -69,15 +69,15 @@ struct TrieConstructionSegment {
     /// Always determined at the beginning. If true, this is a branch node,
     /// possibly with value; if not, this is either leaf or extension node.
     is_branch: bool,
-    // The trail, an edge below this node. If this is a branch node,
-    // it is the rightmost child edge. It is an encoded NibbleSlice.
+    /// The trail, an edge below this node. If this is a branch node,
+    /// it is the rightmost child edge. It is an encoded NibbleSlice.
     trail: Vec<u8>,
-    // If present, it is either a Leaf node or BranchWithValue.
+    /// If present, it is either a Leaf node or BranchWithValue.
     leaf: Option<FlatStateValue>,
-    // Only used if is_branch is true. The children that are already
-    // constructed. The last child currently being constructed is not in here.
+    /// Only used if is_branch is true. The children that are already
+    /// constructed. The last child currently being constructed is not in here.
     children: Vec<(u8, MemTrieNodeId)>,
-    // Only used for extension nodes; the child that is already constructed.
+    /// Only used for extension nodes; the child that is already constructed.
     child: Option<MemTrieNodeId>,
 }
 
@@ -106,8 +106,7 @@ impl TrieConstructionSegment {
         let input_node = if self.is_branch {
             assert!(!self.children.is_empty());
             assert!(self.child.is_none());
-            let mut children: Vec<Option<MemTrieNodeId>> = Vec::new();
-            children.resize_with(16, || None);
+            let mut children = [None; 16];
             for (i, child) in self.children.into_iter() {
                 children[i as usize] = Some(child);
             }
