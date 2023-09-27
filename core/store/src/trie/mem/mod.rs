@@ -15,6 +15,7 @@ pub mod node;
 pub struct MemTries {
     pub arena: Arena,
     pub roots: HashMap<StateRoot, MemTrieNodeId>,
+    // bad, uniqueness of heights is not guaranteed
     pub heights: BTreeMap<BlockHeight, StateRoot>,
     shard_uid: ShardUId,
 }
