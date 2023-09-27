@@ -15,8 +15,7 @@ pub mod node;
 pub struct MemTries {
     pub arena: Arena,
     pub roots: HashMap<StateRoot, MemTrieNodeId>,
-    // bad, uniqueness of heights is not guaranteed
-    pub heights: BTreeMap<BlockHeight, StateRoot>,
+    pub heights: BTreeMap<BlockHeight, Vec<StateRoot>>,
     shard_uid: ShardUId,
 }
 
@@ -50,7 +49,7 @@ impl MemTries {
         println!("INSERT ROOT {}", state_root);
         if state_root != CryptoHash::default() {
             self.roots.insert(state_root, mem_root);
-            self.heights.insert(block_height, state_root);
+            self.heights.entry(block_height).or_default().push(state_root);
             mem_root.add_ref(&mut self.arena);
         }
         crate::metrics::MEM_TRIE_ROOTS
@@ -68,20 +67,20 @@ impl MemTries {
 
     pub fn delete_until_height(&mut self, block_height: BlockHeight) {
         let mut to_delete = vec![];
-        for (height, state_root) in self.heights.iter() {
-            if *height >= block_height {
-                break;
+        self.heights.retain(|height, state_roots| {
+            if *height < block_height {
+                to_delete.append(state_roots);
+                false
+            } else {
+                true
             }
-            to_delete.push((*height, *state_root));
-        }
-
-        for (height, state_root) in to_delete.into_iter() {
-            self.heights.remove(&height);
+        });
+        for state_root in to_delete.into_iter() {
             self.delete_root(&state_root);
         }
     }
 
-    pub fn delete_root(&mut self, state_root: &CryptoHash) {
+    fn delete_root(&mut self, state_root: &CryptoHash) {
         println!("DELETE ROOT {}", state_root);
         if let Some(id) = self.roots.get(state_root) {
             let new_ref = id.remove_ref(&mut self.arena);
