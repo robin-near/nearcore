@@ -2370,6 +2370,10 @@ impl Chain {
 
             if need_flat_storage_update {
                 let shard_uid = self.epoch_manager.shard_id_to_uid(shard_id, epoch_id)?;
+                let tries = self.runtime_adapter.get_tries();
+                let header =
+                    self.store.get_block_header(*block.header().last_final_block()).unwrap();
+                tries.delete_mem_until_height(shard_uid, header.height());
                 if let Some(manager) = self.runtime_adapter.get_flat_storage_manager() {
                     manager.update_flat_storage_for_shard(shard_uid, &block)?;
                 }
@@ -3546,6 +3550,10 @@ impl Chain {
                 true,
             ) {
                 let shard_uid = self.epoch_manager.shard_id_to_uid(shard_id, epoch_id)?;
+                let tries = self.runtime_adapter.get_tries();
+                let header =
+                    self.store.get_block_header(*block.header().last_final_block()).unwrap();
+                tries.delete_mem_until_height(shard_uid, header.height());
                 if let Some(manager) = self.runtime_adapter.get_flat_storage_manager() {
                     manager.update_flat_storage_for_shard(shard_uid, &block)?;
                 }

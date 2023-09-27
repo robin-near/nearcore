@@ -8,6 +8,7 @@ use crate::{NibbleSlice, RawTrieNode, RawTrieNodeWithSize, Trie, TrieChanges, Tr
 use borsh::BorshSerialize;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::state::{FlatStateValue, ValueRef};
+use near_vm_runner::logic::types::BlockHeight;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -551,7 +552,7 @@ impl<'a> MemTrieUpdate<'a> {
 
     // For now it doesn't recompute hashes yet.
     // Just prepare DFS-ordered list of nodes for further application.
-    pub fn flatten_nodes(self) -> TrieChanges {
+    pub fn flatten_nodes(self, block_height: BlockHeight) -> TrieChanges {
         let Self { root, arena, storage, id_refcount_changes, value_changes, nodes_storage } = self;
         let root_id = 0;
 
@@ -723,7 +724,11 @@ impl<'a> MemTrieUpdate<'a> {
             new_root: last_node_hash,
             insertions,
             deletions,
-            mem_trie_changes: Some(MemTrieChanges { node_ids_with_hashes, nodes_storage }),
+            mem_trie_changes: Some(MemTrieChanges {
+                node_ids_with_hashes,
+                nodes_storage,
+                block_height,
+            }),
         }
     }
 }

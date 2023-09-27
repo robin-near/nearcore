@@ -6,8 +6,8 @@ use near_primitives::hash::CryptoHash;
 use near_primitives::state::ValueRef;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
-    RawStateChange, RawStateChanges, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
-    TrieCacheMode,
+    BlockHeight, RawStateChange, RawStateChanges, RawStateChangesWithTrieKey, StateChangeCause,
+    StateRoot, TrieCacheMode,
 };
 use std::collections::BTreeMap;
 mod iterator;
@@ -138,14 +138,22 @@ impl TrieUpdate {
     /// This Function returns the [`Trie`] with which the [`TrieUpdate`] has been initially
     /// constructed. It can be reused to construct another `TrieUpdate` or to operate with `Trie`
     /// in any other way as desired.
+
     pub fn finalize(
         self,
+    ) -> Result<(Trie, TrieChanges, Vec<RawStateChangesWithTrieKey>), StorageError> {
+        self.finalize_with(None)
+    }
+
+    pub fn finalize_with(
+        self,
+        block_height: Option<BlockHeight>,
     ) -> Result<(Trie, TrieChanges, Vec<RawStateChangesWithTrieKey>), StorageError> {
         assert!(self.prospective.is_empty(), "Finalize cannot be called with uncommitted changes.");
         let TrieUpdate { trie, committed, .. } = self;
         let mut state_changes = Vec::with_capacity(committed.len());
-        let trie_changes =
-            trie.update(committed.into_iter().map(|(k, changes_with_trie_key)| {
+        let trie_changes = trie.update(
+            committed.into_iter().map(|(k, changes_with_trie_key)| {
                 let data = changes_with_trie_key
                     .changes
                     .last()
@@ -154,7 +162,9 @@ impl TrieUpdate {
                     .clone();
                 state_changes.push(changes_with_trie_key);
                 (k, data)
-            }))?;
+            }),
+            block_height,
+        )?;
         Ok((trie, trie_changes, state_changes))
     }
 

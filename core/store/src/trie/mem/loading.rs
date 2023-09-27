@@ -9,6 +9,7 @@ use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use crate::flat::store_helper::decode_flat_state_db_key;
 use crate::trie::mem::construction::TrieConstructor;
 use crate::{DBCol, Store};
+use crate::trie::shard_tries::flat_head_height;
 
 use super::node::MemTrieNodeId;
 use super::MemTries;
@@ -18,9 +19,10 @@ pub fn load_trie_from_flat_state(
     shard_uid: ShardUId,
     state_root: CryptoHash,
 ) -> anyhow::Result<MemTries> {
-    let mut tries = MemTries::new(20 * 1024 * 1024 * 1024, shard_uid);
-
-    tries.construct_root(state_root, |arena| -> anyhow::Result<MemTrieNodeId> {
+    let mut tries = MemTries::new(64 * 1024 * 1024 * 1024, shard_uid);
+    let height = flat_head_height(store, &shard_uid);
+    
+    tries.construct_root(state_root, height, |arena| -> anyhow::Result<MemTrieNodeId> {
         println!("Loading trie from flat state...");
         let load_start = Instant::now();
         let mut recon = TrieConstructor::new(arena);

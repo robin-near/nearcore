@@ -20,7 +20,7 @@ use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::state_record::StateRecord;
 use near_primitives::trie_key::TrieKey;
 pub use near_primitives::types::TrieNodesCount;
-use near_primitives::types::{StateRoot, StateRootNode};
+use near_primitives::types::{BlockHeight, StateRoot, StateRootNode};
 use near_vm_runner::ContractCode;
 pub use raw_node::{Children, RawTrieNode, RawTrieNodeWithSize};
 use std::borrow::Borrow;
@@ -415,6 +415,7 @@ impl Hash for TrieRefcountChange {
 pub struct MemTrieChanges {
     node_ids_with_hashes: Vec<(UpdatedMemTrieNodeId, CryptoHash)>,
     nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
+    block_height: BlockHeight,
 }
 
 ///
@@ -1127,6 +1128,17 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
+        self.update_with(changes, None)
+    }
+
+    pub fn update_with<I>(
+        &self,
+        changes: I,
+        block_height: Option<BlockHeight>,
+    ) -> Result<TrieChanges, StorageError>
+    where
+        I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+    {
         // --- Some cool code for testing trie-related logic. Build MemTries from trie. ---
         // build mem trie from self
         // let mut arena = mem::Arena::new(1024 * 1024 * 1024);
@@ -1204,10 +1216,7 @@ impl Trie {
                         };
                     }
 
-                    // if self.root == CryptoHash::default() {
-                    // panic!("STOP!");
-                    // }
-                    Ok(trie_update.flatten_nodes())
+                    Ok(trie_update.flatten_nodes(block_height.unwrap_or_default()))
                 }
             }
             None => {

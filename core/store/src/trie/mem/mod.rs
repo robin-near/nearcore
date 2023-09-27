@@ -2,8 +2,8 @@ pub use self::arena::Arena;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::ShardUId;
-use near_primitives::types::StateRoot;
-use std::collections::HashMap;
+use near_primitives::types::{BlockHeight, StateRoot};
+use std::collections::{BTreeMap, HashMap};
 
 mod arena;
 mod construction;
@@ -15,6 +15,7 @@ pub mod node;
 pub struct MemTries {
     pub arena: Arena,
     pub roots: HashMap<StateRoot, MemTrieNodeId>,
+    pub heights: BTreeMap<BlockHeight, StateRoot>,
     shard_uid: ShardUId,
 }
 
@@ -23,6 +24,7 @@ impl MemTries {
         Self {
             arena: Arena::new_with(arena_size_in_pages, shard_uid),
             roots: HashMap::new(),
+            heights: Default::default(),
             shard_uid,
         }
     }
@@ -30,17 +32,24 @@ impl MemTries {
     pub fn construct_root<Error>(
         &mut self,
         state_root: CryptoHash,
+        block_height: BlockHeight,
         mut f: impl FnMut(&mut Arena) -> Result<MemTrieNodeId, Error>,
     ) -> Result<(), Error> {
         let root = f(&mut self.arena)?;
-        self.insert_root(state_root, root);
+        self.insert_root(state_root, root, block_height);
         Ok(())
     }
 
-    pub fn insert_root(&mut self, state_root: StateRoot, mem_root: MemTrieNodeId) {
+    pub fn insert_root(
+        &mut self,
+        state_root: StateRoot,
+        mem_root: MemTrieNodeId,
+        block_height: BlockHeight,
+    ) {
         println!("INSERT ROOT {}", state_root);
         if state_root != CryptoHash::default() {
             self.roots.insert(state_root, mem_root);
+            self.heights.insert(block_height, state_root);
             mem_root.add_ref(&mut self.arena);
         }
         crate::metrics::MEM_TRIE_ROOTS
@@ -53,6 +62,21 @@ impl MemTries {
             self.roots.get(state_root).map(|id| id.to_ref(self.arena.memory()))
         } else {
             Some(MemTrieNodeId::from(usize::MAX).to_ref(self.arena.memory()))
+        }
+    }
+
+    pub fn delete_until_height(&mut self, block_height: BlockHeight) {
+        let mut to_delete = vec![];
+        for (height, state_root) in self.heights.iter() {
+            if *height >= block_height {
+                break;
+            }
+            to_delete.push((*height, *state_root));
+        }
+
+        for (height, state_root) in to_delete.into_iter() {
+            self.heights.remove(&height);
+            self.delete_root(&state_root);
         }
     }
 

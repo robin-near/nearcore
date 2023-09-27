@@ -135,6 +135,13 @@ pub fn flat_head(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
     }
 }
 
+pub fn flat_head_height(store: &Store, shard_uid: &ShardUId) -> BlockHeight {
+    match crate::flat::store_helper::get_flat_storage_status(store, *shard_uid).unwrap() {
+        crate::flat::FlatStorageStatus::Ready(status) => status.flat_head.height,
+        other => panic!("invalid flat storage status {other:?}"),
+    }
+}
+
 pub fn flat_head_state_root(store: &Store, shard_uid: &ShardUId) -> CryptoHash {
     let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
         .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&flat_head(store, shard_uid), shard_uid))
@@ -534,7 +541,7 @@ impl ShardTries {
                 last_node_id = mem_node_id;
             }
 
-            guard.insert_root(trie_changes.new_root, last_node_id);
+            guard.insert_root(trie_changes.new_root, last_node_id, mem_changes.block_height.clone());
         }
     }
 
@@ -826,6 +833,12 @@ impl ShardTries {
         guard.get(&shard_uid).unwrap().clone()
     }
 
+    pub fn delete_mem_until_height(&self, shard_uid: ShardUId, height: BlockHeight) {
+        let mut mem_tries = self.get_mem_tries(shard_uid);
+        let mut guard = mem_tries.write().unwrap();
+        guard.delete_until_height(height);
+    }
+
     pub fn load_mem_tries(&self, shard_uids: &[ShardUId]) {
         if !self.0.trie_config.load_mem_tries {
             return;
@@ -897,7 +910,7 @@ impl ShardTries {
                                     };
                                 }
 
-                                trie_update.flatten_nodes()
+                                trie_update.flatten_nodes(height)
                             }
                         };
 
