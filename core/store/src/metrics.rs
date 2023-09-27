@@ -408,6 +408,11 @@ pub static MEM_TRIE_ALLOC: Lazy<IntGaugeVec> = Lazy::new(|| {
     try_create_int_gauge_vec("near_mem_trie_alloc", "near_mem_trie_alloc", &["shard_id"]).unwrap()
 });
 
+pub static MEM_TRIE_ARENA_SIZE: Lazy<IntGaugeVec> = Lazy::new(|| {
+    try_create_int_gauge_vec("near_mem_trie_arena_size", "near_mem_trie_arena_size", &["shard_id"])
+        .unwrap()
+});
+
 pub mod flat_state_metrics {
     use super::*;
 

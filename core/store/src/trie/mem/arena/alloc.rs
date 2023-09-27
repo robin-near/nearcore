@@ -41,7 +41,11 @@ impl Allocator {
         Self { freelists: [usize::MAX; NUM_ALLOCATION_CLASSES], allocated_pages: 0 }
     }
 
-    pub fn allocate<'a>(&mut self, arena: &'a mut ArenaMemory, size: usize) -> ArenaSliceMut<'a> {
+    pub fn allocate<'a>(
+        &mut self,
+        arena: &'a mut ArenaMemory,
+        size: usize,
+    ) -> (ArenaSliceMut<'a>, usize) {
         assert!(size <= PAGE_SIZE, "Cannot allocate {} bytes", size);
         let size_class = allocation_class(size);
         let allocation_size = allocation_size(size_class);
@@ -62,7 +66,7 @@ impl Allocator {
         }
         let pos = self.freelists[size_class];
         self.freelists[size_class] = arena.ptr(pos).read_usize();
-        arena.slice_mut(pos, size)
+        (arena.slice_mut(pos, size), self.allocated_pages * PAGE_SIZE)
     }
 
     pub fn deallocate(&mut self, mut slice: ArenaSliceMut<'_>) {

@@ -76,7 +76,11 @@ impl Arena {
         crate::metrics::MEM_TRIE_ALLOC
             .with_label_values(&[&self.shard_uid.shard_id.to_string()])
             .add(size.clone() as i64);
-        self.allocator.allocate(&mut self.memory, size)
+        let (result, arena_size) = self.allocator.allocate(&mut self.memory, size);
+        crate::metrics::MEM_TRIE_ARENA_SIZE
+            .with_label_values(&[&self.shard_uid.shard_id.to_string()])
+            .set(arena_size as i64);
+        result
     }
 
     pub fn dealloc(&mut self, pos: usize, len: usize) {
