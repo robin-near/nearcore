@@ -1050,7 +1050,8 @@ impl Trie {
                 Some(acc_mem_tries) => {
                     let mem_tries = acc_mem_tries.mem_tries.read().unwrap();
                     // println!("GET ROOT {}", self.root);
-                    let node_ptr = mem_tries.get_root(&self.root).unwrap().clone();
+                    let node_ptr =
+                        mem_tries.get_root(&self.root).expect(&format!("{:?}", self.root)).clone();
                     let enable = !self.skip_accounting_cache_for_trie_nodes
                         && self.accounting_cache.borrow().enable;
                     let shard_id = if let Some(cs) = self.storage.as_caching_storage() {
@@ -1216,7 +1217,7 @@ impl Trie {
                         };
                     }
 
-                    Ok(trie_update.flatten_nodes(block_height.unwrap_or_default()))
+                    Ok(trie_update.flatten_nodes(block_height.unwrap()))
                 }
             }
             None => {

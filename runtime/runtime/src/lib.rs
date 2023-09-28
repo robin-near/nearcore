@@ -1224,7 +1224,8 @@ impl Runtime {
             && apply_state.current_protocol_version
                 >= ProtocolFeature::FixApplyChunks.protocol_version()
         {
-            let (trie, trie_changes, state_changes) = state_update.finalize()?;
+            let (trie, trie_changes, state_changes) =
+                state_update.finalize_with(Some(apply_state.block_height))?;
             let proof = trie.recorded_storage();
             return Ok(ApplyResult {
                 state_root: trie_changes.new_root,
@@ -1455,7 +1456,8 @@ impl Runtime {
 
         state_update.commit(StateChangeCause::UpdatedDelayedReceipts);
         self.apply_state_patch(&mut state_update, state_patch);
-        let (trie, trie_changes, state_changes) = state_update.finalize()?;
+        let (trie, trie_changes, state_changes) =
+            state_update.finalize_with(Some(apply_state.block_height))?;
 
         // Dedup proposals from the same account.
         // The order is deterministically changed.
