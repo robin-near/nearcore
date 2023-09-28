@@ -46,7 +46,7 @@ impl MemTries {
         mem_root: MemTrieNodeId,
         block_height: BlockHeight,
     ) {
-        // println!("INSERT ROOT {}", state_root);
+        println!("INSERT ROOT {}", state_root);
         if state_root != CryptoHash::default() {
             self.roots.insert(state_root, mem_root);
             self.heights.entry(block_height).or_default().push(state_root);
@@ -81,7 +81,7 @@ impl MemTries {
     }
 
     fn delete_root(&mut self, state_root: &CryptoHash) {
-        // println!("DELETE ROOT {}", state_root);
+        println!("DELETE ROOT {}", state_root);
         if let Some(id) = self.roots.get(state_root) {
             let new_ref = id.remove_ref(&mut self.arena);
             if new_ref == 0 {
