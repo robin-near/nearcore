@@ -21,12 +21,11 @@ unsafe impl Send for ArenaMemory {}
 
 impl ArenaMemory {
     fn new(max_size_in_bytes: usize) -> Self {
-        let mmap =
-            MmapOptions::new(max_size_in_bytes.max(Allocator::minimum_arena_size_required()))
-                .unwrap()
-                .with_flags(MmapFlags::NO_RESERVE)
-                .map_mut()
-                .expect("mmap failed");
+        let mmap = MmapOptions::new(max_size_in_bytes)
+            .unwrap()
+            .with_flags(MmapFlags::NO_RESERVE)
+            .map_mut()
+            .expect("mmap failed");
         Self { mmap }
     }
 
@@ -87,7 +86,7 @@ impl Arena {
         crate::metrics::MEM_TRIE_ALLOC
             .with_label_values(&[&self.shard_uid.shard_id.to_string()])
             .sub(len.clone() as i64);
-        self.allocator.deallocate(self.memory.slice_mut(pos, len));
+        self.allocator.deallocate(&mut self.memory, pos, len);
     }
 
     pub fn memory(&self) -> &ArenaMemory {

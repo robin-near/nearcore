@@ -169,7 +169,7 @@ impl MemTrieNodeId {
                         + value_header.flexible_data_length(),
                 );
                 data.encode(LeafHeader {
-                    common: CommonHeader { refcount: 1, kind: NodeKind::Leaf },
+                    common: CommonHeader { refcount: 0, kind: NodeKind::Leaf },
                     extension: extension_header,
                     value: value_header,
                 });
@@ -184,7 +184,7 @@ impl MemTrieNodeId {
                     ExtensionHeader::SERIALIZED_SIZE + extension_header.flexible_data_length(),
                 );
                 data.encode(ExtensionHeader {
-                    common: CommonHeader { refcount: 1, kind: NodeKind::Extension },
+                    common: CommonHeader { refcount: 0, kind: NodeKind::Extension },
                     nonleaf: NonLeafHeader::new(hash, memory_usage),
                     child: child.ptr,
                     extension: extension_header,
@@ -199,7 +199,7 @@ impl MemTrieNodeId {
                     BranchHeader::SERIALIZED_SIZE + children_header.flexible_data_length(),
                 );
                 data.encode(BranchHeader {
-                    common: CommonHeader { refcount: 1, kind: NodeKind::Branch },
+                    common: CommonHeader { refcount: 0, kind: NodeKind::Branch },
                     nonleaf: NonLeafHeader::new(hash, memory_usage),
                     children: children_header,
                 });
@@ -216,7 +216,7 @@ impl MemTrieNodeId {
                         + value_header.flexible_data_length(),
                 );
                 data.encode(BranchWithValueHeader {
-                    common: CommonHeader { refcount: 1, kind: NodeKind::BranchWithValue },
+                    common: CommonHeader { refcount: 0, kind: NodeKind::BranchWithValue },
                     nonleaf: NonLeafHeader::new(hash, memory_usage),
                     children: children_header,
                     value: value_header,
