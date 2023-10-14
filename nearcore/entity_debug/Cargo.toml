@@ -1,0 +1,21 @@
+[package]
+name = "near-entity-debug"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+borsh.workspace = true
+hex.workspace = true
+serde.workspace = true
+
+near-chain.workspace = true
+near-epoch-manager.workspace = true
+near-jsonrpc-primitives.workspace = true
+near-primitives.workspace = true
+near-store.workspace = true

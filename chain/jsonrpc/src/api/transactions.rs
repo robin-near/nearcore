@@ -31,6 +31,12 @@ impl RpcRequest for RpcTransactionStatusCommonRequest {
     }
 }
 
+impl RpcFrom<()> for RpcTransactionError {
+    fn rpc_from(_: ()) -> Self {
+        Self::InternalError { debug_info: "Server error".to_string() }
+    }
+}
+
 impl RpcFrom<actix::MailboxError> for RpcTransactionError {
     fn rpc_from(error: actix::MailboxError) -> Self {
         Self::InternalError { debug_info: error.to_string() }

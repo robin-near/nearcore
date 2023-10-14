@@ -6,6 +6,12 @@ use near_primitives::views::StatusResponse;
 
 use super::RpcFrom;
 
+impl RpcFrom<()> for RpcStatusError {
+    fn rpc_from(_: ()) -> Self {
+        Self::InternalError { error_message: "Server error".to_string() }
+    }
+}
+
 impl RpcFrom<actix::MailboxError> for RpcStatusError {
     fn rpc_from(error: actix::MailboxError) -> Self {
         Self::InternalError { error_message: error.to_string() }

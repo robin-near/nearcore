@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use derive_enum_from_into::{EnumFrom, EnumTryInto};
+use near_async::messaging::noop_sender;
 use near_async::time;
 use near_async::{
     messaging::{CanSend, IntoSender, Sender},
@@ -87,7 +88,7 @@ fn test_basic_receive_complete_chunk() {
         Some(validators[0].clone()),
         chain.epoch_manager.clone(),
         chain.shard_tracker.clone(),
-        Sender::noop(),
+        noop_sender().into_sender(),
         builder.sender().into_sender(),
         ReadOnlyChunksStore::new(store),
         default_tip(),

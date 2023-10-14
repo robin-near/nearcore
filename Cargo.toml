@@ -46,6 +46,7 @@ members = [
     "genesis-tools/keypair-generator",
     "integration-tests",
     "nearcore",
+    "nearcore/entity_debug",
     "neard",
     "runtime/near-vm/test-api",
     "runtime/near-vm/compiler",
@@ -191,6 +192,7 @@ near-config-utils = { path = "utils/config" }
 nearcore = { path = "nearcore" }
 near-crypto = { path = "core/crypto" }
 near-dyn-configs = { path = "core/dyn-configs" }
+near-entity-debug = { path = "nearcore/entity_debug" }
 near-epoch-manager = { path = "chain/epoch-manager" }
 near-flat-storage = { path = "tools/flat-storage" }
 near-fork-network = { path = "tools/fork-network" }

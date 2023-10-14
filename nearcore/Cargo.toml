@@ -51,6 +51,7 @@ near-client.workspace = true
 near-client-primitives.workspace = true
 near-crypto.workspace = true
 near-dyn-configs.workspace = true
+near-entity-debug.workspace = true
 near-epoch-manager.workspace = true
 near-jsonrpc = { workspace = true, optional = true }
 near-jsonrpc-primitives = { workspace = true, optional = true }

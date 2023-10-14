@@ -4,6 +4,7 @@ pub mod commands;
 mod compact;
 mod make_snapshot;
 mod memtrie;
+mod rpc;
 mod run_migrations;
 mod state_perf;
 mod utils;

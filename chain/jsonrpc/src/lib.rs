@@ -9,15 +9,21 @@ use api::RpcRequest;
 pub use api::{RpcFrom, RpcInto};
 use futures::Future;
 use futures::FutureExt;
-use near_chain_configs::GenesisConfig;
+use near_async::messaging::{
+    AsyncSender, CanSend, CanSendAsync, IntoAsyncSender, IntoSender, Sender,
+};
+use near_chain_configs::{ClientConfig, GenesisConfig};
 use near_client::{
-    ClientActor, DebugStatus, GetBlock, GetBlockProof, GetChunk, GetClientConfig,
+    DebugStatus, GetBlock, GetBlockProof, GetChunk, GetClientConfig,
     GetExecutionOutcome, GetGasPrice, GetMaintenanceWindows, GetNetworkInfo,
     GetNextLightClientBlock, GetProtocolConfig, GetReceipt, GetStateChanges,
     GetStateChangesInBlock, GetValidatorInfo, GetValidatorOrdered, ProcessTxRequest,
-    ProcessTxResponse, Query, Status, TxStatus, ViewClientActor,
+    ProcessTxResponse, Query, Status, StatusResponse, TxStatus, ViewClientActor,
 };
-use near_client_primitives::types::GetSplitStorageInfo;
+use near_client_primitives::debug::DebugStatusResponse;
+use near_client_primitives::types::{
+    GetClientConfigError, GetSplitStorageInfo, NetworkInfoResponse, StatusError,
+};
 pub use near_jsonrpc_client as client;
 use near_jsonrpc_primitives::errors::RpcError;
 use near_jsonrpc_primitives::message::{Message, Request};
@@ -215,8 +221,40 @@ fn process_query_response(
     }
 }
 
+#[derive(Clone, derive_more::AsRef)]
+pub struct ClientHandlerForRpc {
+    pub process_tx_request: Sender<ProcessTxRequest>,
+    pub process_tx_request_async: AsyncSender<ProcessTxRequest, Result<ProcessTxResponse, ()>>,
+    pub debug: AsyncSender<DebugStatus, Result<Result<DebugStatusResponse, StatusError>, ()>>,
+    pub status: AsyncSender<Status, Result<Result<StatusResponse, StatusError>, ()>>,
+    pub network_info: AsyncSender<GetNetworkInfo, Result<Result<NetworkInfoResponse, String>, ()>>,
+    pub client_config:
+        AsyncSender<GetClientConfig, Result<Result<ClientConfig, GetClientConfigError>, ()>>,
+}
+
+impl<
+        A: CanSend<ProcessTxRequest>
+            + CanSendAsync<ProcessTxRequest, Result<ProcessTxResponse, ()>>
+            + CanSendAsync<DebugStatus, Result<Result<DebugStatusResponse, StatusError>, ()>>
+            + CanSendAsync<Status, Result<Result<StatusResponse, StatusError>, ()>>
+            + CanSendAsync<GetNetworkInfo, Result<Result<NetworkInfoResponse, String>, ()>>
+            + CanSendAsync<GetClientConfig, Result<Result<ClientConfig, GetClientConfigError>, ()>>,
+    > From<Arc<A>> for ClientHandlerForRpc
+{
+    fn from(arc: Arc<A>) -> Self {
+        Self {
+            process_tx_request: arc.as_sender(),
+            process_tx_request_async: arc.as_async_sender(),
+            debug: arc.as_async_sender(),
+            status: arc.as_async_sender(),
+            network_info: arc.as_async_sender(),
+            client_config: arc.as_async_sender(),
+        }
+    }
+}
+
 struct JsonRpcHandler {
-    client_addr: Addr<ClientActor>,
+    client_addr: ClientHandlerForRpc,
     view_client_addr: Addr<ViewClientActor>,
     peer_manager_addr: Option<Addr<PeerManagerActor>>,
     polling_config: RpcPollingConfig,
@@ -421,16 +459,14 @@ impl JsonRpcHandler {
         })
     }
 
-    async fn client_send<M, T, E, F>(&self, msg: M) -> Result<T, E>
+    async fn client_send<M, R, F, E>(&self, msg: M) -> Result<R, E>
     where
-        ClientActor: actix::Handler<WithSpanContext<M>>,
-        M: actix::Message<Result = Result<T, F>> + Send + 'static,
-        M::Result: Send,
+        ClientHandlerForRpc: CanSendAsync<M, Result<Result<R, F>, ()>>,
         E: RpcFrom<F>,
-        E: RpcFrom<actix::MailboxError>,
+        E: RpcFrom<()>,
     {
         self.client_addr
-            .send(msg.with_span_context())
+            .send_async(msg)
             .await
             .map_err(RpcFrom::rpc_from)?
             .map_err(RpcFrom::rpc_from)
@@ -472,14 +508,11 @@ impl JsonRpcHandler {
         near_jsonrpc_primitives::types::transactions::RpcTransactionError,
     > {
         let tx = request_data.signed_transaction;
-        self.client_addr.do_send(
-            ProcessTxRequest {
-                transaction: tx,
-                is_forwarded: false,
-                check_only: false, // if we set true here it will not actually send the transaction
-            }
-            .with_span_context(),
-        );
+        self.client_addr.send(ProcessTxRequest {
+            transaction: tx,
+            is_forwarded: false,
+            check_only: false, // if we set true here it will not actually send the transaction
+        });
         Ok(RpcTransactionResponse {
             final_execution_outcome: None,
             final_execution_status: TxExecutionStatus::None,
@@ -647,10 +680,7 @@ impl JsonRpcHandler {
         let signer_account_id = tx.transaction.signer_id.clone();
         let response = self
             .client_addr
-            .send(
-                ProcessTxRequest { transaction: tx, is_forwarded: false, check_only }
-                    .with_span_context(),
-            )
+            .send_async(ProcessTxRequest { transaction: tx, is_forwarded: false, check_only })
             .await
             .map_err(RpcFrom::rpc_from)?;
 
@@ -1519,7 +1549,7 @@ async fn display_debug_html(
 pub fn start_http(
     config: RpcConfig,
     genesis_config: GenesisConfig,
-    client_addr: Addr<ClientActor>,
+    client_addr: ClientHandlerForRpc,
     view_client_addr: Addr<ViewClientActor>,
     peer_manager_addr: Option<Addr<PeerManagerActor>>,
     entity_debug_handler: Arc<dyn EntityDebugHandler>,

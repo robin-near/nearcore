@@ -1,4 +1,5 @@
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 
@@ -48,11 +49,6 @@ impl<M> Sender<M> {
 
     fn from_arc<T: CanSend<M> + 'static>(arc: Arc<T>) -> Self {
         Self { sender: arc }
-    }
-
-    /// Creates a no-op sender that does nothing with the message.
-    pub fn noop() -> Self {
-        Self::from_impl(Noop)
     }
 }
 
@@ -143,10 +139,23 @@ impl<M, R, S: CanSendAsync<M, R>> CanSendAsync<M, R> for LateBoundSender<S> {
     }
 }
 
-struct Noop;
+pub struct Noop;
 
 impl<M> CanSend<M> for Noop {
     fn send(&self, _message: M) {}
+}
+
+impl<M: Send, R: Send + 'static> CanSendAsync<M, Result<R, ()>> for Noop {
+    fn send_async(&self, _message: M) -> BoxFuture<'static, Result<R, ()>> {
+        futures::future::ready(Err(())).boxed()
+    }
+}
+
+/// Creates a no-op sender that does nothing with the message.
+pub fn noop_sender() -> LateBoundSender<Noop> {
+    let sender = LateBoundSender::default();
+    sender.bind(Noop);
+    sender
 }
 
 /// Anything that contains a Sender also implements CanSend. This is useful for implementing
@@ -176,5 +185,25 @@ impl<A: AsRef<AsyncSender<M, R>> + Send + Sync + 'static, M: 'static, R: 'static
 {
     fn send_async(&self, message: M) -> BoxFuture<'static, R> {
         self.as_ref().send_async(message)
+    }
+}
+
+/// Allows AsyncSender to transform its result type.
+#[derive(Clone)]
+pub struct MappedAsyncSender<M: 'static, R: 'static, T: 'static> {
+    sender: AsyncSender<M, R>,
+    transform: fn(R) -> T,
+}
+
+impl<M, R, T> CanSendAsync<M, T> for MappedAsyncSender<M, R, T> {
+    fn send_async(&self, message: M) -> BoxFuture<'static, T> {
+        self.sender.send_async(message).map(self.transform).boxed()
+    }
+}
+
+impl<M, R> AsyncSender<M, R> {
+    /// Allows AsyncSender to transform its result type.
+    pub fn map<T: 'static>(self, transform: fn(R) -> T) -> AsyncSender<M, T> {
+        MappedAsyncSender { sender: self, transform }.into_async_sender()
     }
 }

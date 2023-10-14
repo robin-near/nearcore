@@ -1,7 +1,7 @@
 pub use crate::config::{init_configs, load_config, load_test_config, NearConfig, NEAR_BASE};
-use crate::entity_debug::EntityDebugHandlerImpl;
 use crate::metrics::spawn_trie_metrics_loop;
 pub use crate::runtime::NightshadeRuntime;
+use near_entity_debug::entity_debug::EntityDebugHandlerImpl;
 
 use crate::cold_storage::spawn_cold_store_loop;
 use crate::state_sync::{spawn_state_sync_dump, StateSyncDumpHandle};
@@ -38,9 +38,6 @@ pub mod config;
 mod config_validate;
 mod download_file;
 pub mod dyn_config;
-#[cfg(feature = "json_rpc")]
-mod entity_debug;
-mod entity_debug_serializer;
 mod metrics;
 pub mod migrations;
 mod runtime;
@@ -388,7 +385,7 @@ pub fn start_with_config_and_synchronization(
         rpc_servers.extend(near_jsonrpc::start_http(
             rpc_config,
             config.genesis.config.clone(),
-            client_actor.clone(),
+            Arc::new(client_actor.clone().with_auto_span_context()).into(),
             view_client.clone(),
             Some(network_actor),
             Arc::new(entity_debug_handler),

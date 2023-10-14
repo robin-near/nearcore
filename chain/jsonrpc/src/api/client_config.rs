@@ -3,6 +3,12 @@ use near_jsonrpc_primitives::types::client_config::RpcClientConfigError;
 
 use super::RpcFrom;
 
+impl RpcFrom<()> for RpcClientConfigError {
+    fn rpc_from(_: ()) -> Self {
+        Self::InternalError { error_message: "Server error".to_string() }
+    }
+}
+
 impl RpcFrom<actix::MailboxError> for RpcClientConfigError {
     fn rpc_from(error: actix::MailboxError) -> Self {
         Self::InternalError { error_message: error.to_string() }

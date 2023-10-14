@@ -3,6 +3,7 @@ use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::compact::RunCompactionCommand;
 use crate::make_snapshot::MakeSnapshotCommand;
 use crate::memtrie::LoadMemTrieCommand;
+use crate::rpc::RunRpcCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
 use clap::Parser;
@@ -38,6 +39,9 @@ enum SubCommand {
 
     /// Loads an in-memory trie for research purposes.
     LoadMemTrie(LoadMemTrieCommand),
+
+    /// Runs an RPC to serve the database data, readonly.
+    Rpc(RunRpcCommand),
 }
 
 impl DatabaseCommand {
@@ -63,6 +67,14 @@ impl DatabaseCommand {
                 )
                 .unwrap_or_else(|e| panic!("Error loading config: {:#}", e));
                 cmd.run(near_config, home)
+            }
+            SubCommand::Rpc(cmd) => {
+                let near_config = nearcore::config::load_config(
+                    &home,
+                    near_chain_configs::GenesisValidationMode::UnsafeFast,
+                )
+                .unwrap_or_else(|e| panic!("Error loading config: {:#}", e));
+                actix::System::new().block_on(cmd.run(home, near_config))
             }
         }
     }

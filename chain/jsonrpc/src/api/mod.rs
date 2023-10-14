@@ -53,6 +53,12 @@ where
     }
 }
 
+impl RpcFrom<()> for RpcError {
+    fn rpc_from(_: ()) -> Self {
+        RpcError::new(-32_000, "Server error".to_string(), None)
+    }
+}
+
 impl RpcFrom<actix::MailboxError> for RpcError {
     fn rpc_from(error: actix::MailboxError) -> Self {
         RpcError::new(
