@@ -1,3 +1,4 @@
+use crate::{metrics, TrieStorage};
 use near_o11y::metrics::prometheus;
 use near_o11y::metrics::prometheus::core::{GenericCounter, GenericGauge};
 use near_primitives::errors::StorageError;
@@ -6,8 +7,6 @@ use near_primitives::shard_layout::ShardUId;
 use near_vm_runner::logic::TrieNodesCount;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-use crate::{metrics, TrieStorage};
 
 /// Deterministic cache to store trie nodes that have been accessed so far
 /// during the cache's lifetime. It is used for deterministic gas accounting

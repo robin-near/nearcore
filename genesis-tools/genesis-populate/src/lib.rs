@@ -189,7 +189,7 @@ impl GenesisBuilder {
         }
         let tries = self.runtime.get_tries();
         state_update.commit(StateChangeCause::InitialState);
-        let (_, trie_changes, state_changes) = state_update.finalize()?;
+        let (_, trie_changes, state_changes) = state_update.finalize(None)?;
         let genesis_shard_version = self.genesis.config.shard_layout.version();
         let shard_uid = ShardUId { version: genesis_shard_version, shard_id: shard_idx as u32 };
         let mut store_update = tries.store_update();

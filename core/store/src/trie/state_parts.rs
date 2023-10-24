@@ -243,7 +243,7 @@ impl Trie {
         let local_state_part_trie =
             Trie::new(Rc::new(TrieMemoryPartialStorage::default()), StateRoot::new(), None);
         let local_state_part_nodes =
-            local_state_part_trie.update(all_state_part_items.into_iter())?.insertions;
+            local_state_part_trie.update(all_state_part_items.into_iter(), None)?.insertions;
         let local_trie_creation_duration = local_trie_creation_timer.stop_and_record();
 
         // 4. Unite all nodes in memory, traverse trie based on them, return set of visited nodes.
@@ -478,6 +478,7 @@ impl Trie {
                 new_root: *state_root,
                 insertions,
                 deletions,
+                mem_trie_changes: None,
             },
             flat_state_delta,
             contract_codes,
@@ -641,6 +642,7 @@ mod tests {
                 new_root: *state_root,
                 insertions,
                 deletions: vec![],
+                mem_trie_changes: None,
             })
         }
 
@@ -898,7 +900,13 @@ mod tests {
             }
         }
         let (insertions, deletions) = Trie::convert_to_insertions_and_deletions(map);
-        TrieChanges { old_root: Default::default(), new_root, insertions, deletions }
+        TrieChanges {
+            old_root: Default::default(),
+            new_root,
+            insertions,
+            deletions,
+            mem_trie_changes: None,
+        }
     }
 
     #[test]
@@ -1045,7 +1053,7 @@ mod tests {
         ];
 
         let changes_for_trie = state_items.iter().cloned().map(|(k, v)| (k, Some(v)));
-        let trie_changes = trie.update(changes_for_trie).unwrap();
+        let trie_changes = trie.update(changes_for_trie, None).unwrap();
         let mut store_update = tries.store_update();
         let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
         store_update.commit().unwrap();
@@ -1160,7 +1168,7 @@ mod tests {
             (b"cb".to_vec(), vec![9; value_len]),
         ];
         let changes_for_trie = state_items.iter().cloned().map(|(k, v)| (k, Some(v)));
-        let trie_changes = trie.update(changes_for_trie).unwrap();
+        let trie_changes = trie.update(changes_for_trie, None).unwrap();
         let mut store_update = tries.store_update();
         let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
         store_update.commit().unwrap();

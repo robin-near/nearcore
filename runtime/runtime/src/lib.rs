@@ -1224,7 +1224,8 @@ impl Runtime {
             && apply_state.current_protocol_version
                 >= ProtocolFeature::FixApplyChunks.protocol_version()
         {
-            let (trie, trie_changes, state_changes) = state_update.finalize()?;
+            let (trie, trie_changes, state_changes) =
+                state_update.finalize(Some(apply_state.block_height))?;
             let proof = trie.recorded_storage();
             return Ok(ApplyResult {
                 state_root: trie_changes.new_root,
@@ -1455,7 +1456,8 @@ impl Runtime {
 
         state_update.commit(StateChangeCause::UpdatedDelayedReceipts);
         self.apply_state_patch(&mut state_update, state_patch);
-        let (trie, trie_changes, state_changes) = state_update.finalize()?;
+        let (trie, trie_changes, state_changes) =
+            state_update.finalize(Some(apply_state.block_height))?;
 
         // Dedup proposals from the same account.
         // The order is deterministically changed.
@@ -1583,7 +1585,7 @@ mod tests {
         let account_id = bob_account();
         set_account(&mut state_update, account_id.clone(), &test_account);
         state_update.commit(StateChangeCause::InitialState);
-        let trie_changes = state_update.finalize().unwrap().1;
+        let trie_changes = state_update.finalize(None).unwrap().1;
         let mut store_update = tries.store_update();
         let new_root = tries.apply_all(&trie_changes, ShardUId::single_shard(), &mut store_update);
         store_update.commit().unwrap();
@@ -1625,7 +1627,7 @@ mod tests {
             &AccessKey::full_access(),
         );
         initial_state.commit(StateChangeCause::InitialState);
-        let trie_changes = initial_state.finalize().unwrap().1;
+        let trie_changes = initial_state.finalize(None).unwrap().1;
         let mut store_update = tries.store_update();
         let root = tries.apply_all(&trie_changes, ShardUId::single_shard(), &mut store_update);
         store_update.commit().unwrap();
@@ -2390,7 +2392,7 @@ mod tests {
         initial_account_state.set_storage_usage(10);
         set_account(&mut state_update, alice_account(), &initial_account_state);
         state_update.commit(StateChangeCause::InitialState);
-        let trie_changes = state_update.finalize().unwrap().1;
+        let trie_changes = state_update.finalize(None).unwrap().1;
         let mut store_update = tries.store_update();
         let root = tries.apply_all(&trie_changes, ShardUId::single_shard(), &mut store_update);
         store_update.commit().unwrap();

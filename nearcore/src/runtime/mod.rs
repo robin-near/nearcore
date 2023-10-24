@@ -42,7 +42,7 @@ use near_store::flat::FlatStorageManager;
 use near_store::metadata::DbKind;
 use near_store::{
     ApplyStatePartResult, DBCol, PartialStorage, ShardTries, StateSnapshotConfig, Store,
-    StoreCompiledContractCache, Trie, TrieConfig, WrappedTrieChanges, COLD_HEAD_KEY,
+    StoreCompiledContractCache, Trie, TrieConfig, WrappedTrieChanges, COLD_HEAD_KEY, HEAD_KEY,
 };
 use near_vm_runner::logic::CompiledContractCache;
 use near_vm_runner::precompile_contract;
@@ -124,7 +124,7 @@ impl NightshadeRuntime {
         let flat_storage_manager = FlatStorageManager::new(store.clone());
         let tries = ShardTries::new(
             store.clone(),
-            trie_config,
+            trie_config.clone(),
             &genesis_config.shard_layout.get_shard_uids(),
             flat_storage_manager,
             state_snapshot_config,
@@ -137,6 +137,14 @@ impl NightshadeRuntime {
         }) {
             tracing::error!(target: "runtime", ?err, "Failed to check if a state snapshot exists");
         }
+
+        // TODO: This is not precise if resharding happens.
+        let mut shard_uids_for_memtrie = genesis_config.shard_layout.get_shard_uids();
+        if let Some(tip) = store.get_ser::<Tip>(DBCol::BlockMisc, HEAD_KEY).unwrap() {
+            shard_uids_for_memtrie =
+                epoch_manager.get_shard_layout(&tip.epoch_id).unwrap().get_shard_uids();
+        }
+        tries.load_mem_tries_for_enabled_shards(&shard_uids_for_memtrie).unwrap();
 
         let migration_data = Arc::new(load_migration_data(&genesis_config.chain_id));
         Arc::new(NightshadeRuntime {
@@ -1084,7 +1092,7 @@ impl RuntimeAdapter for NightshadeRuntime {
 
         let mut applied_split_state_results: Vec<_> = vec![];
         for (shard_uid, trie_update) in trie_updates {
-            let (_, trie_changes, state_changes) = trie_update.finalize()?;
+            let (_, trie_changes, state_changes) = trie_update.finalize(None)?;
             // All state changes that are related to split state should have StateChangeCause as Resharding
             // We do not want to commit the state_changes from resharding as they are already handled while
             // processing parent shard

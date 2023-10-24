@@ -1,6 +1,7 @@
 use self::arena::Arena;
 use self::metrics::MEM_TRIE_NUM_ROOTS;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
+use self::updating::MemTrieUpdate;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::ShardUId;
 use near_primitives::types::{BlockHeight, StateRoot};
@@ -13,6 +14,7 @@ pub mod loading;
 pub mod lookup;
 mod metrics;
 pub mod node;
+pub mod updating;
 
 /// Check this, because in the code we conveniently assume usize is 8 bytes.
 /// In-memory trie can't possibly work under 32-bit anyway.
@@ -135,6 +137,10 @@ impl MemTries {
     #[cfg(test)]
     pub fn num_roots(&self) -> usize {
         self.heights.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    pub fn update(&self, root: Option<MemTrieNodeId>) -> MemTrieUpdate {
+        MemTrieUpdate::new(root, &self.arena.memory(), self.shard_uid.to_string())
     }
 }
 

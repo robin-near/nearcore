@@ -82,7 +82,7 @@ mod tests {
     };
     use crate::trie::mem::loading::load_trie_from_flat_state;
     use crate::trie::mem::lookup::memtrie_lookup;
-    use crate::{KeyLookupMode, NibbleSlice, Trie, TrieUpdate};
+    use crate::{NibbleSlice, Trie, TrieUpdate};
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::ShardUId;
     use near_vm_runner::logic::TrieNodesCount;
@@ -120,16 +120,26 @@ mod tests {
             return;
         }
 
-        let trie_update = TrieUpdate::new(shard_tries.get_trie_for_shard(shard_uid, state_root));
+        let trie_update = TrieUpdate::new(shard_tries.get_trie_with_block_hash_for_shard(
+            shard_uid,
+            state_root,
+            &CryptoHash::default(),
+            false,
+        ));
         trie_update.set_trie_cache_mode(near_primitives::types::TrieCacheMode::CachingChunk);
         let trie = trie_update.trie();
         let root = in_memory_trie.get_root(&state_root).unwrap();
         let mut cache = HashSet::new();
         let mut nodes_count = TrieNodesCount { db_reads: 0, mem_reads: 0 };
         for key in keys.iter() {
-            let actual_value_ref = memtrie_lookup(root, key, Some(&mut cache), &mut nodes_count)
-                .map(|v| v.to_value_ref());
-            let expected_value_ref = trie.get_ref(key, KeyLookupMode::Trie).unwrap();
+            let actual_value_ref = memtrie_lookup(root, key, |_, hash, _| {
+                if cache.insert(hash) {
+                    nodes_count.db_reads += 1;
+                } else {
+                    nodes_count.mem_reads += 1;
+                }
+            });
+            let expected_value_ref = trie.get_flat_value(key).unwrap();
             assert_eq!(actual_value_ref, expected_value_ref, "{:?}", NibbleSlice::new(key));
             assert_eq!(&nodes_count, &trie.get_trie_nodes_count());
         }

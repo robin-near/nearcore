@@ -138,7 +138,7 @@ impl<'a> AutoFlushingTrieUpdate<'a> {
         let mut old_state_update = state_update.take().expect("state update should be set");
         old_state_update.commit(StateChangeCause::InitialState);
         let (_, trie_changes, state_changes) =
-            old_state_update.finalize().expect("Genesis state update failed");
+            old_state_update.finalize(None).expect("Genesis state update failed");
         let mut store_update = self.tries.store_update();
         *state_root = self.tries.apply_all(&trie_changes, self.shard_uid, &mut store_update);
         FlatStateChanges::from_state_changes(&state_changes)

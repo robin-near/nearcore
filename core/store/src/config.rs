@@ -66,6 +66,12 @@ pub struct StoreConfig {
     /// This config option is temporary and will be removed once flat storage is implemented.
     pub sweat_prefetch_senders: Vec<String>,
 
+    /// List of shard UIDs for which we should load the tries in memory. If resharding happens,
+    /// any descendant shard of these shards are loaded into memory.
+    pub load_mem_tries_for_shards: Vec<String>,
+    /// If true, load mem tries for all shards.
+    pub load_mem_tries_for_all_shards: bool,
+
     /// Path where to create RocksDB checkpoints during database migrations or
     /// `false` to disable that feature.
     ///
@@ -237,6 +243,9 @@ impl Default for StoreConfig {
                 "oracle.sweat".to_owned(),
                 "sweat_the_oracle.testnet".to_owned(),
             ],
+
+            load_mem_tries_for_shards: vec!["s3.v1".to_owned()],
+            load_mem_tries_for_all_shards: false,
 
             migration_snapshot: Default::default(),
 

@@ -144,8 +144,9 @@ impl ShardTries {
             FlatStateChanges::from_raw_key_value(&changes)
                 .apply_to_flat_state(&mut store_update, shard_uid);
             // Here we assume that state_roots contains shard_uid, the caller of this method will guarantee that.
-            let trie_changes =
-                self.get_trie_for_shard(shard_uid, state_roots[&shard_uid]).update(changes)?;
+            let trie_changes = self
+                .get_trie_for_shard(shard_uid, state_roots[&shard_uid])
+                .update(changes, None)?;
             let state_root = self.apply_all(&trie_changes, shard_uid, &mut store_update);
             new_state_roots.insert(shard_uid, state_root);
         }
@@ -187,7 +188,7 @@ impl ShardTries {
         let mut new_state_roots = HashMap::new();
         let mut store_update = self.store_update();
         for (shard_uid, update) in updates {
-            let (_, trie_changes, state_changes) = update.finalize()?;
+            let (_, trie_changes, state_changes) = update.finalize(None)?;
             let state_root = self.apply_all(&trie_changes, shard_uid, &mut store_update);
             FlatStateChanges::from_state_changes(&state_changes)
                 .apply_to_flat_state(&mut store_update, shard_uid);
@@ -395,7 +396,7 @@ mod tests {
             delayed_receipt_indices.next_available_index = all_receipts.len() as u64;
             set(&mut trie_update, TrieKey::DelayedReceiptIndices, &delayed_receipt_indices);
             trie_update.commit(StateChangeCause::Resharding);
-            let (_, trie_changes, _) = trie_update.finalize().unwrap();
+            let (_, trie_changes, _) = trie_update.finalize(None).unwrap();
             let mut store_update = tries.store_update();
             let state_root =
                 tries.apply_all(&trie_changes, ShardUId::single_shard(), &mut store_update);

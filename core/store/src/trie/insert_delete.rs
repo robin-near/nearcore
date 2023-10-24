@@ -612,7 +612,13 @@ impl Trie {
         }
         let (insertions, deletions) =
             Trie::convert_to_insertions_and_deletions(memory.refcount_changes);
-        Ok(TrieChanges { old_root: *old_root, new_root: last_hash, insertions, deletions })
+        Ok(TrieChanges {
+            old_root: *old_root,
+            new_root: last_hash,
+            insertions,
+            deletions,
+            mem_trie_changes: None,
+        })
     }
 
     fn flatten_value(memory: &mut NodesStorage, value: ValueHandle) -> ValueRef {

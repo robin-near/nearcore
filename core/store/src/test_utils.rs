@@ -108,7 +108,7 @@ pub fn test_populate_trie(
     changes: Vec<(Vec<u8>, Option<Vec<u8>>)>,
 ) -> CryptoHash {
     let trie = tries.get_trie_for_shard(shard_uid, *root);
-    let trie_changes = trie.update(changes.iter().cloned()).unwrap();
+    let trie_changes = trie.update(changes.iter().cloned(), None).unwrap();
     let mut store_update = tries.store_update();
     let root = tries.apply_all(&trie_changes, shard_uid, &mut store_update);
     store_update.commit().unwrap();

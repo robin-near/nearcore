@@ -2412,6 +2412,7 @@ impl Chain {
                 let shard_uid = self.epoch_manager.shard_id_to_uid(shard_id, epoch_id)?;
                 let flat_storage_manager = self.runtime_adapter.get_flat_storage_manager();
                 flat_storage_manager.update_flat_storage_for_shard(shard_uid, &block)?;
+                self.garbage_collect_memtrie_roots(&block, shard_uid);
             }
         }
 
@@ -2456,6 +2457,17 @@ impl Chain {
         // decide to how to update the tx pool.
         let block_status = self.determine_status(new_head, prev_head);
         Ok(AcceptedBlock { hash: *block.hash(), status: block_status, provenance })
+    }
+
+    fn garbage_collect_memtrie_roots(&self, block: &Block, shard_uid: ShardUId) {
+        let tries = self.runtime_adapter.get_tries();
+        let last_final_block = block.header().last_final_block();
+        if last_final_block != &CryptoHash::default() {
+            let header = self.store.get_block_header(last_final_block).unwrap();
+            if let Some(prev_height) = header.prev_height() {
+                tries.delete_memtrie_roots_up_to_height(shard_uid, prev_height);
+            }
+        }
     }
 
     /// Preprocess a block before applying chunks, verify that we have the necessary information
@@ -3578,6 +3590,7 @@ impl Chain {
                 let shard_uid = self.epoch_manager.shard_id_to_uid(shard_id, epoch_id)?;
                 let flat_storage_manager = self.runtime_adapter.get_flat_storage_manager();
                 flat_storage_manager.update_flat_storage_for_shard(shard_uid, &block)?;
+                self.garbage_collect_memtrie_roots(&block, shard_uid);
             }
         }
 

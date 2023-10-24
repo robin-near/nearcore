@@ -1,5 +1,10 @@
+use crate::flat::store_helper::{
+    get_all_deltas_metadata, get_delta_changes, get_flat_storage_status,
+};
 use crate::flat::{FlatStorageManager, FlatStorageStatus};
 use crate::trie::config::TrieConfig;
+use crate::trie::mem::loading::load_trie_from_flat_state;
+use crate::trie::mem::updating::apply_memtrie_changes;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
 use crate::trie::{TrieRefcountChange, POISONED_LOCK_ERR};
@@ -8,20 +13,25 @@ use crate::{Store, StoreUpdate, Trie, TrieChanges, TrieUpdate};
 
 use near_primitives::errors::StorageError;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::{self, ShardUId, ShardVersion};
+use near_primitives::shard_layout::{self, get_block_shard_uid, ShardUId, ShardVersion};
 use near_primitives::trie_key::TrieKey;
+use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{
-    NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
+    BlockHeight, NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
 };
-use std::collections::HashMap;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+use tracing::{debug, info};
 
+use super::mem::MemTries;
 use super::state_snapshot::{StateSnapshot, StateSnapshotConfig};
 
 struct ShardTriesInner {
     store: Store,
     trie_config: TrieConfig,
+    memtries: RwLock<HashMap<ShardUId, Arc<RwLock<MemTries>>>>,
     /// Cache reserved for client actor to use
     caches: RwLock<HashMap<ShardUId, TrieCache>>,
     /// Cache for readers.
@@ -55,6 +65,7 @@ impl ShardTries {
         ShardTries(Arc::new(ShardTriesInner {
             store,
             trie_config,
+            memtries: RwLock::new(HashMap::new()),
             caches: RwLock::new(caches),
             view_caches: RwLock::new(view_caches),
             flat_storage_manager,
@@ -158,8 +169,8 @@ impl ShardTries {
         ));
         let flat_storage_chunk_view = block_hash
             .and_then(|block_hash| self.0.flat_storage_manager.chunk_view(shard_uid, block_hash));
-
-        Trie::new(storage, state_root, flat_storage_chunk_view)
+        let memtries = self.get_mem_tries(shard_uid);
+        Trie::new_with_memtries(storage, memtries, state_root, flat_storage_chunk_view)
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {
@@ -340,7 +351,25 @@ impl ShardTries {
         shard_uid: ShardUId,
         store_update: &mut StoreUpdate,
     ) -> StateRoot {
+        self.apply_memtrie_changes(trie_changes, shard_uid);
         self.apply_all_inner(trie_changes, shard_uid, true, store_update)
+    }
+
+    pub fn apply_memtrie_changes(&self, trie_changes: &TrieChanges, shard_uid: ShardUId) {
+        if let Some(memtries) = self.get_mem_tries(shard_uid) {
+            apply_memtrie_changes(
+                &mut memtries.write().unwrap(),
+                trie_changes
+                    .mem_trie_changes
+                    .as_ref()
+                    .expect("Memtrie changes must be present if memtrie is loaded"),
+            );
+        } else {
+            assert!(
+                trie_changes.mem_trie_changes.is_none(),
+                "Memtrie changes must not be present if memtrie is not loaded"
+            );
+        }
     }
 
     /// Returns the status of the given shard of flat storage in the state snapshot.
@@ -352,6 +381,153 @@ impl ShardTries {
     ) -> Result<FlatStorageStatus, StorageError> {
         let (_store, manager) = self.get_state_snapshot(&sync_prev_prev_hash)?;
         Ok(manager.get_flat_storage_status(shard_uid))
+    }
+
+    pub fn load_mem_tries_for_enabled_shards(
+        &self,
+        shard_uids: &[ShardUId],
+    ) -> Result<(), StorageError> {
+        let trie_config = &self.0.trie_config;
+        let shard_uids_to_load = shard_uids
+            .iter()
+            .copied()
+            .filter(|shard_uid| {
+                trie_config.load_mem_tries_for_all_shards
+                    || trie_config.load_mem_tries_for_shards.contains(shard_uid)
+            })
+            .collect::<Vec<_>>();
+        let store = self.0.store.clone();
+        info!(target: "memtrie", "Loading tries to memory for shards {:?}...", shard_uids);
+        shard_uids_to_load
+            .into_par_iter()
+            .map(|shard_uid| -> Result<(), StorageError> {
+                debug!(target: "memtrie", "Loading base trie for {} from flat state...", shard_uid);
+                let flat_head = match get_flat_storage_status(&store, shard_uid)? {
+                    FlatStorageStatus::Ready(status) => status.flat_head,
+                    other => {
+                        return Err(StorageError::MemTrieLoadingError(format!(
+                            "Cannot load memtries when flat storage is not ready for shard {}, actual status: {:?}",
+                            shard_uid, other
+                        )));
+                    }
+                };
+                let state_root = *store
+                    .get_ser::<ChunkExtra>(
+                        DBCol::ChunkExtra,
+                        &get_block_shard_uid(&flat_head.hash, &shard_uid),
+                    )
+                    .map_err(|err| {
+                        StorageError::StorageInconsistentState(format!(
+                            "Cannot fetch ChunkExtra for block {} in shard {}: {:?}",
+                            flat_head.hash, shard_uid, err
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        StorageError::StorageInconsistentState(format!(
+                            "No ChunkExtra for block {} in shard {}",
+                            flat_head.hash, shard_uid
+                        ))
+                    })?
+                    .state_root();
+
+                let mut mem_tries = load_trie_from_flat_state(
+                    &store,
+                    shard_uid.clone(),
+                    state_root,
+                    flat_head.height,
+                    64 * 1024 * 1024 * 1024,
+                )
+                .unwrap();
+
+                debug!(target: "memtrie", "Loading flat state deltas for {}...", shard_uid);
+                let mut sorted_deltas: BTreeSet<(BlockHeight, CryptoHash, CryptoHash)> =
+                    Default::default();
+                for delta in get_all_deltas_metadata(&store, shard_uid).unwrap() {
+                    sorted_deltas.insert((
+                        delta.block.height,
+                        delta.block.hash,
+                        delta.block.prev_hash,
+                    ));
+                }
+
+                debug!(target: "memtrie", "{} deltas to apply for {}", sorted_deltas.len(), shard_uid);
+                for (height, hash, prev_hash) in sorted_deltas.into_iter() {
+                    let delta = get_delta_changes(&store, shard_uid, hash).unwrap();
+                    if let Some(changes) = delta {
+                        let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+                            .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&prev_hash, &shard_uid))
+                            .unwrap()
+                            .unwrap();
+                        let old_root = *chunk.state_root();
+
+                        let chunk: near_primitives::types::chunk_extra::ChunkExtra = store
+                            .get_ser(DBCol::ChunkExtra, &get_block_shard_uid(&hash, &shard_uid))
+                            .unwrap()
+                            .unwrap();
+                        let new_root = *chunk.state_root();
+
+                        let root_id = if old_root == CryptoHash::default() {
+                            None
+                        } else {
+                            Some(
+                                mem_tries
+                                    .get_root(&old_root)
+                                    .ok_or_else(|| {
+                                        StorageError::StorageInconsistentState(format!(
+                                            "State root {} does not exist in shard {}",
+                                            old_root, shard_uid
+                                        ))
+                                    })?
+                                    .id(),
+                            )
+                        };
+                        let mut trie_update = mem_tries.update(root_id);
+
+                        for (key, value) in changes.0 {
+                            match value {
+                                Some(value) => {
+                                    trie_update.insert(&key, value);
+                                }
+                                None => trie_update.delete(&key),
+                            };
+                        }
+
+                        let trie_changes = trie_update.flatten_nodes(height);
+
+                        assert_eq!(trie_changes.new_root, new_root);
+                        apply_memtrie_changes(
+                            &mut mem_tries,
+                            &trie_changes.mem_trie_changes.unwrap(),
+                        );
+                    }
+                    debug!(target:"memtrie", "Applied memtrie changes for height {}, shard {}", height, shard_uid);
+                }
+
+                debug!(target: "memtrie", "Done loading for {}", shard_uid);
+                self.0
+                    .memtries
+                    .write()
+                    .unwrap()
+                    .insert(shard_uid, Arc::new(RwLock::new(mem_tries)));
+                Ok(())
+            })
+            .collect::<Vec<Result<_, _>>>()
+            .into_iter()
+            .collect::<Result<_, _>>()?;
+
+        info!(target: "memtrie", "Memtries loading complete for shards {:?}", shard_uids);
+        Ok(())
+    }
+
+    pub fn get_mem_tries(&self, shard_uid: ShardUId) -> Option<Arc<RwLock<MemTries>>> {
+        let guard = self.0.memtries.write().unwrap();
+        guard.get(&shard_uid).cloned()
+    }
+
+    pub fn delete_memtrie_roots_up_to_height(&self, shard_uid: ShardUId, height: BlockHeight) {
+        if let Some(memtries) = self.get_mem_tries(shard_uid) {
+            memtries.write().unwrap().delete_until_height(height);
+        }
     }
 }
 
@@ -390,6 +566,10 @@ impl WrappedTrieChanges {
 
     pub fn state_changes(&self) -> &[RawStateChangesWithTrieKey] {
         &self.state_changes
+    }
+
+    pub fn apply_mem_changes(&self) {
+        self.tries.apply_memtrie_changes(&self.trie_changes, self.shard_uid);
     }
 
     /// Save insertions of trie nodes into Store.
@@ -679,6 +859,8 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries_for_shards: Vec::new(),
+            load_mem_tries_for_all_shards: false,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();
@@ -729,6 +911,8 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries_for_shards: Vec::new(),
+            load_mem_tries_for_all_shards: false,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();

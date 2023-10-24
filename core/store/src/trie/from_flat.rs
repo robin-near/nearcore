@@ -42,7 +42,7 @@ pub fn construct_trie_from_flat(store: Store, write_store: Store, shard_uid: Sha
         // Apply and commit changes
         let batch_size = batch.len();
         let new_trie = tries.get_trie_for_shard(shard_uid, trie_root);
-        let trie_changes = new_trie.update(batch).unwrap();
+        let trie_changes = new_trie.update(batch, None).unwrap();
         let mut store_update = tries.store_update();
         tries.apply_all(&trie_changes, shard_uid, &mut store_update);
         store_update.commit().unwrap();

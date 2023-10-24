@@ -75,7 +75,7 @@ impl StorageMutator {
         let mut update = self.shard_tries.store_update();
         for (mut trie_update, shard_uid) in self.tries.into_iter().zip(all_shard_uids.into_iter()) {
             trie_update.commit(near_primitives::types::StateChangeCause::Migration);
-            let (_, trie_updates, raw_changes) = trie_update.finalize()?;
+            let (_, trie_updates, raw_changes) = trie_update.finalize(None)?;
             let state_root = self.shard_tries.apply_all(&trie_updates, shard_uid, &mut update);
             state_roots.push(state_root);
             let flat_state_changes = FlatStateChanges::from_state_changes(&raw_changes);
