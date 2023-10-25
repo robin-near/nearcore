@@ -10,47 +10,64 @@ use near_primitives::state::FlatStateValue;
 use near_primitives::types::BlockHeight;
 use std::collections::HashMap;
 
+/// An old node means a node in the current in-memory trie. An updated node means a
+/// node we're going to store in the in-memory trie but have not constructed there yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldOrUpdatedNodeId {
+    Old(MemTrieNodeId),
+    Updated(UpdatedMemTrieNodeId),
+}
+
+/// For updated nodes, the ID is simply the index into the array of updated nodes we keep.
 pub type UpdatedMemTrieNodeId = usize;
 
-// Reference to either node in big trie or in small temporary trie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OldOrNewNodeId {
-    Old(MemTrieNodeId),
-    New(UpdatedMemTrieNodeId),
-}
-
-// Structure to handle new temporarily created nodes.
+/// An updated node - a node that will eventually become an in-memory trie node.
+/// It references children that are either old or updated nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdatedMemTrieNode {
-    // Fancy edge case. Used when we create an empty child and descend to it to create new node.
+    /// Used for either an empty root node (indicating an empty trie), or as a temporary
+    /// node to ease implementation.
     Empty,
-    Leaf { extension: Box<[u8]>, value: FlatStateValue },
-    Extension { extension: Box<[u8]>, child: OldOrNewNodeId },
-    // United Branch&BranchWithValue because it is easier to write `match`.
-    Branch { children: [Option<OldOrNewNodeId>; 16], value: Option<FlatStateValue> },
+    Leaf {
+        extension: Box<[u8]>,
+        value: FlatStateValue,
+    },
+    Extension {
+        extension: Box<[u8]>,
+        child: OldOrUpdatedNodeId,
+    },
+    /// Corresponds to either a Branch or BranchWithValue node.
+    Branch {
+        children: [Option<OldOrUpdatedNodeId>; 16],
+        value: Option<FlatStateValue>,
+    },
 }
 
+/// Structure to build an update to the in-memory trie.
 pub struct MemTrieUpdate<'a> {
+    /// The original root before updates. It is None iff the original trie had no keys.
     root: Option<MemTrieNodeId>,
     arena: &'a ArenaMemory,
-    shard_uid: String, // for metrics
+    shard_uid: String, // for metrics only
+    /// All the new nodes that are to be constructed. A node may be None if
+    /// (1) temporarily we take out the node from the slot to process it and put it back
+    /// later; or (2) the node is deleted afterwards.
+    pub updated_nodes: Vec<Option<UpdatedMemTrieNode>>,
+    /// Refcount changes for existing in-memory nodes; could be minus or plus.
+    /// It is also used to derive on-disk refcount changes for trie nodes.
     pub id_refcount_changes: HashMap<MemTrieNodeId, i32>,
-    pub value_changes: HashMap<CryptoHash, i32>,
+    /// Changes to the refcount of values. These are used to correctly change the on-disk
+    /// refcounts for values.
+    pub value_refcount_changes: HashMap<CryptoHash, i32>,
+    /// New values that may have been introduced as part of the update.
+    /// Note that deleted values don't go into this map, because decrementing the refcount
+    /// does not require specifying the refcounted value, but incrementing does.
     pub new_values: HashMap<CryptoHash, Vec<u8>>,
-    pub nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
 }
 
 impl UpdatedMemTrieNode {
-    fn convert_children_to_updated(view: ChildrenView) -> [Option<OldOrNewNodeId>; 16] {
-        let mut children = [None; 16];
-        for i in 0..16 {
-            if let Some(child) = view.get(i) {
-                children[i] = Some(OldOrNewNodeId::Old(child.id()));
-            }
-        }
-        children
-    }
-
+    /// Converts an existing in-memory trie node into an updated one that is
+    /// equivalent.
     pub fn from_existing_node_view(view: MemTrieNodeView<'_>) -> Self {
         match view {
             MemTrieNodeView::Leaf { extension, value } => Self::Leaf {
@@ -66,9 +83,19 @@ impl UpdatedMemTrieNode {
             },
             MemTrieNodeView::Extension { extension, child, .. } => Self::Extension {
                 extension: extension.raw_slice().to_vec().into_boxed_slice(),
-                child: OldOrNewNodeId::Old(child.id()),
+                child: OldOrUpdatedNodeId::Old(child.id()),
             },
         }
+    }
+
+    fn convert_children_to_updated(view: ChildrenView) -> [Option<OldOrUpdatedNodeId>; 16] {
+        let mut children = [None; 16];
+        for i in 0..16 {
+            if let Some(child) = view.get(i) {
+                children[i] = Some(OldOrUpdatedNodeId::Old(child.id()));
+            }
+        }
+        children
     }
 }
 
@@ -85,33 +112,42 @@ impl<'a> MemTrieUpdate<'a> {
             arena,
             shard_uid,
             id_refcount_changes: Default::default(),
-            value_changes: Default::default(),
+            value_refcount_changes: Default::default(),
             new_values: Default::default(),
-            nodes_storage: vec![],
+            updated_nodes: vec![],
         };
         assert_eq!(trie_update.convert_existing_to_updated(root), 0usize);
         trie_update
     }
 
-    pub fn take_node(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
-        self.nodes_storage.get_mut(index).unwrap().take().expect("Node taken twice")
+    /// Internal function to take a node from the array of updated nodes, setting it
+    /// to None. It is expected that place_node is then called to return the node to
+    /// the same slot.
+    fn take_node(&mut self, index: UpdatedMemTrieNodeId) -> UpdatedMemTrieNode {
+        self.updated_nodes.get_mut(index).unwrap().take().expect("Node taken twice")
     }
 
-    pub fn place_node(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode) {
-        assert!(self.nodes_storage[index].is_none(), "Node placed twice");
-        self.nodes_storage[index] = Some(node);
+    /// Does the opposite of take_node; returns the node to the specified ID.
+    fn place_node(&mut self, index: UpdatedMemTrieNodeId, node: UpdatedMemTrieNode) {
+        assert!(self.updated_nodes[index].is_none(), "Node placed twice");
+        self.updated_nodes[index] = Some(node);
     }
 
-    pub fn new_updated_node(&mut self, node: UpdatedMemTrieNode) -> UpdatedMemTrieNodeId {
-        let index = self.nodes_storage.len();
-        self.nodes_storage.push(Some(node));
+    /// Creates a new updated node, assigning it a new ID.
+    fn new_updated_node(&mut self, node: UpdatedMemTrieNode) -> UpdatedMemTrieNodeId {
+        let index = self.updated_nodes.len();
+        self.updated_nodes.push(Some(node));
         index
     }
 
-    pub fn convert_existing_to_updated(
-        &mut self,
-        node: Option<MemTrieNodeId>,
-    ) -> UpdatedMemTrieNodeId {
+    /// This is called when we need to mutate a subtree of the original trie.
+    /// It decrements the refcount of the original trie node (since logically
+    /// we are removing it), and creates a new node that is equivalent to the
+    /// original node. The ID of the new node is returned.
+    ///
+    /// If the original node is None, it is a marker for the root of an empty
+    /// trie.
+    fn convert_existing_to_updated(&mut self, node: Option<MemTrieNodeId>) -> UpdatedMemTrieNodeId {
         match node {
             None => self.new_updated_node(UpdatedMemTrieNode::Empty),
             Some(node) => {
@@ -123,16 +159,24 @@ impl<'a> MemTrieUpdate<'a> {
         }
     }
 
-    pub fn ensure_updated(&mut self, node: OldOrNewNodeId) -> UpdatedMemTrieNodeId {
+    /// If the ID was old, converts it to an updated one.
+    fn ensure_updated(&mut self, node: OldOrUpdatedNodeId) -> UpdatedMemTrieNodeId {
         match node {
-            OldOrNewNodeId::Old(node_id) => self.convert_existing_to_updated(Some(node_id)),
-            OldOrNewNodeId::New(node_id) => node_id,
+            OldOrUpdatedNodeId::Old(node_id) => self.convert_existing_to_updated(Some(node_id)),
+            OldOrUpdatedNodeId::Updated(node_id) => node_id,
         }
     }
 
+    /// This must be called when inserting a value into the trie, as long as
+    /// the full trie changes are desired. If only memtrie changes are desired,
+    /// this is not necessary.
     pub fn notify_maybe_new_value(&mut self, value: Vec<u8>) {
         let hash = hash(&value);
         self.new_values.insert(hash, value);
+    }
+
+    fn add_refcount_to_value(&mut self, value: CryptoHash, delta: i32) {
+        *self.value_refcount_changes.entry(value).or_insert_with(|| 0) += delta;
     }
 
     /// Inserts the given key value pair into the trie.
@@ -149,7 +193,7 @@ impl<'a> MemTrieUpdate<'a> {
         let value_ref = flat_value.to_value_ref();
 
         loop {
-            // Destroy node as it will be changed anyway.
+            // Take out the current node; we'd have to change it no matter what.
             let node = self.take_node(node_id);
             match node {
                 UpdatedMemTrieNode::Empty => {
@@ -161,35 +205,30 @@ impl<'a> MemTrieUpdate<'a> {
                             value: flat_value,
                         },
                     );
-                    *self.value_changes.entry(value_ref.hash).or_insert_with(|| 0) += 1;
+                    self.add_refcount_to_value(value_ref.hash, 1);
                     break;
                 }
                 UpdatedMemTrieNode::Branch { children, value: old_value } => {
                     if partial.is_empty() {
                         // This branch node is exactly where the value should be added.
                         if let Some(value) = old_value {
-                            *self
-                                .value_changes
-                                .entry(value.to_value_ref().hash)
-                                .or_insert_with(|| 0) -= 1;
+                            self.add_refcount_to_value(value.to_value_ref().hash, -1);
                         }
-                        // store value somehow
-                        // can't just move `value` because it happens inside a loop :(
                         self.place_node(
                             node_id,
                             UpdatedMemTrieNode::Branch { children, value: Some(flat_value) },
                         );
-                        *self.value_changes.entry(value_ref.hash).or_insert_with(|| 0) += 1;
+                        self.add_refcount_to_value(value_ref.hash, 1);
                         break;
                     } else {
-                        // Continue descending into the branch.
+                        // Continue descending into the branch, possibly adding a new child.
                         let mut new_children = children;
                         let child = &mut new_children[partial.at(0) as usize];
                         let new_node_id = match child.take() {
                             Some(node_id) => self.ensure_updated(node_id),
                             None => self.new_updated_node(UpdatedMemTrieNode::Empty),
                         };
-                        *child = Some(OldOrNewNodeId::New(new_node_id));
+                        *child = Some(OldOrUpdatedNodeId::Updated(new_node_id));
                         self.place_node(
                             node_id,
                             UpdatedMemTrieNode::Branch { children: new_children, value: old_value },
@@ -203,36 +242,32 @@ impl<'a> MemTrieUpdate<'a> {
                     let existing_key = NibbleSlice::from_encoded(&extension).0;
                     let common_prefix = partial.common_prefix(&existing_key);
                     if common_prefix == existing_key.len() && common_prefix == partial.len() {
-                        // Equivalent leaf, rewrite the value.
-                        *self
-                            .value_changes
-                            .entry(old_value.to_value_ref().hash)
-                            .or_insert_with(|| 0) -= 1;
+                        // We're at the exact leaf. Rewrite the value at this leaf.
+                        self.add_refcount_to_value(old_value.to_value_ref().hash, -1);
                         self.place_node(
                             node_id,
                             UpdatedMemTrieNode::Leaf { extension, value: flat_value },
                         );
-                        *self.value_changes.entry(value_ref.hash).or_insert_with(|| 0) += 1;
+                        self.add_refcount_to_value(value_ref.hash, 1);
                         break;
                     } else if common_prefix == 0 {
-                        // split leaf to branch.
+                        // Convert the leaf to an equivalent branch. We are not adding
+                        // the new branch yet; that will be done in the next iteration.
                         let mut children = [None; 16];
                         let branch_node = if existing_key.is_empty() {
-                            // yeah it can be empty... if branch leads directly to value :(
+                            // Existing key being empty means the old value now lives at the branch.
                             UpdatedMemTrieNode::Branch { children, value: Some(old_value) }
                         } else {
-                            let idx = existing_key.at(0) as usize;
+                            let branch_idx = existing_key.at(0) as usize;
                             let new_extension = existing_key.mid(1).encoded(true).into_vec();
                             let new_node_id = self.new_updated_node(UpdatedMemTrieNode::Leaf {
                                 extension: new_extension.into_boxed_slice(),
                                 value: old_value,
                             });
-                            children[idx] = Some(OldOrNewNodeId::New(new_node_id));
-                            // no value in current branch, as common prefix is 0
+                            children[branch_idx] = Some(OldOrUpdatedNodeId::Updated(new_node_id));
                             UpdatedMemTrieNode::Branch { children, value: None }
                         };
                         self.place_node(node_id, branch_node);
-                        // on next iteration, we will add the second child!
                         continue;
                     } else if common_prefix == existing_key.len() {
                         // Current leaf becomes an extension.
@@ -245,7 +280,7 @@ impl<'a> MemTrieUpdate<'a> {
                         });
                         let updated_node = UpdatedMemTrieNode::Extension {
                             extension: existing_key.encoded(false).into_vec().into_boxed_slice(),
-                            child: OldOrNewNodeId::New(new_node_id),
+                            child: OldOrUpdatedNodeId::Updated(new_node_id),
                         };
                         self.place_node(node_id, updated_node);
                         node_id = new_node_id;
@@ -265,7 +300,7 @@ impl<'a> MemTrieUpdate<'a> {
                                 .encoded_leftmost(common_prefix, false)
                                 .into_vec()
                                 .into_boxed_slice(),
-                            child: OldOrNewNodeId::New(new_node_id),
+                            child: OldOrUpdatedNodeId::Updated(new_node_id),
                         };
                         self.place_node(node_id, node);
                         node_id = new_node_id;
@@ -290,7 +325,7 @@ impl<'a> MemTrieUpdate<'a> {
                                     .into_boxed_slice(),
                                 child: old_child,
                             };
-                            OldOrNewNodeId::New(self.new_updated_node(inner_child))
+                            OldOrUpdatedNodeId::Updated(self.new_updated_node(inner_child))
                         };
 
                         let mut children = [None; 16];
@@ -304,7 +339,7 @@ impl<'a> MemTrieUpdate<'a> {
                         let child = self.ensure_updated(old_child);
                         let node = UpdatedMemTrieNode::Extension {
                             extension,
-                            child: OldOrNewNodeId::New(child),
+                            child: OldOrUpdatedNodeId::Updated(child),
                         };
                         self.place_node(node_id, node);
                         node_id = child;
@@ -327,7 +362,7 @@ impl<'a> MemTrieUpdate<'a> {
                                 .encoded_leftmost(common_prefix, false)
                                 .into_vec()
                                 .into_boxed_slice(),
-                            child: OldOrNewNodeId::New(inner_child_node_id),
+                            child: OldOrUpdatedNodeId::Updated(inner_child_node_id),
                         };
                         self.place_node(node_id, child_node);
                         node_id = inner_child_node_id;
@@ -356,7 +391,7 @@ impl<'a> MemTrieUpdate<'a> {
                 UpdatedMemTrieNode::Leaf { extension, value } => {
                     if NibbleSlice::from_encoded(&extension).0 == partial {
                         *self
-                            .value_changes
+                            .value_refcount_changes
                             .entry(value.to_value_ref().hash)
                             .or_insert_with(|| 0) -= 1;
                         self.place_node(node_id, UpdatedMemTrieNode::Empty);
@@ -379,7 +414,7 @@ impl<'a> MemTrieUpdate<'a> {
                             }
                         };
                         *self
-                            .value_changes
+                            .value_refcount_changes
                             .entry(value.to_value_ref().hash)
                             .or_insert_with(|| 0) -= 1;
                         // there must be at least 1 child, otherwise it shouldn't be a branch.
@@ -405,7 +440,7 @@ impl<'a> MemTrieUpdate<'a> {
                             }
                         };
                         let new_node_id = self.ensure_updated(node_ref);
-                        *child = Some(OldOrNewNodeId::New(new_node_id));
+                        *child = Some(OldOrUpdatedNodeId::Updated(new_node_id));
                         self.place_node(
                             node_id,
                             UpdatedMemTrieNode::Branch { children: new_children, value },
@@ -427,7 +462,7 @@ impl<'a> MemTrieUpdate<'a> {
                             node_id,
                             UpdatedMemTrieNode::Extension {
                                 extension,
-                                child: OldOrNewNodeId::New(new_node_id),
+                                child: OldOrUpdatedNodeId::Updated(new_node_id),
                             },
                         );
 
@@ -462,9 +497,9 @@ impl<'a> MemTrieUpdate<'a> {
                 }
                 UpdatedMemTrieNode::Branch { mut children, value } => {
                     for child in children.iter_mut() {
-                        if let Some(OldOrNewNodeId::New(child_node_id)) = child {
+                        if let Some(OldOrUpdatedNodeId::Updated(child_node_id)) = child {
                             if let UpdatedMemTrieNode::Empty =
-                                self.nodes_storage[*child_node_id as usize].as_ref().unwrap()
+                                self.updated_nodes[*child_node_id as usize].as_ref().unwrap()
                             {
                                 *child = None;
                             }
@@ -511,7 +546,7 @@ impl<'a> MemTrieUpdate<'a> {
         &mut self,
         node_id: UpdatedMemTrieNodeId,
         key: Vec<u8>,
-        child_id: OldOrNewNodeId,
+        child_id: OldOrUpdatedNodeId,
     ) {
         let child_id = self.ensure_updated(child_id);
         let child_node = self.take_node(child_id);
@@ -535,7 +570,7 @@ impl<'a> MemTrieUpdate<'a> {
                     node_id,
                     UpdatedMemTrieNode::Extension {
                         extension: key.into_boxed_slice(),
-                        child: OldOrNewNodeId::New(child_id),
+                        child: OldOrUpdatedNodeId::Updated(child_id),
                     },
                 );
             }
@@ -563,9 +598,9 @@ impl<'a> MemTrieUpdate<'a> {
             arena,
             shard_uid,
             id_refcount_changes,
-            value_changes,
+            value_refcount_changes: value_changes,
             new_values,
-            nodes_storage,
+            updated_nodes: nodes_storage,
         } = self;
         let root_id = 0;
         MEM_TRIE_NUM_NODES_CREATED_FROM_UPDATES
@@ -588,7 +623,9 @@ impl<'a> MemTrieUpdate<'a> {
                     }
                     FlattenNodesCrumb::AtChild(mut i) => {
                         while i < 16 {
-                            if let Some(OldOrNewNodeId::New(child_node_id)) = children[i].clone() {
+                            if let Some(OldOrUpdatedNodeId::Updated(child_node_id)) =
+                                children[i].clone()
+                            {
                                 stack.push((node_id, FlattenNodesCrumb::AtChild(i + 1)));
                                 stack.push((child_node_id, FlattenNodesCrumb::Entering));
                                 continue 'outer;
@@ -600,12 +637,12 @@ impl<'a> MemTrieUpdate<'a> {
                 },
                 UpdatedMemTrieNode::Extension { child, .. } => match position {
                     FlattenNodesCrumb::Entering => match child {
-                        OldOrNewNodeId::New(child_id) => {
+                        OldOrUpdatedNodeId::Updated(child_id) => {
                             stack.push((node_id, FlattenNodesCrumb::Exiting));
                             stack.push((*child_id, FlattenNodesCrumb::Entering));
                             continue;
                         }
-                        OldOrNewNodeId::Old(_) => {}
+                        OldOrUpdatedNodeId::Old(_) => {}
                     },
                     FlattenNodesCrumb::Exiting => {}
                     _ => unreachable!(),
@@ -619,12 +656,12 @@ impl<'a> MemTrieUpdate<'a> {
         // main block processing thread.
         let mut last_node_hash = CryptoHash::default();
         let mut mapped_nodes: HashMap<UpdatedMemTrieNodeId, (CryptoHash, u64)> = Default::default();
-        let map_node = |node: OldOrNewNodeId,
+        let map_node = |node: OldOrUpdatedNodeId,
                         map: &HashMap<UpdatedMemTrieNodeId, (CryptoHash, u64)>|
          -> (CryptoHash, u64) {
             match node {
-                OldOrNewNodeId::New(node) => map.get(&node).unwrap().clone(),
-                OldOrNewNodeId::Old(node_id) => {
+                OldOrUpdatedNodeId::Updated(node) => map.get(&node).unwrap().clone(),
+                OldOrUpdatedNodeId::Old(node_id) => {
                     let view = node_id.as_ptr(arena).view();
                     (view.node_hash(), view.memory_usage())
                 }
@@ -727,17 +764,17 @@ pub fn apply_memtrie_changes(memtries: &mut MemTries, changes: &MemTrieChanges) 
     memtries
         .construct_root(changes.block_height, |arena| {
             let mut last_node_id: Option<MemTrieNodeId> = None;
-            let map_to_new_node_id = |node_id: OldOrNewNodeId,
-                                      old_to_new_map: &HashMap<
-                UpdatedMemTrieNodeId,
-                MemTrieNodeId,
-            >|
-             -> MemTrieNodeId {
-                match node_id {
-                    OldOrNewNodeId::New(node_id) => old_to_new_map.get(&node_id).unwrap().clone(),
-                    OldOrNewNodeId::Old(node_id) => node_id,
-                }
-            };
+            let map_to_new_node_id =
+                |node_id: OldOrUpdatedNodeId,
+                 old_to_new_map: &HashMap<UpdatedMemTrieNodeId, MemTrieNodeId>|
+                 -> MemTrieNodeId {
+                    match node_id {
+                        OldOrUpdatedNodeId::Updated(node_id) => {
+                            old_to_new_map.get(&node_id).unwrap().clone()
+                        }
+                        OldOrUpdatedNodeId::Old(node_id) => node_id,
+                    }
+                };
 
             let mut old_to_new_map = HashMap::<UpdatedMemTrieNodeId, MemTrieNodeId>::new();
             let nodes_storage = &changes.nodes_storage;
