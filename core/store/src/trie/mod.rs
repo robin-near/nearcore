@@ -401,7 +401,7 @@ impl Hash for TrieRefcountChange {
 #[derive(Default, Clone, PartialEq, Eq, Debug)]
 pub struct MemTrieChanges {
     node_ids_with_hashes: Vec<(UpdatedMemTrieNodeId, CryptoHash)>,
-    nodes_storage: Vec<Option<UpdatedMemTrieNode>>,
+    updated_nodes: Vec<Option<UpdatedMemTrieNode>>,
     block_height: BlockHeight,
 }
 
@@ -1351,7 +1351,7 @@ impl Trie {
                         None => trie_update.delete(&key),
                     }
                 }
-                Ok(trie_update.flatten_nodes(
+                Ok(trie_update.to_trie_changes(
                     block_height.expect("Block height must be provided if updating in-memory trie"),
                 ))
             }

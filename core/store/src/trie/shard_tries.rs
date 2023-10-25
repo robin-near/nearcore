@@ -492,13 +492,12 @@ impl ShardTries {
                             };
                         }
 
-                        let trie_changes = trie_update.flatten_nodes(height);
-
-                        assert_eq!(trie_changes.new_root, new_root);
-                        apply_memtrie_changes(
+                        let mem_trie_changes = trie_update.to_mem_trie_changes_only(height);
+                        let new_root_after_apply = apply_memtrie_changes(
                             &mut mem_tries,
-                            &trie_changes.mem_trie_changes.unwrap(),
+                            &mem_trie_changes,
                         );
+                        assert_eq!(new_root_after_apply, new_root);
                     }
                     debug!(target:"memtrie", "Applied memtrie changes for height {}, shard {}", height, shard_uid);
                 }
