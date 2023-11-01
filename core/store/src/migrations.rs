@@ -2,6 +2,7 @@ use crate::metadata::DbKind;
 use crate::trie::{TrieRefcountAddition, TrieRefcountSubtraction};
 use crate::{DBCol, Store, StoreUpdate, TrieChanges};
 use borsh::{BorshDeserialize, BorshSerialize};
+use indicatif::ParallelProgressIterator;
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
 use near_primitives::transaction::{ExecutionOutcomeWithIdAndProof, ExecutionOutcomeWithProof};
@@ -9,7 +10,6 @@ use near_primitives::types::StateRoot;
 use near_primitives::utils::get_outcome_id_block_hash;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU32;
 use tracing::info;
 
 pub struct BatchedStoreUpdate<'a> {
@@ -256,8 +256,6 @@ pub fn migrate_38_to_39(store: &Store) -> anyhow::Result<()> {
         deletions: Vec<LegacyTrieRefcountChange>,
     }
 
-    let total_migrated = AtomicU32::new(0);
-
     let migrate_for_prefix = |prefix: &[u8]| -> anyhow::Result<()> {
         let mut update = store.store_update();
         for result in store.iter_prefix(DBCol::TrieChanges, prefix) {
@@ -289,24 +287,15 @@ pub fn migrate_38_to_39(store: &Store) -> anyhow::Result<()> {
             update.set(DBCol::TrieChanges, &key, &borsh::to_vec(&new_value)?);
         }
         update.commit()?;
-        let migrated = total_migrated.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if migrated % 1024 == 0 {
-            info!(
-                target: "migrations",
-                "Migration progress: {} / 65536",
-                migrated
-            );
-        }
         Ok(())
     };
     let mut prefixes = Vec::new();
     for i in 0..=255u8 {
-        for j in 0..=255u8 {
-            prefixes.push([i, j]);
-        }
+        prefixes.push([i]);
     }
     prefixes
         .into_par_iter()
+        .progress()
         .map(|prefix| migrate_for_prefix(&prefix))
         .collect::<anyhow::Result<Vec<_>>>()?;
 

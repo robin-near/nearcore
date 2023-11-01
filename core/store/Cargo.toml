@@ -20,6 +20,7 @@ elastic-array.workspace = true
 enum-map.workspace = true
 fs2.workspace = true
 hex.workspace = true
+indicatif.workspace = true
 itoa.workspace = true
 itertools.workspace = true
 lru.workspace = true
