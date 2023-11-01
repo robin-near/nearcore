@@ -7,6 +7,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_epoch_manager::types::BlockHeaderInfo;
 use near_epoch_manager::{EpochManagerAdapter, RngSeed};
 use near_primitives::state_part::PartId;
+use near_store::test_utils::TestTriesBuilder;
 use num_rational::Ratio;
 
 use near_chain_configs::{ProtocolConfig, DEFAULT_GC_NUM_EPOCHS_TO_KEEP};
@@ -41,7 +42,7 @@ use near_primitives::views::{
     QueryRequest, QueryResponse, QueryResponseKind, ViewStateResult,
 };
 use near_store::{
-    set_genesis_hash, set_genesis_state_roots, DBCol, ShardTries, Store, StoreUpdate, Trie,
+    set_genesis_hash, set_genesis_state_roots, DBCol, ShardTries, StorageError,Store, StoreUpdate, Trie,
     TrieChanges, WrappedTrieChanges,
 };
 
@@ -334,7 +335,10 @@ impl KeyValueRuntime {
         let num_shards = epoch_manager.num_shards(&EpochId::default()).unwrap();
         let epoch_length =
             epoch_manager.get_epoch_config(&EpochId::default()).unwrap().epoch_length;
-        let tries = ShardTries::test(store.clone(), num_shards);
+        let tries = TestTriesBuilder::new()
+            .with_store(store.clone())
+            .with_shard_layout(0, num_shards)
+            .build();
         let mut initial_amounts = HashMap::new();
         for (i, validator_stake) in epoch_manager
             .validators_by_valset
@@ -1019,7 +1023,7 @@ impl RuntimeAdapter for KeyValueRuntime {
         &self,
         shard_id: ShardId,
         storage_config: RuntimeStorageConfig,
-        _height: BlockHeight,
+        height: BlockHeight,
         _block_timestamp: u64,
         _prev_block_hash: &CryptoHash,
         block_hash: &CryptoHash,
@@ -1172,6 +1176,7 @@ impl RuntimeAdapter for KeyValueRuntime {
                 TrieChanges::empty(state_root),
                 Default::default(),
                 *block_hash,
+                height,
             ),
             new_root: state_root,
             outcomes: tx_results,
@@ -1363,10 +1368,15 @@ impl RuntimeAdapter for KeyValueRuntime {
     fn apply_update_to_split_states(
         &self,
         _block_hash: &CryptoHash,
+        _block_height: BlockHeight,
         _state_roots: HashMap<ShardUId, StateRoot>,
         _next_shard_layout: &ShardLayout,
         _state_changes: StateChangesForSplitStates,
     ) -> Result<Vec<ApplySplitStateResult>, Error> {
         Ok(vec![])
+    }
+
+    fn load_mem_tries_on_startup(&self, _shard_uids: &[ShardUId]) -> Result<(), StorageError> {
+        Ok(())
     }
 }

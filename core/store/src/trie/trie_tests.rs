@@ -1,4 +1,4 @@
-use crate::test_utils::{create_tries_complex, gen_changes, simplify_changes, test_populate_trie};
+use crate::test_utils::{gen_changes, simplify_changes, test_populate_trie, TestTriesBuilder};
 use crate::trie::trie_storage::{TrieMemoryPartialStorage, TrieStorage};
 use crate::{PartialStorage, Trie, TrieUpdate};
 use assert_matches::assert_matches;
@@ -101,7 +101,7 @@ where
 fn test_reads_with_incomplete_storage() {
     let mut rng = rand::thread_rng();
     for _ in 0..50 {
-        let tries = create_tries_complex(1, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(1, 2).build();
         let shard_uid = ShardUId { version: 1, shard_id: 0 };
         let trie_changes = gen_changes(&mut rng, 20);
         let trie_changes = simplify_changes(&trie_changes);

@@ -3,7 +3,6 @@ use super::Trie;
 use crate::trie::{KeyLookupMode, TrieChanges};
 use crate::StorageError;
 use near_primitives::hash::CryptoHash;
-use near_primitives::state::ValueRef;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
     RawStateChange, RawStateChanges, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
@@ -75,11 +74,9 @@ impl TrieUpdate {
             }
         }
 
-        self.trie.get_ref(&key, mode).map(|option| {
-            option.map(|ValueRef { length, hash }| {
-                TrieUpdateValuePtr::HashAndSize(&self.trie, length, hash)
-            })
-        })
+        Ok(self.trie.get_ref(&key, mode)?.map(|value_ref| {
+            TrieUpdateValuePtr::HashAndSize(&self.trie, value_ref.length, value_ref.hash)
+        }))
     }
 
     pub fn get(&self, key: &TrieKey) -> Result<Option<Vec<u8>>, StorageError> {
@@ -169,7 +166,7 @@ impl crate::TrieAccess for TrieUpdate {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::{create_tries, create_tries_complex};
+    use crate::test_utils::{create_tries, TestTriesBuilder};
 
     use super::*;
     use crate::ShardUId;
@@ -182,7 +179,7 @@ mod tests {
 
     #[test]
     fn trie() {
-        let tries = create_tries_complex(SHARD_VERSION, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(SHARD_VERSION, 2).build();
         let root = Trie::EMPTY_ROOT;
         let mut trie_update = tries.new_trie_update(COMPLEX_SHARD_UID, root);
         trie_update.set(test_key(b"dog".to_vec()), b"puppy".to_vec());
@@ -209,7 +206,7 @@ mod tests {
 
     #[test]
     fn trie_remove() {
-        let tries = create_tries_complex(SHARD_VERSION, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(SHARD_VERSION, 2).build();
 
         // Delete non-existing element.
         let mut trie_update = tries.new_trie_update(COMPLEX_SHARD_UID, Trie::EMPTY_ROOT);

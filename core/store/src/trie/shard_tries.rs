@@ -1,28 +1,32 @@
+use super::mem::MemTries;
+use super::state_snapshot::{StateSnapshot, StateSnapshotConfig};
+use super::TrieRefcountSubtraction;
 use crate::flat::{FlatStorageManager, FlatStorageStatus};
 use crate::trie::config::TrieConfig;
+use crate::trie::mem::loading::load_trie_from_flat_state_and_delta;
+use crate::trie::mem::updating::apply_memtrie_changes;
 use crate::trie::prefetching_trie_storage::PrefetchingThreadsHandle;
 use crate::trie::trie_storage::{TrieCache, TrieCachingStorage};
 use crate::trie::{TrieRefcountAddition, POISONED_LOCK_ERR};
 use crate::{metrics, DBCol, PrefetchApi};
 use crate::{Store, StoreUpdate, Trie, TrieChanges, TrieUpdate};
-
 use near_primitives::errors::StorageError;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::{self, ShardUId, ShardVersion};
+use near_primitives::shard_layout::{self, ShardUId};
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{
-    NumShards, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
+    BlockHeight, RawStateChange, RawStateChangesWithTrieKey, StateChangeCause, StateRoot,
 };
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
-
-use super::state_snapshot::{StateSnapshot, StateSnapshotConfig};
-use super::TrieRefcountSubtraction;
+use tracing::info;
 
 struct ShardTriesInner {
     store: Store,
     trie_config: TrieConfig,
+    mem_tries: RwLock<HashMap<ShardUId, Arc<RwLock<MemTries>>>>,
     /// Cache reserved for client actor to use
     caches: RwLock<HashMap<ShardUId, TrieCache>>,
     /// Cache for readers.
@@ -56,6 +60,7 @@ impl ShardTries {
         ShardTries(Arc::new(ShardTriesInner {
             store,
             trie_config,
+            mem_tries: RwLock::new(HashMap::new()),
             caches: RwLock::new(caches),
             view_caches: RwLock::new(view_caches),
             flat_storage_manager,
@@ -63,29 +68,6 @@ impl ShardTries {
             state_snapshot: Arc::new(RwLock::new(None)),
             state_snapshot_config,
         }))
-    }
-
-    /// Create `ShardTries` with a fixed number of shards with shard version 0.
-    ///
-    /// If your test cares about the shard version, use `test_shard_version` instead.
-    pub fn test(store: Store, num_shards: NumShards) -> Self {
-        let shard_version = 0;
-        Self::test_shard_version(store, shard_version, num_shards)
-    }
-
-    pub fn test_shard_version(store: Store, version: ShardVersion, num_shards: NumShards) -> Self {
-        assert_ne!(0, num_shards);
-        let shard_uids: Vec<ShardUId> =
-            (0..num_shards as u32).map(|shard_id| ShardUId { shard_id, version }).collect();
-        let trie_config = TrieConfig::default();
-
-        ShardTries::new(
-            store.clone(),
-            trie_config,
-            &shard_uids,
-            FlatStorageManager::new(store),
-            StateSnapshotConfig::default(),
-        )
     }
 
     /// Create caches for all shards according to the trie config.
@@ -159,8 +141,8 @@ impl ShardTries {
         ));
         let flat_storage_chunk_view = block_hash
             .and_then(|block_hash| self.0.flat_storage_manager.chunk_view(shard_uid, block_hash));
-
-        Trie::new(storage, state_root, flat_storage_chunk_view)
+        let memtries = self.get_mem_tries(shard_uid);
+        Trie::new_with_memtries(storage, memtries, state_root, flat_storage_chunk_view)
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {
@@ -348,6 +330,29 @@ impl ShardTries {
         self.apply_all_inner(trie_changes, shard_uid, true, store_update)
     }
 
+    pub fn apply_memtrie_changes(
+        &self,
+        trie_changes: &TrieChanges,
+        shard_uid: ShardUId,
+        block_height: BlockHeight,
+    ) {
+        if let Some(memtries) = self.get_mem_tries(shard_uid) {
+            apply_memtrie_changes(
+                &mut memtries.write().unwrap(),
+                trie_changes
+                    .mem_trie_changes
+                    .as_ref()
+                    .expect("Memtrie changes must be present if memtrie is loaded"),
+                block_height,
+            );
+        } else {
+            assert!(
+                trie_changes.mem_trie_changes.is_none(),
+                "Memtrie changes must not be present if memtrie is not loaded"
+            );
+        }
+    }
+
     /// Returns the status of the given shard of flat storage in the state snapshot.
     /// `sync_prev_prev_hash` needs to match the block hash that identifies that snapshot.
     pub fn get_snapshot_flat_storage_status(
@@ -358,6 +363,59 @@ impl ShardTries {
         let (_store, manager) = self.get_state_snapshot(&sync_prev_prev_hash)?;
         Ok(manager.get_flat_storage_status(shard_uid))
     }
+
+    /// Should be called upon startup to load in-memory tries for enabled shards.
+    pub fn load_mem_tries_for_enabled_shards(
+        &self,
+        shard_uids: &[ShardUId],
+    ) -> Result<(), StorageError> {
+        let trie_config = &self.0.trie_config;
+        let shard_uids_to_load = shard_uids
+            .iter()
+            .copied()
+            .filter(|shard_uid| {
+                trie_config.load_mem_tries_for_all_shards
+                    || trie_config.load_mem_tries_for_shards.contains(shard_uid)
+            })
+            .collect::<Vec<_>>();
+        let store = self.0.store.clone();
+        info!(target: "memtrie", "Loading tries to memory for shards {:?}...", shard_uids);
+        shard_uids_to_load
+            .into_par_iter()
+            .map(|shard_uid| -> Result<(), StorageError> {
+                let mem_tries = load_trie_from_flat_state_and_delta(
+                    &store,
+                    shard_uid,
+                    trie_config.max_mem_tries_size_per_shard,
+                )?;
+                self.0
+                    .mem_tries
+                    .write()
+                    .unwrap()
+                    .insert(shard_uid, Arc::new(RwLock::new(mem_tries)));
+                Ok(())
+            })
+            .collect::<Vec<Result<_, _>>>()
+            .into_iter()
+            .collect::<Result<_, _>>()?;
+
+        info!(target: "memtrie", "Memtries loading complete for shards {:?}", shard_uids);
+        Ok(())
+    }
+
+    /// Retrieves the in-memory tries for the shard.
+    pub fn get_mem_tries(&self, shard_uid: ShardUId) -> Option<Arc<RwLock<MemTries>>> {
+        let guard = self.0.mem_tries.write().unwrap();
+        guard.get(&shard_uid).cloned()
+    }
+
+    /// Garbage collects the in-memory tries for the shard up to (and including) the given
+    /// height.
+    pub fn delete_memtrie_roots_up_to_height(&self, shard_uid: ShardUId, height: BlockHeight) {
+        if let Some(memtries) = self.get_mem_tries(shard_uid) {
+            memtries.write().unwrap().delete_until_height(height);
+        }
+    }
 }
 
 pub struct WrappedTrieChanges {
@@ -366,6 +424,7 @@ pub struct WrappedTrieChanges {
     trie_changes: TrieChanges,
     state_changes: Vec<RawStateChangesWithTrieKey>,
     block_hash: CryptoHash,
+    block_height: BlockHeight,
 }
 
 // Partial implementation. Skips `tries` due to its complexity and
@@ -378,6 +437,7 @@ impl std::fmt::Debug for WrappedTrieChanges {
             .field("trie_changes", &"<not shown>")
             .field("state_changes", &"<not shown>")
             .field("block_hash", &self.block_hash)
+            .field("block_height", &self.block_height)
             .finish()
     }
 }
@@ -389,12 +449,24 @@ impl WrappedTrieChanges {
         trie_changes: TrieChanges,
         state_changes: Vec<RawStateChangesWithTrieKey>,
         block_hash: CryptoHash,
+        block_height: BlockHeight,
     ) -> Self {
-        WrappedTrieChanges { tries, shard_uid, trie_changes, state_changes, block_hash }
+        WrappedTrieChanges {
+            tries,
+            shard_uid,
+            trie_changes,
+            state_changes,
+            block_hash,
+            block_height,
+        }
     }
 
     pub fn state_changes(&self) -> &[RawStateChangesWithTrieKey] {
         &self.state_changes
+    }
+
+    pub fn apply_mem_changes(&self) {
+        self.tries.apply_memtrie_changes(&self.trie_changes, self.shard_uid, self.block_height);
     }
 
     /// Save insertions of trie nodes into Store.
@@ -684,6 +756,9 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries_for_shards: Vec::new(),
+            load_mem_tries_for_all_shards: false,
+            max_mem_tries_size_per_shard: 0,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();
@@ -734,6 +809,9 @@ mod test {
             enable_receipt_prefetching: false,
             sweat_prefetch_receivers: Vec::new(),
             sweat_prefetch_senders: Vec::new(),
+            load_mem_tries_for_shards: Vec::new(),
+            load_mem_tries_for_all_shards: false,
+            max_mem_tries_size_per_shard: 0,
         };
         let shard_uids = Vec::from([ShardUId { shard_id: 0, version: 0 }]);
         let shard_uid = *shard_uids.first().unwrap();

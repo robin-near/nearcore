@@ -1,5 +1,7 @@
 use self::accounting_cache::TrieAccountingCache;
+use self::mem::lookup::memtrie_lookup;
 use self::mem::updating::{UpdatedMemTrieNode, UpdatedMemTrieNodeId};
+use self::mem::MemTries;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
 use crate::flat::{FlatStateChanges, FlatStorageChunkView};
@@ -25,7 +27,7 @@ use near_primitives::state_record::StateRecord;
 use near_primitives::trie_key::trie_key_parsers::parse_account_id_prefix;
 use near_primitives::trie_key::TrieKey;
 pub use near_primitives::types::TrieNodesCount;
-use near_primitives::types::{AccountId, BlockHeight, StateRoot, StateRootNode};
+use near_primitives::types::{AccountId, StateRoot, StateRootNode};
 use near_vm_runner::ContractCode;
 pub use raw_node::{Children, RawTrieNode, RawTrieNodeWithSize};
 use std::cell::RefCell;
@@ -34,7 +36,7 @@ use std::fmt::Write;
 use std::hash::Hash;
 use std::rc::Rc;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub mod accounting_cache;
 mod config;
@@ -330,6 +332,7 @@ impl std::fmt::Debug for TrieNode {
 
 pub struct Trie {
     storage: Rc<dyn TrieStorage>,
+    memtries: Option<Arc<RwLock<MemTries>>>,
     root: StateRoot,
     /// If present, flat storage is used to look up keys (if asked for).
     /// Otherwise, we would crawl through the trie.
@@ -486,7 +489,6 @@ impl TrieRefcountDeltaMap {
 pub struct MemTrieChanges {
     node_ids_with_hashes: Vec<(UpdatedMemTrieNodeId, CryptoHash)>,
     updated_nodes: Vec<Option<UpdatedMemTrieNode>>,
-    block_height: BlockHeight,
 }
 
 ///
@@ -569,6 +571,15 @@ impl Trie {
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
     ) -> Self {
+        Self::new_with_memtries(storage, None, root, flat_storage_chunk_view)
+    }
+
+    pub fn new_with_memtries(
+        storage: Rc<dyn TrieStorage>,
+        memtries: Option<Arc<RwLock<MemTries>>>,
+        root: StateRoot,
+        flat_storage_chunk_view: Option<FlatStorageChunkView>,
+    ) -> Self {
         let accounting_cache = match storage.as_caching_storage() {
             Some(caching_storage) => RefCell::new(TrieAccountingCache::new(Some((
                 caching_storage.shard_uid,
@@ -578,6 +589,7 @@ impl Trie {
         };
         Trie {
             storage,
+            memtries,
             root,
             charge_gas_for_trie_node_access: flat_storage_chunk_view.is_none(),
             flat_storage_chunk_view,
@@ -1108,20 +1120,25 @@ impl Trie {
             // as they are needed to prove the value. Also, it's important that this lookup
             // is done even if the key was not found, because intermediate trie nodes may be
             // needed to prove the non-existence of the key.
-            let value_ref_from_trie =
-                self.lookup_from_state_column(NibbleSlice::new(key), false)?;
-            match &value {
-                Some(FlatStateValue::Inlined(value)) => {
-                    assert!(value_ref_from_trie.is_some());
-                    let value_from_trie =
-                        self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
-                    assert_eq!(&value_from_trie, value);
-                }
-                Some(FlatStateValue::Ref(value_ref)) => {
-                    assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
-                }
-                None => {
-                    assert!(value_ref_from_trie.is_none());
+            if self.memtries.is_some() {
+                let value_from_trie = self.lookup_from_memory(key, ref_only, false)?;
+                assert_eq!(&value_from_trie, &value);
+            } else {
+                let value_ref_from_trie =
+                    self.lookup_from_state_column(NibbleSlice::new(key), false)?;
+                match &value {
+                    Some(FlatStateValue::Inlined(value)) => {
+                        assert!(value_ref_from_trie.is_some());
+                        let value_from_trie =
+                            self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
+                        assert_eq!(&value_from_trie, value);
+                    }
+                    Some(FlatStateValue::Ref(value_ref)) => {
+                        assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
+                    }
+                    None => {
+                        assert!(value_ref_from_trie.is_none());
+                    }
                 }
             }
         } else {
@@ -1189,6 +1206,42 @@ impl Trie {
                     }
                 }
             };
+        }
+    }
+
+    fn lookup_from_memory(
+        &self,
+        key: &[u8],
+        ref_only: bool,
+        use_accounting_cache: bool,
+    ) -> Result<Option<FlatStateValue>, StorageError> {
+        if self.root == Self::EMPTY_ROOT {
+            return Ok(None);
+        }
+        let lock = self.memtries.as_ref().unwrap().read().unwrap();
+        let root = lock.get_root(&self.root).ok_or_else(|| {
+            StorageError::StorageInconsistentState(format!(
+                "Failed to find root node {} in memtrie",
+                self.root
+            ))
+        })?;
+
+        let result = memtrie_lookup(root, key, |is_leaf, hash, data| {
+            if ref_only && is_leaf {
+                return;
+            }
+            let data: Arc<[u8]> = data.into();
+            if use_accounting_cache || is_leaf {
+                self.accounting_cache.borrow_mut().retroactively_account(hash, data.clone());
+            }
+            if let Some(recorder) = &self.recorder {
+                recorder.borrow_mut().record(&hash, data);
+            }
+        });
+        if ref_only {
+            Ok(result.map(|value| FlatStateValue::Ref(value.to_value_ref())))
+        } else {
+            Ok(result)
         }
     }
 
@@ -1285,7 +1338,11 @@ impl Trie {
             mode == KeyLookupMode::FlatStorage && self.flat_storage_chunk_view.is_some();
         let charge_gas_for_trie_node_access =
             mode == KeyLookupMode::Trie || self.charge_gas_for_trie_node_access;
-        if use_flat_storage {
+        if self.memtries.is_some() {
+            Ok(self
+                .lookup_from_memory(key, true, charge_gas_for_trie_node_access)?
+                .map(|value| value.to_value_ref()))
+        } else if use_flat_storage {
             Ok(self.lookup_from_flat_storage(key, true)?.map(|value| value.to_value_ref()))
         } else {
             self.lookup_from_state_column(NibbleSlice::new(key), charge_gas_for_trie_node_access)
@@ -1295,8 +1352,10 @@ impl Trie {
     /// Retrieves a value, which may or may not be the complete value, for the given key.
     /// If the full value could be obtained cheaply it is returned; otherwise only the reference
     /// is returned.
-    fn get_flat_value(&self, key: &[u8]) -> Result<Option<FlatStateValue>, StorageError> {
-        if self.flat_storage_chunk_view.is_some() {
+    pub fn get_flat_value(&self, key: &[u8]) -> Result<Option<FlatStateValue>, StorageError> {
+        if self.memtries.is_some() {
+            self.lookup_from_memory(key, false, self.charge_gas_for_trie_node_access)
+        } else if self.flat_storage_chunk_view.is_some() {
             self.lookup_from_flat_storage(key, false)
         } else {
             Ok(self
@@ -1321,21 +1380,38 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
-        let mut memory = NodesStorage::new();
-        let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
-        for (key, value) in changes {
-            let key = NibbleSlice::new(&key);
-            root_node = match value {
-                Some(arr) => self.insert(&mut memory, root_node, key, arr),
-                None => self.delete(&mut memory, root_node, key),
-            }?;
-        }
+        match &self.memtries {
+            Some(memtries) => {
+                let guard = memtries.read().unwrap();
+                let mut trie_update = guard.update(self.root, true)?;
+                for (key, value) in changes {
+                    match value {
+                        Some(arr) => {
+                            trie_update.insert(&key, arr);
+                        }
+                        None => trie_update.delete(&key),
+                    }
+                }
+                Ok(trie_update.to_trie_changes())
+            }
+            None => {
+                let mut memory = NodesStorage::new();
+                let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
+                for (key, value) in changes {
+                    let key = NibbleSlice::new(&key);
+                    root_node = match value {
+                        Some(arr) => self.insert(&mut memory, root_node, key, arr),
+                        None => self.delete(&mut memory, root_node, key),
+                    }?;
+                }
 
-        #[cfg(test)]
-        {
-            self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+                #[cfg(test)]
+                {
+                    self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+                }
+                Trie::flatten_nodes(&self.root, memory, root_node)
+            }
         }
-        Trie::flatten_nodes(&self.root, memory, root_node)
     }
 
     pub fn iter<'a>(&'a self) -> Result<TrieIterator<'a>, StorageError> {
@@ -1401,8 +1477,8 @@ mod tests {
     use rand::Rng;
 
     use crate::test_utils::{
-        create_test_store, create_tries, create_tries_complex, gen_changes, simplify_changes,
-        test_populate_trie,
+        create_test_store, create_tries, gen_changes, simplify_changes, test_populate_trie,
+        TestTriesBuilder,
     };
     use crate::{DBCol, MissingTrieValueContext};
 
@@ -1434,7 +1510,7 @@ mod tests {
     #[test]
     fn test_basic_trie() {
         // test trie version > 0
-        let tries = create_tries_complex(SHARD_VERSION, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(SHARD_VERSION, 2).build();
         let shard_uid = ShardUId { version: SHARD_VERSION, shard_id: 0 };
         let trie = tries.get_trie_for_shard(shard_uid, Trie::EMPTY_ROOT);
         assert_eq!(trie.get(&[122]), Ok(None));
@@ -1454,7 +1530,7 @@ mod tests {
 
     #[test]
     fn test_trie_iter() {
-        let tries = create_tries_complex(SHARD_VERSION, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(SHARD_VERSION, 2).build();
         let shard_uid = ShardUId { version: SHARD_VERSION, shard_id: 0 };
         let pairs = vec![
             (b"a".to_vec(), Some(b"111".to_vec())),
@@ -1488,7 +1564,7 @@ mod tests {
 
     #[test]
     fn test_trie_leaf_into_branch() {
-        let tries = create_tries_complex(SHARD_VERSION, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(SHARD_VERSION, 2).build();
         let shard_uid = ShardUId { version: SHARD_VERSION, shard_id: 0 };
         let changes = vec![
             (b"dog".to_vec(), Some(b"puppy".to_vec())),
@@ -1697,7 +1773,7 @@ mod tests {
     #[test]
     fn test_trie_restart() {
         let store = create_test_store();
-        let tries = ShardTries::test(store.clone(), 1);
+        let tries = TestTriesBuilder::new().with_store(store.clone()).build();
         let empty_root = Trie::EMPTY_ROOT;
         let changes = vec![
             (b"doge".to_vec(), Some(b"coin".to_vec())),
@@ -1709,7 +1785,7 @@ mod tests {
         ];
         let root = test_populate_trie(&tries, &empty_root, ShardUId::single_shard(), changes);
 
-        let tries2 = ShardTries::test(store, 1);
+        let tries2 = TestTriesBuilder::new().with_store(store).build();
         let trie2 = tries2.get_trie_for_shard(ShardUId::single_shard(), root);
         assert_eq!(trie2.get(b"doge"), Ok(Some(b"coin".to_vec())));
     }
@@ -1717,8 +1793,7 @@ mod tests {
     // TODO: somehow also test that we don't record unnecessary nodes
     #[test]
     fn test_trie_recording_reads() {
-        let store = create_test_store();
-        let tries = ShardTries::test(store, 1);
+        let tries = TestTriesBuilder::new().build();
         let empty_root = Trie::EMPTY_ROOT;
         let changes = vec![
             (b"doge".to_vec(), Some(b"coin".to_vec())),
@@ -1750,8 +1825,7 @@ mod tests {
 
     #[test]
     fn test_trie_recording_reads_update() {
-        let store = create_test_store();
-        let tries = ShardTries::test(store, 1);
+        let tries = TestTriesBuilder::new().build();
         let empty_root = Trie::EMPTY_ROOT;
         let changes = vec![
             (b"doge".to_vec(), Some(b"coin".to_vec())),
@@ -1786,7 +1860,7 @@ mod tests {
     #[test]
     fn test_dump_load_trie() {
         let store = create_test_store();
-        let tries = ShardTries::test(store.clone(), 1);
+        let tries = TestTriesBuilder::new().with_store(store.clone()).build();
         let empty_root = Trie::EMPTY_ROOT;
         let changes = vec![
             (b"doge".to_vec(), Some(b"coin".to_vec())),
@@ -1797,7 +1871,7 @@ mod tests {
         store.save_state_to_file(&dir.path().join("test.bin")).unwrap();
         let store2 = create_test_store();
         store2.load_state_from_file(&dir.path().join("test.bin")).unwrap();
-        let tries2 = ShardTries::test(store2, 1);
+        let tries2 = TestTriesBuilder::new().with_store(store2).build();
         let trie2 = tries2.get_trie_for_shard(ShardUId::single_shard(), root);
         assert_eq!(trie2.get(b"doge").unwrap().unwrap(), b"coin");
     }

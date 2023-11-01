@@ -433,7 +433,7 @@ mod tests {
     use rand::Rng;
 
     use crate::test_utils::{
-        create_tries, create_tries_complex, gen_changes, simplify_changes, test_populate_trie,
+        create_tries, gen_changes, simplify_changes, test_populate_trie, TestTriesBuilder,
     };
     use crate::trie::iterator::IterStep;
     use crate::trie::nibble_slice::NibbleSlice;
@@ -613,7 +613,7 @@ mod tests {
     fn gen_random_trie(
         rng: &mut rand::rngs::ThreadRng,
     ) -> (Vec<(Vec<u8>, Option<Vec<u8>>)>, BTreeMap<Vec<u8>, Vec<u8>>, Trie) {
-        let tries = create_tries_complex(1, 2);
+        let tries = TestTriesBuilder::new().with_shard_layout(1, 2).build();
         let shard_uid = ShardUId { version: 1, shard_id: 0 };
         let trie_changes = gen_changes(rng, 10);
         let trie_changes = simplify_changes(&trie_changes);
