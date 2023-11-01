@@ -7,7 +7,9 @@ use near_primitives::state::FlatStateValue;
 use near_primitives::transaction::{ExecutionOutcomeWithIdAndProof, ExecutionOutcomeWithProof};
 use near_primitives::types::StateRoot;
 use near_primitives::utils::get_outcome_id_block_hash;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use tracing::info;
 
 pub struct BatchedStoreUpdate<'a> {
@@ -254,36 +256,59 @@ pub fn migrate_38_to_39(store: &Store) -> anyhow::Result<()> {
         deletions: Vec<LegacyTrieRefcountChange>,
     }
 
-    let mut update = store.store_update();
-    update.delete_all(DBCol::TrieChanges);
-    for result in store.iter(DBCol::TrieChanges) {
-        let (key, old_value) = result?;
-        let LegacyTrieChanges { old_root, new_root, insertions, deletions } =
-            borsh::from_slice(&old_value)?;
-        let new_value = TrieChanges {
-            old_root,
-            new_root,
-            insertions: insertions
-                .into_iter()
-                .map(
-                    |LegacyTrieRefcountChange {
-                         trie_node_or_value_hash,
-                         trie_node_or_value,
-                         rc,
-                     }| {
-                        TrieRefcountAddition { trie_node_or_value_hash, trie_node_or_value, rc }
-                    },
-                )
-                .collect(),
-            deletions: deletions
-                .into_iter()
-                .map(|LegacyTrieRefcountChange { trie_node_or_value_hash, rc, .. }| {
-                    TrieRefcountSubtraction { trie_node_or_value_hash, rc }
-                })
-                .collect(),
-        };
-        update.set(DBCol::TrieChanges, &key, &borsh::to_vec(&new_value)?);
+    let total_migrated = AtomicU32::new(0);
+
+    let migrate_for_prefix = |prefix: &[u8]| -> anyhow::Result<()> {
+        let mut update = store.store_update();
+        for result in store.iter_prefix(DBCol::TrieChanges, prefix) {
+            let (key, old_value) = result?;
+            let LegacyTrieChanges { old_root, new_root, insertions, deletions } =
+                borsh::from_slice(&old_value)?;
+            let new_value = TrieChanges {
+                old_root,
+                new_root,
+                insertions: insertions
+                    .into_iter()
+                    .map(
+                        |LegacyTrieRefcountChange {
+                             trie_node_or_value_hash,
+                             trie_node_or_value,
+                             rc,
+                         }| {
+                            TrieRefcountAddition { trie_node_or_value_hash, trie_node_or_value, rc }
+                        },
+                    )
+                    .collect(),
+                deletions: deletions
+                    .into_iter()
+                    .map(|LegacyTrieRefcountChange { trie_node_or_value_hash, rc, .. }| {
+                        TrieRefcountSubtraction { trie_node_or_value_hash, rc }
+                    })
+                    .collect(),
+            };
+            update.set(DBCol::TrieChanges, &key, &borsh::to_vec(&new_value)?);
+        }
+        update.commit()?;
+        let migrated = total_migrated.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if migrated % 1024 == 0 {
+            info!(
+                target: "migrations",
+                "Migration progress: {} / 65536",
+                migrated
+            );
+        }
+        Ok(())
+    };
+    let mut prefixes = Vec::new();
+    for i in 0..=255u8 {
+        for j in 0..=255u8 {
+            prefixes.push([i, j]);
+        }
     }
-    update.commit()?;
+    prefixes
+        .into_par_iter()
+        .map(|prefix| migrate_for_prefix(&prefix))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
     Ok(())
 }
