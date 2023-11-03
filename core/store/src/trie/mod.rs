@@ -601,8 +601,12 @@ impl Trie {
     /// Makes a new trie that has everything the same except that access
     /// through that trie accumulates a state proof for all nodes accessed.
     pub fn recording_reads(&self) -> Self {
-        let mut trie =
-            Self::new(self.storage.clone(), self.root, self.flat_storage_chunk_view.clone());
+        let mut trie = Self::new_with_memtries(
+            self.storage.clone(),
+            self.memtries.clone(),
+            self.root,
+            self.flat_storage_chunk_view.clone(),
+        );
         trie.recorder = Some(RefCell::new(TrieRecorder::new()));
         trie
     }
@@ -1116,30 +1120,22 @@ impl Trie {
             value = value.map(|value| FlatStateValue::Ref(value.to_value_ref()));
         }
         if self.recorder.is_some() {
-            // If recording, we need to look up in the trie as well to record the trie nodes,
-            // as they are needed to prove the value. Also, it's important that this lookup
-            // is done even if the key was not found, because intermediate trie nodes may be
-            // needed to prove the non-existence of the key.
-            if self.memtries.is_some() {
-                // If in-memory trie exists, use that, as it is much faster.
-                let value_from_trie = self.lookup_from_memory(key, ref_only, false)?;
-                assert_eq!(&value_from_trie, &value);
-            } else {
-                let value_ref_from_trie =
-                    self.lookup_from_state_column(NibbleSlice::new(key), false)?;
-                match &value {
-                    Some(FlatStateValue::Inlined(value)) => {
-                        assert!(value_ref_from_trie.is_some());
-                        let value_from_trie =
-                            self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
-                        assert_eq!(&value_from_trie, value);
-                    }
-                    Some(FlatStateValue::Ref(value_ref)) => {
-                        assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
-                    }
-                    None => {
-                        assert!(value_ref_from_trie.is_none());
-                    }
+            // Note here that we don't need to check if we have memtries, because if
+            // we're inside this function at all, we don't have memtries.
+            let value_ref_from_trie =
+                self.lookup_from_state_column(NibbleSlice::new(key), false)?;
+            match &value {
+                Some(FlatStateValue::Inlined(value)) => {
+                    assert!(value_ref_from_trie.is_some());
+                    let value_from_trie =
+                        self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
+                    assert_eq!(&value_from_trie, value);
+                }
+                Some(FlatStateValue::Ref(value_ref)) => {
+                    assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
+                }
+                None => {
+                    assert!(value_ref_from_trie.is_none());
                 }
             }
         } else {
@@ -1210,13 +1206,30 @@ impl Trie {
         }
     }
 
-    /// Looks up the given key from in-memory trie. This function has the same semantics in terms of
-    /// its parameters and its handling of gas accounting, as `lookup_from_flat_storage`.
+    /// Retrieves the value (inlined or reference) for the given key, from the in-memory trie.
+    /// In general, in-memory tries may inline a value if the value is short, but otherwise
+    /// it would defer the storage of the value to the state column. This method will
+    /// return whichever the in-memory trie has.
+    ///
+    /// If an inlined value is returned, this method will charge the corresponding gas
+    /// as if the value were accessed from the trie storage. It will also insert the
+    /// value into the accounting cache, as well as recording the access to the value
+    /// if recording is enabled. In other words, if an inlined value is returned the
+    /// behavior is equivalent to if the trie were used to access the value reference
+    /// and then the reference were used to look up the full value.
+    ///
+    /// If `ref_only` is true, even if the inlined value is stored in memory, we
+    /// would still convert it to a reference. This is useful if making an access for
+    /// the value (thereby charging gas for it) is not desired.
+    ///
+    /// `charge_gas_for_trie_node_access` is used to control whether node accesses
+    /// incur any gas. Note that a value access (if an inlined value were returned)
+    /// always incurs gas.
     fn lookup_from_memory(
         &self,
         key: &[u8],
         ref_only: bool,
-        use_accounting_cache: bool,
+        charge_gas_for_trie_node_access: bool,
     ) -> Result<Option<FlatStateValue>, StorageError> {
         if self.root == Self::EMPTY_ROOT {
             return Ok(None);
@@ -1235,7 +1248,7 @@ impl Trie {
                 return;
             }
             let data: Arc<[u8]> = data.into();
-            if use_accounting_cache || is_value {
+            if charge_gas_for_trie_node_access || is_value {
                 // Access to value always charges gas.
                 self.accounting_cache.borrow_mut().retroactively_account(hash, data.clone());
             }
