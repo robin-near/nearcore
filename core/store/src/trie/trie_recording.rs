@@ -31,9 +31,10 @@ mod trie_recording_tests {
         gen_larger_changes, simplify_changes, test_populate_flat_storage, test_populate_trie,
         TestTriesBuilder,
     };
-    use crate::Trie;
+    use crate::{DBCol, Trie};
     use near_primitives::hash::CryptoHash;
-    use near_primitives::shard_layout::ShardUId;
+    use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
+    use near_primitives::types::chunk_extra::ChunkExtra;
     use near_vm_runner::logic::TrieNodesCount;
     use std::collections::HashMap;
 
@@ -249,5 +250,155 @@ mod trie_recording_tests {
     #[test]
     fn test_trie_recording_consistency_with_flat_storage_with_accounting_cache_and_missing_keys() {
         test_trie_recording_consistency_with_flat_storage(true, true);
+    }
+
+    // Do the same test but now with in-memory tries. Because the lookup behavior on the replaying
+    // code path is the same as the test with flat storage, the by-product of these two test suites
+    // is that we also compare the behavior between in-memory trie access and flat-storage trie
+    // access.
+    fn test_trie_recording_consistency_with_in_memory_tries(
+        enable_accounting_cache: bool,
+        use_missing_keys: bool,
+    ) {
+        let mut rng = rand::thread_rng();
+        for _ in 0..NUM_ITERATIONS_PER_TEST {
+            let tries_for_building = TestTriesBuilder::new().with_flat_storage().build();
+
+            let shard_uid = ShardUId::single_shard();
+            let trie_changes = gen_larger_changes(&mut rng, 50);
+            let trie_changes = simplify_changes(&trie_changes);
+            if trie_changes.is_empty() {
+                continue;
+            }
+            let state_root = test_populate_trie(
+                &tries_for_building,
+                &Trie::EMPTY_ROOT,
+                shard_uid,
+                trie_changes.clone(),
+            );
+            test_populate_flat_storage(
+                &tries_for_building,
+                shard_uid,
+                &CryptoHash::default(),
+                &CryptoHash::default(),
+                &trie_changes,
+            );
+
+            // ChunkExtra is needed for in-memory trie loading code to query state roots.
+            let chunk_extra =
+                ChunkExtra::new(&state_root, CryptoHash::default(), Vec::new(), 0, 0, 0);
+            let mut update_for_chunk_extra = tries_for_building.store_update();
+            update_for_chunk_extra
+                .set_ser(
+                    DBCol::ChunkExtra,
+                    &get_block_shard_uid(&CryptoHash::default(), &shard_uid),
+                    &chunk_extra,
+                )
+                .unwrap();
+            update_for_chunk_extra.commit().unwrap();
+
+            let data_in_trie = trie_changes
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone().unwrap()))
+                .collect::<HashMap<_, _>>();
+            let keys_to_test_with = trie_changes
+                .iter()
+                .map(|(key, _)| {
+                    let mut key = key.clone();
+                    if use_missing_keys {
+                        key.push(100);
+                    }
+                    key
+                })
+                .collect::<Vec<_>>();
+
+            let tries = TestTriesBuilder::new()
+                .with_store(tries_for_building.get_store())
+                .with_flat_storage()
+                .with_in_memory_tries()
+                .build();
+
+            // First, check that the trie is using flat storage, so that counters are all zero.
+            // Only use get_ref(), because get() will actually dereference values which can
+            // cause trie reads.
+            let trie = tries.get_trie_with_block_hash_for_shard(
+                shard_uid,
+                state_root,
+                &CryptoHash::default(),
+                false,
+            );
+            for key in &keys_to_test_with {
+                trie.get_ref(&key, crate::KeyLookupMode::FlatStorage).unwrap();
+            }
+            assert_eq!(trie.get_trie_nodes_count(), TrieNodesCount { db_reads: 0, mem_reads: 0 });
+
+            // Now, let's capture the baseline node counts - this is what will happen
+            // in production.
+            let trie = tries.get_trie_with_block_hash_for_shard(
+                shard_uid,
+                state_root,
+                &CryptoHash::default(),
+                false,
+            );
+            trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
+            for key in &keys_to_test_with {
+                assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            let baseline_trie_nodes_count = trie.get_trie_nodes_count();
+            println!("Baseline trie nodes count: {:?}", baseline_trie_nodes_count);
+
+            // Let's do this again, but this time recording reads. We'll make sure
+            // the counters are exactly the same even when we're recording.
+            let trie = tries
+                .get_trie_with_block_hash_for_shard(
+                    shard_uid,
+                    state_root,
+                    &CryptoHash::default(),
+                    false,
+                )
+                .recording_reads();
+            trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
+            for key in &keys_to_test_with {
+                assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
+
+            // Now, let's check that when doing the same lookups with the captured partial storage,
+            // we still get the same counters.
+            let partial_storage = trie.recorded_storage().unwrap();
+            println!(
+                "Partial storage has {} nodes from {} entries",
+                partial_storage.nodes.len(),
+                trie_changes.len()
+            );
+            let trie = Trie::from_recorded_storage(partial_storage, state_root, true);
+            trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
+            for key in &keys_to_test_with {
+                assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
+        }
+    }
+
+    #[test]
+    fn test_trie_recording_consistency_with_in_memory_tries_no_accounting_cache() {
+        test_trie_recording_consistency_with_in_memory_tries(false, false);
+    }
+
+    #[test]
+    fn test_trie_recording_consistency_with_in_memory_tries_with_accounting_cache() {
+        test_trie_recording_consistency_with_in_memory_tries(true, false);
+    }
+
+    #[test]
+    fn test_trie_recording_consistency_with_in_memory_tries_no_accounting_cache_with_missing_keys()
+    {
+        test_trie_recording_consistency_with_in_memory_tries(false, true);
+    }
+
+    #[test]
+    fn test_trie_recording_consistency_with_in_memory_tries_with_accounting_cache_and_missing_keys()
+    {
+        test_trie_recording_consistency_with_in_memory_tries(true, true);
     }
 }

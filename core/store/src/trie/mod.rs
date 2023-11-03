@@ -1,5 +1,7 @@
 use self::accounting_cache::TrieAccountingCache;
+use self::mem::lookup::memtrie_lookup;
 use self::mem::updating::{UpdatedMemTrieNode, UpdatedMemTrieNodeId};
+use self::mem::MemTries;
 use self::trie_recording::TrieRecorder;
 use self::trie_storage::TrieMemoryPartialStorage;
 use crate::flat::{FlatStateChanges, FlatStorageChunkView};
@@ -34,7 +36,7 @@ use std::fmt::Write;
 use std::hash::Hash;
 use std::rc::Rc;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub mod accounting_cache;
 mod config;
@@ -330,6 +332,7 @@ impl std::fmt::Debug for TrieNode {
 
 pub struct Trie {
     storage: Rc<dyn TrieStorage>,
+    memtries: Option<Arc<RwLock<MemTries>>>,
     root: StateRoot,
     /// If present, flat storage is used to look up keys (if asked for).
     /// Otherwise, we would crawl through the trie.
@@ -568,6 +571,15 @@ impl Trie {
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
     ) -> Self {
+        Self::new_with_memtries(storage, None, root, flat_storage_chunk_view)
+    }
+
+    pub fn new_with_memtries(
+        storage: Rc<dyn TrieStorage>,
+        memtries: Option<Arc<RwLock<MemTries>>>,
+        root: StateRoot,
+        flat_storage_chunk_view: Option<FlatStorageChunkView>,
+    ) -> Self {
         let accounting_cache = match storage.as_caching_storage() {
             Some(caching_storage) => RefCell::new(TrieAccountingCache::new(Some((
                 caching_storage.shard_uid,
@@ -577,6 +589,7 @@ impl Trie {
         };
         Trie {
             storage,
+            memtries,
             root,
             charge_gas_for_trie_node_access: flat_storage_chunk_view.is_none(),
             flat_storage_chunk_view,
@@ -1107,20 +1120,26 @@ impl Trie {
             // as they are needed to prove the value. Also, it's important that this lookup
             // is done even if the key was not found, because intermediate trie nodes may be
             // needed to prove the non-existence of the key.
-            let value_ref_from_trie =
-                self.lookup_from_state_column(NibbleSlice::new(key), false)?;
-            match &value {
-                Some(FlatStateValue::Inlined(value)) => {
-                    assert!(value_ref_from_trie.is_some());
-                    let value_from_trie =
-                        self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
-                    assert_eq!(&value_from_trie, value);
-                }
-                Some(FlatStateValue::Ref(value_ref)) => {
-                    assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
-                }
-                None => {
-                    assert!(value_ref_from_trie.is_none());
+            if self.memtries.is_some() {
+                // If in-memory trie exists, use that, as it is much faster.
+                let value_from_trie = self.lookup_from_memory(key, ref_only, false)?;
+                assert_eq!(&value_from_trie, &value);
+            } else {
+                let value_ref_from_trie =
+                    self.lookup_from_state_column(NibbleSlice::new(key), false)?;
+                match &value {
+                    Some(FlatStateValue::Inlined(value)) => {
+                        assert!(value_ref_from_trie.is_some());
+                        let value_from_trie =
+                            self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
+                        assert_eq!(&value_from_trie, value);
+                    }
+                    Some(FlatStateValue::Ref(value_ref)) => {
+                        assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
+                    }
+                    None => {
+                        assert!(value_ref_from_trie.is_none());
+                    }
                 }
             }
         } else {
@@ -1188,6 +1207,47 @@ impl Trie {
                     }
                 }
             };
+        }
+    }
+
+    /// Looks up the given key from in-memory trie. This function has the same semantics in terms of
+    /// its parameters and its handling of gas accounting, as `lookup_from_flat_storage`.
+    fn lookup_from_memory(
+        &self,
+        key: &[u8],
+        ref_only: bool,
+        use_accounting_cache: bool,
+    ) -> Result<Option<FlatStateValue>, StorageError> {
+        if self.root == Self::EMPTY_ROOT {
+            return Ok(None);
+        }
+        let lock = self.memtries.as_ref().unwrap().read().unwrap();
+        let root = lock.get_root(&self.root).ok_or_else(|| {
+            StorageError::StorageInconsistentState(format!(
+                "Failed to find root node {} in memtrie",
+                self.root
+            ))
+        })?;
+
+        let result = memtrie_lookup(root, key, |is_value, hash, data| {
+            if ref_only && is_value {
+                // If we only want the ref, then ignore access of the value.
+                return;
+            }
+            let data: Arc<[u8]> = data.into();
+            if use_accounting_cache || is_value {
+                // Access to value always charges gas.
+                self.accounting_cache.borrow_mut().retroactively_account(hash, data.clone());
+            }
+            if let Some(recorder) = &self.recorder {
+                // Any node accessed should be recorded.
+                recorder.borrow_mut().record(&hash, data);
+            }
+        });
+        if ref_only {
+            Ok(result.map(|value| FlatStateValue::Ref(value.to_value_ref())))
+        } else {
+            Ok(result)
         }
     }
 
@@ -1284,7 +1344,12 @@ impl Trie {
             mode == KeyLookupMode::FlatStorage && self.flat_storage_chunk_view.is_some();
         let charge_gas_for_trie_node_access =
             mode == KeyLookupMode::Trie || self.charge_gas_for_trie_node_access;
-        if use_flat_storage {
+        if self.memtries.is_some() {
+            // If in-memory trie exists, always look up from it first because it's the fastest.
+            Ok(self
+                .lookup_from_memory(key, true, charge_gas_for_trie_node_access)?
+                .map(|value| value.to_value_ref()))
+        } else if use_flat_storage {
             Ok(self.lookup_from_flat_storage(key, true)?.map(|value| value.to_value_ref()))
         } else {
             self.lookup_from_state_column(NibbleSlice::new(key), charge_gas_for_trie_node_access)
@@ -1294,8 +1359,11 @@ impl Trie {
     /// Retrieves a value, which may or may not be the complete value, for the given key.
     /// If the full value could be obtained cheaply it is returned; otherwise only the reference
     /// is returned.
-    fn get_flat_value(&self, key: &[u8]) -> Result<Option<FlatStateValue>, StorageError> {
-        if self.flat_storage_chunk_view.is_some() {
+    pub fn get_flat_value(&self, key: &[u8]) -> Result<Option<FlatStateValue>, StorageError> {
+        if self.memtries.is_some() {
+            // If in-memory trie exists, always look up from it first because it's the fastest.
+            self.lookup_from_memory(key, false, self.charge_gas_for_trie_node_access)
+        } else if self.flat_storage_chunk_view.is_some() {
             self.lookup_from_flat_storage(key, false)
         } else {
             Ok(self
@@ -1320,21 +1388,40 @@ impl Trie {
     where
         I: IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     {
-        let mut memory = NodesStorage::new();
-        let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
-        for (key, value) in changes {
-            let key = NibbleSlice::new(&key);
-            root_node = match value {
-                Some(arr) => self.insert(&mut memory, root_node, key, arr),
-                None => self.delete(&mut memory, root_node, key),
-            }?;
-        }
+        match &self.memtries {
+            Some(memtries) => {
+                // If we have in-memory tries, use it to construct the the changes entirely (for
+                // both in-memory and on-disk updates) because it's much faster.
+                let guard = memtries.read().unwrap();
+                let mut trie_update = guard.update(self.root, true)?;
+                for (key, value) in changes {
+                    match value {
+                        Some(arr) => {
+                            trie_update.insert(&key, arr);
+                        }
+                        None => trie_update.delete(&key),
+                    }
+                }
+                Ok(trie_update.to_trie_changes())
+            }
+            None => {
+                let mut memory = NodesStorage::new();
+                let mut root_node = self.move_node_to_mutable(&mut memory, &self.root)?;
+                for (key, value) in changes {
+                    let key = NibbleSlice::new(&key);
+                    root_node = match value {
+                        Some(arr) => self.insert(&mut memory, root_node, key, arr),
+                        None => self.delete(&mut memory, root_node, key),
+                    }?;
+                }
 
-        #[cfg(test)]
-        {
-            self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+                #[cfg(test)]
+                {
+                    self.memory_usage_verify(&memory, NodeHandle::InMemory(root_node));
+                }
+                Trie::flatten_nodes(&self.root, memory, root_node)
+            }
         }
-        Trie::flatten_nodes(&self.root, memory, root_node)
     }
 
     pub fn iter<'a>(&'a self) -> Result<TrieIterator<'a>, StorageError> {
