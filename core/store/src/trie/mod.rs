@@ -1242,24 +1242,32 @@ impl Trie {
             ))
         })?;
 
-        let result = memtrie_lookup(root, key, |is_value, hash, data| {
-            if ref_only && is_value {
-                // If we only want the ref, then ignore access of the value.
-                return;
+        let mut accessed_nodes = Vec::new();
+        let result = memtrie_lookup(root, key, Some(&mut accessed_nodes));
+        if charge_gas_for_trie_node_access {
+            for (node_hash, serialized_node) in &accessed_nodes {
+                self.accounting_cache
+                    .borrow_mut()
+                    .retroactively_account(*node_hash, serialized_node.clone());
             }
-            let data: Arc<[u8]> = data.into();
-            if charge_gas_for_trie_node_access || is_value {
-                // Access to value always charges gas.
-                self.accounting_cache.borrow_mut().retroactively_account(hash, data.clone());
+        }
+        if let Some(recorder) = &self.recorder {
+            for (node_hash, serialized_node) in accessed_nodes {
+                recorder.borrow_mut().record(&node_hash, serialized_node);
             }
-            if let Some(recorder) = &self.recorder {
-                // Any node accessed should be recorded.
-                recorder.borrow_mut().record(&hash, data);
-            }
-        });
+        }
         if ref_only {
             Ok(result.map(|value| FlatStateValue::Ref(value.to_value_ref())))
         } else {
+            if let Some(FlatStateValue::Inlined(value)) = &result {
+                let value_hash = hash(value);
+                self.accounting_cache
+                    .borrow_mut()
+                    .retroactively_account(value_hash, value.clone().into());
+                if let Some(recorder) = &self.recorder {
+                    recorder.borrow_mut().record(&value_hash, value.clone().into());
+                }
+            }
             Ok(result)
         }
     }
