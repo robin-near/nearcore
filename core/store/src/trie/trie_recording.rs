@@ -36,10 +36,11 @@ mod trie_recording_tests {
     use crate::{DBCol, Store, Trie};
     use near_primitives::hash::{hash, CryptoHash};
     use near_primitives::shard_layout::{get_block_shard_uid, get_block_shard_uid_rev, ShardUId};
+    use near_primitives::state::ValueRef;
     use near_primitives::types::chunk_extra::ChunkExtra;
     use near_primitives::types::StateRoot;
     use near_vm_runner::logic::TrieNodesCount;
-    use rand::thread_rng;
+    use rand::{thread_rng, Rng};
     use std::collections::{HashMap, HashSet};
     use std::num::NonZeroU32;
 
@@ -49,7 +50,8 @@ mod trie_recording_tests {
         store: Store,
         shard_uid: ShardUId,
         data_in_trie: HashMap<Vec<u8>, Vec<u8>>,
-        keys_to_test_with: Vec<Vec<u8>>,
+        keys_to_get: Vec<Vec<u8>>,
+        keys_to_get_ref: Vec<Vec<u8>>,
         state_root: StateRoot,
     }
 
@@ -92,7 +94,7 @@ mod trie_recording_tests {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone().unwrap()))
             .collect::<HashMap<_, _>>();
-        let keys_to_test_with = trie_changes
+        let (keys_to_get, keys_to_get_ref) = trie_changes
             .iter()
             .map(|(key, _)| {
                 let mut key = key.clone();
@@ -101,12 +103,13 @@ mod trie_recording_tests {
                 }
                 key
             })
-            .collect::<Vec<_>>();
+            .partition::<Vec<_>, _>(|_| thread_rng().gen());
         PreparedTrie {
             store: tries_for_building.get_store(),
             shard_uid,
             data_in_trie,
-            keys_to_test_with,
+            keys_to_get,
+            keys_to_get_ref,
             state_root,
         }
     }
@@ -142,8 +145,14 @@ mod trie_recording_tests {
         use_in_memory_tries: bool,
     ) {
         for _ in 0..NUM_ITERATIONS_PER_TEST {
-            let PreparedTrie { store, shard_uid, data_in_trie, keys_to_test_with, state_root } =
-                prepare_trie(use_missing_keys);
+            let PreparedTrie {
+                store,
+                shard_uid,
+                data_in_trie,
+                keys_to_get,
+                keys_to_get_ref,
+                state_root,
+            } = prepare_trie(use_missing_keys);
             let tries = if use_in_memory_tries {
                 TestTriesBuilder::new().with_store(store.clone()).with_in_memory_tries().build()
             } else {
@@ -161,8 +170,14 @@ mod trie_recording_tests {
             // in production.
             let trie = tries.get_trie_for_shard(shard_uid, state_root);
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             let baseline_trie_nodes_count = trie.get_trie_nodes_count();
             println!("Baseline trie nodes count: {:?}", baseline_trie_nodes_count);
@@ -171,8 +186,14 @@ mod trie_recording_tests {
             // we get are exactly the same.
             let trie = tries.get_trie_for_shard(shard_uid, state_root).recording_reads();
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
 
@@ -186,8 +207,14 @@ mod trie_recording_tests {
             );
             let trie = Trie::from_recorded_storage(partial_storage, state_root, false);
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
 
@@ -248,7 +275,7 @@ mod trie_recording_tests {
         use_in_memory_tries: bool,
     ) {
         for _ in 0..NUM_ITERATIONS_PER_TEST {
-            let PreparedTrie { store, shard_uid, data_in_trie, keys_to_test_with, state_root } =
+            let PreparedTrie { store, shard_uid, data_in_trie, keys_to_get, keys_to_get_ref, state_root } =
                 prepare_trie(use_missing_keys);
             let tries = if use_in_memory_tries {
                 TestTriesBuilder::new()
@@ -265,24 +292,23 @@ mod trie_recording_tests {
                 // Delete the on-disk state so that we really know we're using
                 // in-memory tries.
                 destructively_delete_in_memory_state_from_disk(&store, &data_in_trie);
-            } else {
-                // Check that the trie is using flat storage, so that counters are all zero.
-                // Only use get_ref(), because get() will actually dereference values which can
-                // cause trie reads.
-                let trie = tries.get_trie_with_block_hash_for_shard(
-                    shard_uid,
-                    state_root,
-                    &CryptoHash::default(),
-                    false,
-                );
-                for key in &keys_to_test_with {
-                    trie.get_ref(&key, crate::KeyLookupMode::FlatStorage).unwrap();
-                }
-                assert_eq!(
-                    trie.get_trie_nodes_count(),
-                    TrieNodesCount { db_reads: 0, mem_reads: 0 }
-                );
             }
+            // Check that the trie is using flat storage, so that counters are all zero.
+            // Only use get_ref(), because get() will actually dereference values which can
+            // cause trie reads.
+            let trie = tries.get_trie_with_block_hash_for_shard(
+                shard_uid,
+                state_root,
+                &CryptoHash::default(),
+                false,
+            );
+            for key in data_in_trie.keys() {
+                trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap();
+            }
+            assert_eq!(
+                trie.get_trie_nodes_count(),
+                TrieNodesCount { db_reads: 0, mem_reads: 0 }
+            );
 
             // Now, let's capture the baseline node counts - this is what will happen
             // in production.
@@ -293,8 +319,14 @@ mod trie_recording_tests {
                 false,
             );
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             let baseline_trie_nodes_count = trie.get_trie_nodes_count();
             println!("Baseline trie nodes count: {:?}", baseline_trie_nodes_count);
@@ -310,8 +342,14 @@ mod trie_recording_tests {
                 )
                 .recording_reads();
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
 
@@ -325,8 +363,14 @@ mod trie_recording_tests {
             );
             let trie = Trie::from_recorded_storage(partial_storage, state_root, true);
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
-            for key in &keys_to_test_with {
+            for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
+            }
+            for key in &keys_to_get_ref {
+                assert_eq!(
+                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    data_in_trie.get(key).map(|value| ValueRef::new(&value))
+                );
             }
             assert_eq!(trie.get_trie_nodes_count(), baseline_trie_nodes_count);
 
