@@ -188,7 +188,7 @@ mod tests {
     use crate::trie::mem::loading::load_trie_from_flat_state;
     use crate::trie::mem::lookup::memtrie_lookup;
     use crate::trie::OptimizedValueRef;
-    use crate::{DBCol, NibbleSlice, ShardTries, Store, Trie, TrieUpdate};
+    use crate::{DBCol, KeyLookupMode, NibbleSlice, ShardTries, Store, Trie, TrieUpdate};
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
     use near_primitives::state::FlatStateValue;
@@ -243,7 +243,7 @@ mod tests {
         for key in keys.iter().chain([b"not in trie".to_vec()].iter()) {
             let mut nodes_accessed = Vec::new();
             let actual_value = memtrie_lookup(root, key, Some(&mut nodes_accessed));
-            let expected_value = trie.get_optimized_ref(key).unwrap();
+            let expected_value = trie.get_optimized_ref(key, KeyLookupMode::FlatStorage).unwrap();
             assert_eq!(
                 &actual_value.clone().map(OptimizedValueRef::from_flat_value),
                 &expected_value,
@@ -254,7 +254,7 @@ mod tests {
             // Do another access with the trie to see how many nodes we're supposed to
             // have accessed.
             let temp_trie = shard_tries.get_trie_for_shard(shard_uid, state_root);
-            temp_trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap();
+            temp_trie.get_optimized_ref(key, crate::KeyLookupMode::Trie).unwrap();
             assert_eq!(
                 temp_trie.get_trie_nodes_count().db_reads,
                 nodes_accessed.len() as u64,

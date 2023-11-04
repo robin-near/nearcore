@@ -175,7 +175,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::Trie)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }
@@ -191,7 +193,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::Trie)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }
@@ -212,7 +216,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::Trie).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::Trie)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }
@@ -275,8 +281,14 @@ mod trie_recording_tests {
         use_in_memory_tries: bool,
     ) {
         for _ in 0..NUM_ITERATIONS_PER_TEST {
-            let PreparedTrie { store, shard_uid, data_in_trie, keys_to_get, keys_to_get_ref, state_root } =
-                prepare_trie(use_missing_keys);
+            let PreparedTrie {
+                store,
+                shard_uid,
+                data_in_trie,
+                keys_to_get,
+                keys_to_get_ref,
+                state_root,
+            } = prepare_trie(use_missing_keys);
             let tries = if use_in_memory_tries {
                 TestTriesBuilder::new()
                     .with_store(store.clone())
@@ -294,7 +306,7 @@ mod trie_recording_tests {
                 destructively_delete_in_memory_state_from_disk(&store, &data_in_trie);
             }
             // Check that the trie is using flat storage, so that counters are all zero.
-            // Only use get_ref(), because get() will actually dereference values which can
+            // Only use get_optimized_ref(), because get() will actually dereference values which can
             // cause trie reads.
             let trie = tries.get_trie_with_block_hash_for_shard(
                 shard_uid,
@@ -303,12 +315,9 @@ mod trie_recording_tests {
                 false,
             );
             for key in data_in_trie.keys() {
-                trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap();
+                trie.get_optimized_ref(key, crate::KeyLookupMode::FlatStorage).unwrap();
             }
-            assert_eq!(
-                trie.get_trie_nodes_count(),
-                TrieNodesCount { db_reads: 0, mem_reads: 0 }
-            );
+            assert_eq!(trie.get_trie_nodes_count(), TrieNodesCount { db_reads: 0, mem_reads: 0 });
 
             // Now, let's capture the baseline node counts - this is what will happen
             // in production.
@@ -324,7 +333,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::FlatStorage)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }
@@ -347,7 +358,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::FlatStorage)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }
@@ -368,7 +381,9 @@ mod trie_recording_tests {
             }
             for key in &keys_to_get_ref {
                 assert_eq!(
-                    trie.get_ref(key, crate::KeyLookupMode::FlatStorage).unwrap(),
+                    trie.get_optimized_ref(key, crate::KeyLookupMode::FlatStorage)
+                        .unwrap()
+                        .map(|value| value.into_value_ref()),
                     data_in_trie.get(key).map(|value| ValueRef::new(&value))
                 );
             }

@@ -72,15 +72,10 @@ impl TrieUpdate {
             }
         }
 
-        let result = if mode == KeyLookupMode::Trie {
-            self.trie.get_ref(&key, KeyLookupMode::Trie)?.map(|value_ref| {
-                TrieUpdateValuePtr::Ref(&self.trie, OptimizedValueRef::Ref(value_ref))
-            })
-        } else {
+        let result =
             self.trie
-                .get_optimized_ref(&key)?
-                .map(|optimized_value_ref| TrieUpdateValuePtr::Ref(&self.trie, optimized_value_ref))
-        };
+                .get_optimized_ref(&key, mode)?
+                .map(|optimized_value_ref| TrieUpdateValuePtr::Ref(&self.trie, optimized_value_ref));
 
         Ok(result)
     }

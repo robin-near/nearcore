@@ -560,14 +560,31 @@ enum NodeOrValue {
     Value(std::sync::Arc<[u8]>),
 }
 
+/// Like a ValueRef, but allows for optimized retrieval of the value if the
+/// value were already readily available when the ValueRef was retrieved.
+///
+/// This can be the case if the value came from flat storage, for example,
+/// when some values are inlined into the storage.
+///
+/// Information-wise, this struct contains the same information as a
+/// FlatStateValue; however, we make this a separate struct because
+/// dereferencing a ValueRef (and likewise, OptimizedValueRef) requires proper
+/// gas accounting; it is not a free operation. Therefore, while
+/// OptimizedValueRef can be directly converted to a ValueRef, dereferencing
+/// the value, even if the value is already available, can only be done via
+/// `Trie::deref_optimized`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum OptimizedValueRef {
     Ref(ValueRef),
     AvailableValue(ValueAccessToken),
 }
 
+/// Opaque wrapper around Vec<u8> so that the value cannot be used directly and
+/// must instead be dereferenced via `Trie::deref_optimized`, so that gas
+/// accounting is never skipped.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ValueAccessToken {
+    // Must stay private.
     value: Vec<u8>,
 }
 
@@ -1346,7 +1363,8 @@ impl Trie {
         Ok(bytes.to_vec())
     }
 
-    /// Return the value reference to the `key`
+    /// Retrieves an `OptimizedValueRef`` for the given key. See `OptimizedValueRef`.
+    ///
     /// `mode`: whether we will try to perform the lookup through flat storage or trie.
     ///         Note that even if `mode == KeyLookupMode::FlatStorage`, we still may not use
     ///         flat storage if the trie is not created with a flat storage object in it.
@@ -1356,46 +1374,31 @@ impl Trie {
     ///         storage for key lookup performed in `storage_write`, so we need
     ///         the `use_flat_storage` to differentiate whether the lookup is performed for
     ///         storage_write or not.
-    pub fn get_ref(
+    pub fn get_optimized_ref(
         &self,
         key: &[u8],
         mode: KeyLookupMode,
-    ) -> Result<Option<ValueRef>, StorageError> {
-        let use_flat_storage =
-            mode == KeyLookupMode::FlatStorage && self.flat_storage_chunk_view.is_some();
+    ) -> Result<Option<OptimizedValueRef>, StorageError> {
         let charge_gas_for_trie_node_access =
             mode == KeyLookupMode::Trie || self.charge_gas_for_trie_node_access;
         if self.memtries.is_some() {
-            // If in-memory trie exists, always look up from it first because it's the fastest.
-            Ok(self
-                .lookup_from_memory(key, charge_gas_for_trie_node_access)?
-                .map(|value| value.into_value_ref()))
-        } else if use_flat_storage {
-            Ok(self.lookup_from_flat_storage(key)?.map(|value| value.into_value_ref()))
-        } else {
-            self.lookup_from_state_column(NibbleSlice::new(key), charge_gas_for_trie_node_access)
-        }
-    }
-
-    /// Retrieves a value, which may or may not be the complete value, for the given key.
-    /// If the full value could be obtained cheaply it is returned; otherwise only the reference
-    /// is returned.
-    pub fn get_optimized_ref(&self, key: &[u8]) -> Result<Option<OptimizedValueRef>, StorageError> {
-        if self.memtries.is_some() {
-            // If in-memory trie exists, always look up from it first because it's the fastest.
-            self.lookup_from_memory(key, self.charge_gas_for_trie_node_access)
-        } else if self.flat_storage_chunk_view.is_some() {
+            self.lookup_from_memory(key, charge_gas_for_trie_node_access)
+        } else if mode == KeyLookupMode::FlatStorage && self.flat_storage_chunk_view.is_some() {
             self.lookup_from_flat_storage(key)
         } else {
             Ok(self
                 .lookup_from_state_column(
                     NibbleSlice::new(key),
-                    self.charge_gas_for_trie_node_access,
+                    mode == KeyLookupMode::Trie || self.charge_gas_for_trie_node_access,
                 )?
                 .map(OptimizedValueRef::Ref))
         }
     }
 
+    /// Dereferences an `OptimizedValueRef` into the full value, and properly
+    /// accounts for the gas, caching, and recording (if enabled). This may or
+    /// may not incur a on-disk lookup, depending on whether the
+    /// `OptimizedValueRef` contains an already available value.
     pub fn deref_optimized(
         &self,
         optimized_value_ref: &OptimizedValueRef,
@@ -1418,8 +1421,8 @@ impl Trie {
 
     /// Retrieves the full value for the given key.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
-        match self.get_optimized_ref(key)? {
-            Some(optimized_value_ref) => Ok(Some(self.deref_optimized(&optimized_value_ref)?)),
+        match self.get_optimized_ref(key, KeyLookupMode::FlatStorage)? {
+            Some(optimized_ref) => Ok(Some(self.deref_optimized(&optimized_ref)?)),
             None => Ok(None),
         }
     }
