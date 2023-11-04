@@ -560,6 +560,40 @@ enum NodeOrValue {
     Value(std::sync::Arc<[u8]>),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum OptimizedValueRef {
+    Ref(ValueRef),
+    AvailableValue(ValueAccessToken),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ValueAccessToken {
+    value: Vec<u8>,
+}
+
+impl OptimizedValueRef {
+    fn from_flat_value(value: FlatStateValue) -> Self {
+        match value {
+            FlatStateValue::Ref(value_ref) => Self::Ref(value_ref),
+            FlatStateValue::Inlined(value) => Self::AvailableValue(ValueAccessToken { value }),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Ref(value_ref) => value_ref.len(),
+            Self::AvailableValue(token) => token.value.len(),
+        }
+    }
+
+    pub fn into_value_ref(self) -> ValueRef {
+        match self {
+            Self::Ref(value_ref) => value_ref,
+            Self::AvailableValue(token) => ValueRef::new(&token.value),
+        }
+    }
+}
+
 impl Trie {
     pub const EMPTY_ROOT: StateRoot = StateRoot::new();
 
@@ -1112,40 +1146,20 @@ impl Trie {
     fn lookup_from_flat_storage(
         &self,
         key: &[u8],
-        ref_only: bool,
-    ) -> Result<Option<FlatStateValue>, StorageError> {
+    ) -> Result<Option<OptimizedValueRef>, StorageError> {
         let flat_storage_chunk_view = self.flat_storage_chunk_view.as_ref().unwrap();
-        let mut value = flat_storage_chunk_view.get_value(key)?;
-        if ref_only {
-            value = value.map(|value| FlatStateValue::Ref(value.to_value_ref()));
-        }
+        let value = flat_storage_chunk_view.get_value(key)?;
         if self.recorder.is_some() {
             // Note here that we don't need to check if we have memtries, because if
             // we're inside this function at all, we don't have memtries.
             let value_ref_from_trie =
                 self.lookup_from_state_column(NibbleSlice::new(key), false)?;
-            match &value {
-                Some(FlatStateValue::Inlined(value)) => {
-                    assert!(value_ref_from_trie.is_some());
-                    let value_from_trie =
-                        self.retrieve_value(&value_ref_from_trie.unwrap().hash)?;
-                    assert_eq!(&value_from_trie, value);
-                }
-                Some(FlatStateValue::Ref(value_ref)) => {
-                    assert_eq!(value_ref_from_trie.as_ref(), Some(value_ref));
-                }
-                None => {
-                    assert!(value_ref_from_trie.is_none());
-                }
-            }
-        } else {
-            if let Some(FlatStateValue::Inlined(value)) = &value {
-                self.accounting_cache
-                    .borrow_mut()
-                    .retroactively_account(hash(value), value.clone().into());
-            }
+            debug_assert_eq!(
+                &value_ref_from_trie,
+                &value.as_ref().map(|value| value.to_value_ref())
+            );
         }
-        Ok(value)
+        Ok(value.map(OptimizedValueRef::from_flat_value))
     }
 
     /// Looks up the given key by walking the trie nodes stored in the
@@ -1228,9 +1242,8 @@ impl Trie {
     fn lookup_from_memory(
         &self,
         key: &[u8],
-        ref_only: bool,
         charge_gas_for_trie_node_access: bool,
-    ) -> Result<Option<FlatStateValue>, StorageError> {
+    ) -> Result<Option<OptimizedValueRef>, StorageError> {
         if self.root == Self::EMPTY_ROOT {
             return Ok(None);
         }
@@ -1256,20 +1269,7 @@ impl Trie {
                 recorder.borrow_mut().record(&node_hash, serialized_node);
             }
         }
-        if ref_only {
-            Ok(result.map(|value| FlatStateValue::Ref(value.to_value_ref())))
-        } else {
-            if let Some(FlatStateValue::Inlined(value)) = &result {
-                let value_hash = hash(value);
-                self.accounting_cache
-                    .borrow_mut()
-                    .retroactively_account(value_hash, value.clone().into());
-                if let Some(recorder) = &self.recorder {
-                    recorder.borrow_mut().record(&value_hash, value.clone().into());
-                }
-            }
-            Ok(result)
-        }
+        Ok(result.map(OptimizedValueRef::from_flat_value))
     }
 
     /// For debugging only. Returns the raw node at the given path starting from the root.
@@ -1368,10 +1368,10 @@ impl Trie {
         if self.memtries.is_some() {
             // If in-memory trie exists, always look up from it first because it's the fastest.
             Ok(self
-                .lookup_from_memory(key, true, charge_gas_for_trie_node_access)?
-                .map(|value| value.to_value_ref()))
+                .lookup_from_memory(key, charge_gas_for_trie_node_access)?
+                .map(|value| value.into_value_ref()))
         } else if use_flat_storage {
-            Ok(self.lookup_from_flat_storage(key, true)?.map(|value| value.to_value_ref()))
+            Ok(self.lookup_from_flat_storage(key)?.map(|value| value.into_value_ref()))
         } else {
             self.lookup_from_state_column(NibbleSlice::new(key), charge_gas_for_trie_node_access)
         }
@@ -1380,27 +1380,46 @@ impl Trie {
     /// Retrieves a value, which may or may not be the complete value, for the given key.
     /// If the full value could be obtained cheaply it is returned; otherwise only the reference
     /// is returned.
-    pub fn get_flat_value(&self, key: &[u8]) -> Result<Option<FlatStateValue>, StorageError> {
+    pub fn get_optimized_ref(&self, key: &[u8]) -> Result<Option<OptimizedValueRef>, StorageError> {
         if self.memtries.is_some() {
             // If in-memory trie exists, always look up from it first because it's the fastest.
-            self.lookup_from_memory(key, false, self.charge_gas_for_trie_node_access)
+            self.lookup_from_memory(key, self.charge_gas_for_trie_node_access)
         } else if self.flat_storage_chunk_view.is_some() {
-            self.lookup_from_flat_storage(key, false)
+            self.lookup_from_flat_storage(key)
         } else {
             Ok(self
                 .lookup_from_state_column(
                     NibbleSlice::new(key),
                     self.charge_gas_for_trie_node_access,
                 )?
-                .map(|value| FlatStateValue::Ref(value)))
+                .map(OptimizedValueRef::Ref))
+        }
+    }
+
+    pub fn deref_optimized(
+        &self,
+        optimized_value_ref: &OptimizedValueRef,
+    ) -> Result<Vec<u8>, StorageError> {
+        match optimized_value_ref {
+            OptimizedValueRef::Ref(value_ref) => self.retrieve_value(&value_ref.hash),
+            OptimizedValueRef::AvailableValue(ValueAccessToken { value }) => {
+                let value_hash = hash(value);
+                let arc_value: Arc<[u8]> = value.clone().into();
+                self.accounting_cache
+                    .borrow_mut()
+                    .retroactively_account(value_hash, arc_value.clone());
+                if let Some(recorder) = &self.recorder {
+                    recorder.borrow_mut().record(&value_hash, arc_value);
+                }
+                Ok(value.clone())
+            }
         }
     }
 
     /// Retrieves the full value for the given key.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
-        match self.get_flat_value(key)? {
-            Some(FlatStateValue::Ref(value_ref)) => self.retrieve_value(&value_ref.hash).map(Some),
-            Some(FlatStateValue::Inlined(value)) => Ok(Some(value)),
+        match self.get_optimized_ref(key)? {
+            Some(optimized_value_ref) => Ok(Some(self.deref_optimized(&optimized_value_ref)?)),
             None => Ok(None),
         }
     }
