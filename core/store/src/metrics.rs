@@ -28,6 +28,69 @@ pub static CHUNK_CACHE_HITS: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+pub static NUM_FLAT_STORAGE_LOOKUPS: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_flat_storage_lookups",
+        "Number of flat storage lookups",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_ON_DISK_TRIE_LOOKUPS: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_on_disk_trie_lookups",
+        "Number of on-disk trie lookups",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_FLAT_LOOKUPS_WITH_INLINED_VALUE: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_flat_lookups_with_inlined_value",
+        "Number of flat storage lookups with inlined value",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_TRIE_DEREFS_WITH_INLINED_VALUE: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_trie_derefs_with_inlined_value",
+        "Number of trie derefs with inlined value",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_TRIE_DEREFS_REQUIRING_ON_DISK_LOOKUP: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_trie_derefs_requiring_on_disk_lookup",
+        "Number of trie derefs requiring on-disk lookup",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_CALLS_TO_TRIE_GET: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_calls_to_trie_get",
+        "Number of calls to trie get",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
+pub static NUM_CALLS_TO_TRIE_GET_OPTIMIZED_REF: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_num_calls_to_trie_get_optimized_ref",
+        "Number of calls to trie get optimized ref",
+        &["shard_id"],
+    )
+    .unwrap()
+});
+
 // TODO(#9054): Rename the metric to be consistent with "accounting cache".
 pub static CHUNK_CACHE_MISSES: Lazy<IntCounterVec> = Lazy::new(|| {
     try_create_int_counter_vec(

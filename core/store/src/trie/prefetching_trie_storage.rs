@@ -472,8 +472,12 @@ impl PrefetchApi {
                         // Note that the constructor of `Trie` is trivial, and
                         // the clone only clones a few `Arc`s, so the performance
                         // hit is small.
-                        let prefetcher_trie =
-                            Trie::new(Rc::new(prefetcher_storage.clone()), trie_root, None);
+                        let prefetcher_trie = Trie::new(
+                            Rc::new(prefetcher_storage.clone()),
+                            trie_root,
+                            None,
+                            shard_uid.shard_id(),
+                        );
                         let storage_key = trie_key.to_vec();
                         metric_prefetch_sent.inc();
                         if let Ok(_maybe_value) = prefetcher_trie.get(&storage_key) {

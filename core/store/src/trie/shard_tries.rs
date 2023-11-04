@@ -135,7 +135,7 @@ impl ShardTries {
         let flat_storage_chunk_view = block_hash
             .and_then(|block_hash| self.0.flat_storage_manager.chunk_view(shard_uid, block_hash));
 
-        Trie::new(storage, state_root, flat_storage_chunk_view)
+        Trie::new(storage, state_root, flat_storage_chunk_view, shard_uid.shard_id())
     }
 
     pub fn get_trie_for_shard(&self, shard_uid: ShardUId, state_root: StateRoot) -> Trie {
@@ -159,7 +159,7 @@ impl ShardTries {
         let storage = Rc::new(TrieCachingStorage::new(store, cache, shard_uid, true, None));
         let flat_storage_chunk_view = flat_storage_manager.chunk_view(shard_uid, *block_hash);
 
-        Ok(Trie::new(storage, state_root, flat_storage_chunk_view))
+        Ok(Trie::new(storage, state_root, flat_storage_chunk_view, shard_uid.shard_id()))
     }
 
     pub fn get_trie_with_block_hash_for_shard(

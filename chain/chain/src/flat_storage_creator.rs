@@ -96,7 +96,7 @@ impl FlatStorageShardCreator {
         result_sender: Sender<u64>,
     ) {
         let trie_storage = TrieDBStorage::new(store.clone(), shard_uid);
-        let trie = Trie::new(Rc::new(trie_storage), state_root, None);
+        let trie = Trie::new(Rc::new(trie_storage), state_root, None, shard_uid.shard_id());
         let path_begin = trie.find_state_part_boundary(part_id.idx, part_id.total).unwrap();
         let path_end = trie.find_state_part_boundary(part_id.idx + 1, part_id.total).unwrap();
         let hex_path_begin = Self::nibbles_to_hex(&path_begin);
@@ -198,7 +198,8 @@ impl FlatStorageShardCreator {
                     let trie_storage = TrieDBStorage::new(store, shard_uid);
                     let state_root =
                         *chain_store.get_chunk_extra(&block_hash, &shard_uid)?.state_root();
-                    let trie = Trie::new(Rc::new(trie_storage), state_root, None);
+                    let trie =
+                        Trie::new(Rc::new(trie_storage), state_root, None, shard_uid.shard_id());
                     let root_node = trie.retrieve_root_node().unwrap();
                     let num_state_parts =
                         root_node.memory_usage / STATE_PART_MEMORY_LIMIT.as_u64() + 1;
