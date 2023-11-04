@@ -222,7 +222,7 @@ fn get_postponed_receipt_count_for_shard(
     let storage = TrieDBStorage::new(store.clone(), shard_uid);
     let storage = Rc::new(storage);
     let flat_storage_chunk_view = None;
-    let trie = Trie::new(storage, *state_root, flat_storage_chunk_view);
+    let trie = Trie::new(storage, *state_root, flat_storage_chunk_view, shard_uid.shard_id());
     get_postponed_receipt_count_for_trie(trie)
 }
 

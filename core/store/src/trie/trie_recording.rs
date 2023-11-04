@@ -209,7 +209,12 @@ mod trie_recording_tests {
                 partial_storage.nodes.len(),
                 data_in_trie.len()
             );
-            let trie = Trie::from_recorded_storage(partial_storage, state_root, false);
+            let trie = Trie::from_recorded_storage(
+                partial_storage,
+                state_root,
+                false,
+                shard_uid.shard_id(),
+            );
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
             for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());
@@ -374,7 +379,12 @@ mod trie_recording_tests {
                 partial_storage.nodes.len(),
                 data_in_trie.len()
             );
-            let trie = Trie::from_recorded_storage(partial_storage, state_root, true);
+            let trie = Trie::from_recorded_storage(
+                partial_storage,
+                state_root,
+                true,
+                shard_uid.shard_id(),
+            );
             trie.accounting_cache.borrow_mut().set_enabled(enable_accounting_cache);
             for key in &keys_to_get {
                 assert_eq!(trie.get(key).unwrap(), data_in_trie.get(key).cloned());

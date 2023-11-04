@@ -148,7 +148,7 @@ impl TrieIterationBenchmarkCmd {
         let state_root = chunk_header.prev_state_root();
         let storage = TrieDBStorage::new(store.clone(), shard_uid);
         let flat_storage_chunk_view = None;
-        Trie::new(Rc::new(storage), state_root, flat_storage_chunk_view)
+        Trie::new(Rc::new(storage), state_root, flat_storage_chunk_view, shard_id)
     }
 
     fn iter_trie(&self, trie: &Trie) {

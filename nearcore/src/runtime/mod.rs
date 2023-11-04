@@ -854,6 +854,7 @@ impl RuntimeAdapter for NightshadeRuntime {
                 storage,
                 storage_config.state_root,
                 storage_config.use_flat_storage,
+                shard_id,
             ),
         };
         if storage_config.record_storage {

@@ -857,7 +857,7 @@ fn get_trie(store: Store, hash: CryptoHash, shard_id: u32, shard_version: u32) -
     let trie_config: TrieConfig = Default::default();
     let shard_cache = TrieCache::new(&trie_config, shard_uid, true);
     let trie_storage = TrieCachingStorage::new(store, shard_cache, shard_uid, true, None);
-    Trie::new(Rc::new(trie_storage), hash, None)
+    Trie::new(Rc::new(trie_storage), hash, None, shard_uid.shard_id())
 }
 
 pub(crate) fn view_trie(
@@ -1021,7 +1021,7 @@ pub(crate) fn contract_accounts(
         let storage = TrieDBStorage::new(store.clone(), shard_uid);
         // We don't need flat state to traverse all accounts.
         let flat_storage_chunk_view = None;
-        Trie::new(Rc::new(storage), state_root, flat_storage_chunk_view)
+        Trie::new(Rc::new(storage), state_root, flat_storage_chunk_view, shard_id as u64)
     });
 
     filter.write_header(&mut std::io::stdout().lock())?;

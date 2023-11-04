@@ -19,6 +19,8 @@ pub use crate::trie::trie_storage::{TrieCache, TrieCachingStorage, TrieDBStorage
 use crate::StorageError;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use from_flat::construct_trie_from_flat;
+use near_o11y::metrics::prometheus;
+use near_o11y::metrics::prometheus::core::GenericCounter;
 use near_primitives::challenge::PartialState;
 use near_primitives::hash::{hash, CryptoHash};
 pub use near_primitives::shard_layout::ShardUId;
@@ -27,7 +29,7 @@ use near_primitives::state_record::StateRecord;
 use near_primitives::trie_key::trie_key_parsers::parse_account_id_prefix;
 use near_primitives::trie_key::TrieKey;
 pub use near_primitives::types::TrieNodesCount;
-use near_primitives::types::{AccountId, StateRoot, StateRootNode};
+use near_primitives::types::{AccountId, ShardId, StateRoot, StateRootNode};
 use near_vm_runner::ContractCode;
 pub use raw_node::{Children, RawTrieNode, RawTrieNodeWithSize};
 use std::cell::RefCell;
@@ -354,6 +356,49 @@ pub struct Trie {
     /// what, and lookups done via get_ref with `KeyLookupMode::Trie` will
     /// also charge gas no matter what.
     charge_gas_for_trie_node_access: bool,
+
+    shard_id: ShardId,
+    metrics: TrieMetrics,
+}
+
+struct TrieMetrics {
+    memtrie_lookups: GenericCounter<prometheus::core::AtomicU64>,
+    memtrie_lookups_with_inlined_value: GenericCounter<prometheus::core::AtomicU64>,
+    flat_storage_lookups: GenericCounter<prometheus::core::AtomicU64>,
+    on_disk_trie_lookups: GenericCounter<prometheus::core::AtomicU64>,
+    flat_lookups_with_inlined_value: GenericCounter<prometheus::core::AtomicU64>,
+    trie_derefs_with_inlined_value: GenericCounter<prometheus::core::AtomicU64>,
+    trie_derefs_requiring_on_disk_lookup: GenericCounter<prometheus::core::AtomicU64>,
+    calls_to_trie_get: GenericCounter<prometheus::core::AtomicU64>,
+    calls_to_trie_get_optimized_ref: GenericCounter<prometheus::core::AtomicU64>,
+}
+
+impl TrieMetrics {
+    fn new(shard_id: ShardId) -> Self {
+        let shard_id_str = shard_id.to_string();
+        let metrics_labels = [shard_id_str.as_str()];
+        Self {
+            memtrie_lookups: crate::metrics::NUM_MEMTRIE_LOOKUPS.with_label_values(&metrics_labels),
+            memtrie_lookups_with_inlined_value:
+                crate::metrics::NUM_MEMTRIE_LOOKUPS_WITH_INLINED_VALUE
+                    .with_label_values(&metrics_labels),
+            flat_storage_lookups: crate::metrics::NUM_FLAT_STORAGE_LOOKUPS
+                .with_label_values(&metrics_labels),
+            on_disk_trie_lookups: crate::metrics::NUM_ON_DISK_TRIE_LOOKUPS
+                .with_label_values(&metrics_labels),
+            flat_lookups_with_inlined_value: crate::metrics::NUM_FLAT_LOOKUPS_WITH_INLINED_VALUE
+                .with_label_values(&metrics_labels),
+            trie_derefs_with_inlined_value: crate::metrics::NUM_TRIE_DEREFS_WITH_INLINED_VALUE
+                .with_label_values(&metrics_labels),
+            trie_derefs_requiring_on_disk_lookup:
+                crate::metrics::NUM_TRIE_DEREFS_REQUIRING_ON_DISK_LOOKUP
+                    .with_label_values(&metrics_labels),
+            calls_to_trie_get: crate::metrics::NUM_CALLS_TO_TRIE_GET
+                .with_label_values(&metrics_labels),
+            calls_to_trie_get_optimized_ref: crate::metrics::NUM_CALLS_TO_TRIE_GET_OPTIMIZED_REF
+                .with_label_values(&metrics_labels),
+        }
+    }
 }
 
 /// Trait for reading data from a trie.
@@ -621,8 +666,9 @@ impl Trie {
         storage: Rc<dyn TrieStorage>,
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
+        shard_id: ShardId,
     ) -> Self {
-        Self::new_with_memtries(storage, None, root, flat_storage_chunk_view)
+        Self::new_with_memtries(storage, None, root, flat_storage_chunk_view, shard_id)
     }
 
     pub fn new_with_memtries(
@@ -630,6 +676,7 @@ impl Trie {
         memtries: Option<Arc<RwLock<MemTries>>>,
         root: StateRoot,
         flat_storage_chunk_view: Option<FlatStorageChunkView>,
+        shard_id: ShardId,
     ) -> Self {
         let accounting_cache = match storage.as_caching_storage() {
             Some(caching_storage) => RefCell::new(TrieAccountingCache::new(Some((
@@ -646,6 +693,8 @@ impl Trie {
             flat_storage_chunk_view,
             accounting_cache,
             recorder: None,
+            shard_id,
+            metrics: TrieMetrics::new(shard_id),
         }
     }
 
@@ -657,6 +706,7 @@ impl Trie {
             self.memtries.clone(),
             self.root,
             self.flat_storage_chunk_view.clone(),
+            self.shard_id,
         );
         trie.recorder = Some(RefCell::new(TrieRecorder::new()));
         trie
@@ -679,11 +729,12 @@ impl Trie {
         partial_storage: PartialStorage,
         root: StateRoot,
         flat_storage_used: bool,
+        shard_id: ShardId,
     ) -> Self {
         let PartialState::TrieValues(nodes) = partial_storage.nodes;
         let recorded_storage = nodes.into_iter().map(|value| (hash(&value), value)).collect();
         let storage = Rc::new(TrieMemoryPartialStorage::new(recorded_storage));
-        let mut trie = Self::new(storage, root, None);
+        let mut trie = Self::new(storage, root, None, shard_id);
         trie.charge_gas_for_trie_node_access = !flat_storage_used;
         trie
     }
@@ -1164,6 +1215,7 @@ impl Trie {
         &self,
         key: &[u8],
     ) -> Result<Option<OptimizedValueRef>, StorageError> {
+        self.metrics.flat_storage_lookups.inc();
         let flat_storage_chunk_view = self.flat_storage_chunk_view.as_ref().unwrap();
         let value = flat_storage_chunk_view.get_value(key)?;
         if self.recorder.is_some() {
@@ -1175,6 +1227,9 @@ impl Trie {
                 &value_ref_from_trie,
                 &value.as_ref().map(|value| value.to_value_ref())
             );
+        }
+        if let Some(FlatStateValue::Inlined(_)) = &value {
+            self.metrics.flat_lookups_with_inlined_value.inc();
         }
         Ok(value.map(OptimizedValueRef::from_flat_value))
     }
@@ -1190,6 +1245,7 @@ impl Trie {
         mut key: NibbleSlice<'_>,
         charge_gas_for_trie_node_access: bool,
     ) -> Result<Option<ValueRef>, StorageError> {
+        self.metrics.on_disk_trie_lookups.inc();
         let mut hash = self.root;
         loop {
             let node = match self.retrieve_raw_node(&hash, charge_gas_for_trie_node_access)? {
@@ -1261,6 +1317,7 @@ impl Trie {
         key: &[u8],
         charge_gas_for_trie_node_access: bool,
     ) -> Result<Option<OptimizedValueRef>, StorageError> {
+        self.metrics.memtrie_lookups.inc();
         if self.root == Self::EMPTY_ROOT {
             return Ok(None);
         }
@@ -1285,6 +1342,9 @@ impl Trie {
             for (node_hash, serialized_node) in accessed_nodes {
                 recorder.borrow_mut().record(&node_hash, serialized_node);
             }
+        }
+        if let Some(FlatStateValue::Inlined(_)) = &result {
+            self.metrics.memtrie_lookups_with_inlined_value.inc();
         }
         Ok(result.map(OptimizedValueRef::from_flat_value))
     }
@@ -1379,6 +1439,7 @@ impl Trie {
         key: &[u8],
         mode: KeyLookupMode,
     ) -> Result<Option<OptimizedValueRef>, StorageError> {
+        self.metrics.calls_to_trie_get_optimized_ref.inc();
         let charge_gas_for_trie_node_access =
             mode == KeyLookupMode::Trie || self.charge_gas_for_trie_node_access;
         if self.memtries.is_some() {
@@ -1404,8 +1465,12 @@ impl Trie {
         optimized_value_ref: &OptimizedValueRef,
     ) -> Result<Vec<u8>, StorageError> {
         match optimized_value_ref {
-            OptimizedValueRef::Ref(value_ref) => self.retrieve_value(&value_ref.hash),
+            OptimizedValueRef::Ref(value_ref) => {
+                self.metrics.trie_derefs_requiring_on_disk_lookup.inc();
+                self.retrieve_value(&value_ref.hash)
+            }
             OptimizedValueRef::AvailableValue(ValueAccessToken { value }) => {
+                self.metrics.trie_derefs_with_inlined_value.inc();
                 let value_hash = hash(value);
                 let arc_value: Arc<[u8]> = value.clone().into();
                 self.accounting_cache
@@ -1421,6 +1486,7 @@ impl Trie {
 
     /// Retrieves the full value for the given key.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+        self.metrics.calls_to_trie_get.inc();
         match self.get_optimized_ref(key, KeyLookupMode::FlatStorage)? {
             Some(optimized_ref) => Ok(Some(self.deref_optimized(&optimized_ref)?)),
             None => Ok(None),
@@ -1862,7 +1928,7 @@ mod tests {
         trie2.get(b"horse").unwrap();
         let partial_storage = trie2.recorded_storage();
 
-        let trie3 = Trie::from_recorded_storage(partial_storage.unwrap(), root, false);
+        let trie3 = Trie::from_recorded_storage(partial_storage.unwrap(), root, false, 0);
 
         assert_eq!(trie3.get(b"dog"), Ok(Some(b"puppy".to_vec())));
         assert_eq!(trie3.get(b"horse"), Ok(Some(b"stallion".to_vec())));

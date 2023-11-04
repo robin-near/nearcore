@@ -80,7 +80,7 @@ where
     println!("Test touches {} nodes, expected result {:?}...", size, expected);
     for i in 0..(size + 1) {
         let storage = IncompletePartialStorage::new(storage.clone(), i);
-        let new_trie = Trie::new(Rc::new(storage), *trie.get_root(), None);
+        let new_trie = Trie::new(Rc::new(storage), *trie.get_root(), None, trie.shard_id);
         let result = test(new_trie).map(|v| v.1);
         if i < size {
             assert_matches!(
