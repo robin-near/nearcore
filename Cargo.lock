@@ -3437,6 +3437,7 @@ dependencies = [
  "derive-enum-from-into",
  "derive_more",
  "futures",
+ "near-async-derive",
  "near-o11y",
  "near-performance-metrics",
  "near-primitives",
@@ -3445,6 +3446,15 @@ dependencies = [
  "serde_json",
  "time 0.3.21",
  "tokio",
+]
+
+[[package]]
+name = "near-async-derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.15",
 ]
 
 [[package]]
@@ -3830,9 +3840,11 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "bs58",
+ "derive_more",
  "easy-ext",
  "futures",
  "hex",
+ "near-async",
  "near-chain-configs",
  "near-client",
  "near-client-primitives",
@@ -3916,6 +3928,7 @@ dependencies = [
  "borsh 1.0.0",
  "futures",
  "near-actix-test-utils",
+ "near-async",
  "near-chain-configs",
  "near-client",
  "near-crypto",

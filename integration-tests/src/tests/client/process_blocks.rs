@@ -7,7 +7,7 @@ use actix::System;
 use assert_matches::assert_matches;
 use futures::{future, FutureExt};
 use near_actix_test_utils::run_actix;
-use near_async::messaging::IntoSender;
+use near_async::messaging::{IntoMultiSender, IntoSender};
 use near_chain::chain::ApplyStatePartsRequest;
 use near_chain::test_utils::ValidatorSchedule;
 use near_chain::types::{LatestKnown, RuntimeAdapter};
@@ -1071,7 +1071,7 @@ fn test_time_attack() {
         vs,
         Some("test1".parse().unwrap()),
         false,
-        network_adapter.into(),
+        network_adapter.as_multi_sender(),
         client_adapter.as_sender(),
         chain_genesis,
         TEST_SEED,
@@ -1114,7 +1114,7 @@ fn test_invalid_gas_price() {
         vs,
         Some("test1".parse().unwrap()),
         false,
-        network_adapter.into(),
+        network_adapter.as_multi_sender(),
         client_adapter.as_sender(),
         chain_genesis,
         TEST_SEED,
@@ -1263,7 +1263,7 @@ fn test_bad_chunk_mask() {
                 vs,
                 Some(account_id.clone()),
                 false,
-                Arc::new(MockPeerManagerAdapter::default()).into(),
+                MockPeerManagerAdapter::default().into_multi_sender(),
                 MockClientAdapterForShardsManager::default().into_sender(),
                 chain_genesis.clone(),
                 TEST_SEED,

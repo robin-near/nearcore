@@ -1313,6 +1313,7 @@ mod test {
     use actix::System;
     use actix_rt::Arbiter;
     use near_actix_test_utils::run_actix;
+    use near_async::messaging::IntoMultiSender;
     use near_chain::test_utils;
     use near_chain::{test_utils::process_block_sync, BlockProcessingArtifact, Provenance};
     use near_crypto::SecretKey;
@@ -1329,7 +1330,7 @@ mod test {
     fn test_ask_for_header() {
         let mock_peer_manager = Arc::new(MockPeerManagerAdapter::default());
         let mut state_sync = StateSync::new(
-            mock_peer_manager.clone().into(),
+            mock_peer_manager.as_multi_sender(),
             TimeDuration::from_secs(1),
             "chain_id",
             &SyncConfig::Peers,

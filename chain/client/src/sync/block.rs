@@ -240,6 +240,7 @@ impl BlockSync {
 mod test {
     use std::sync::Arc;
 
+    use near_async::messaging::IntoMultiSender;
     use near_chain::test_utils::wait_for_all_blocks_in_processing;
     use near_chain::{ChainGenesis, Provenance};
     use near_crypto::{KeyType, PublicKey};
@@ -303,7 +304,7 @@ mod test {
         let network_adapter = Arc::new(MockPeerManagerAdapter::default());
         let block_fetch_horizon = 10;
         let mut block_sync =
-            BlockSync::new(network_adapter.clone().into(), block_fetch_horizon, false, true);
+            BlockSync::new(network_adapter.as_multi_sender(), block_fetch_horizon, false, true);
         let mut chain_genesis = ChainGenesis::test();
         chain_genesis.epoch_length = 100;
         let mut env = TestEnv::builder(chain_genesis).clients_count(2).build();
@@ -383,7 +384,7 @@ mod test {
         let network_adapter = Arc::new(MockPeerManagerAdapter::default());
         let block_fetch_horizon = 10;
         let mut block_sync =
-            BlockSync::new(network_adapter.clone().into(), block_fetch_horizon, true, true);
+            BlockSync::new(network_adapter.as_multi_sender(), block_fetch_horizon, true, true);
         let mut chain_genesis = ChainGenesis::test();
         chain_genesis.epoch_length = 5;
         let mut env = TestEnv::builder(chain_genesis).clients_count(2).build();

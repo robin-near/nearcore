@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use near_async::messaging::IntoSender;
+use near_async::messaging::{IntoMultiSender, IntoSender};
 use near_chain::state_snapshot_actor::SnapshotCallbacks;
 use near_chain::test_utils::{KeyValueRuntime, MockEpochManager, ValidatorSchedule};
 use near_chain::types::RuntimeAdapter;
@@ -481,7 +481,7 @@ impl TestEnvBuilder {
                 setup_synchronous_shards_manager(
                     Some(clients[i].clone()),
                     client_adapter.as_sender(),
-                    network_adapter.into(),
+                    network_adapter.as_multi_sender(),
                     epoch_manager.into_adapter(),
                     shard_tracker,
                     runtime,
@@ -520,7 +520,7 @@ impl TestEnvBuilder {
                         u64::try_from(num_validators).unwrap(),
                         Some(account_id),
                         false,
-                        network_adapter.into(),
+                        network_adapter.as_multi_sender(),
                         shards_manager_adapter,
                         chain_genesis.clone(),
                         epoch_manager.into_adapter(),

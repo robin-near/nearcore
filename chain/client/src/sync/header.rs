@@ -282,6 +282,7 @@ mod test {
     use std::sync::Arc;
     use std::thread;
 
+    use near_async::messaging::IntoMultiSender;
     use near_chain::test_utils::{
         process_block_sync, setup, setup_with_validators_and_start_time, ValidatorSchedule,
     };
@@ -343,7 +344,7 @@ mod test {
     fn test_sync_headers_fork() {
         let mock_adapter = Arc::new(MockPeerManagerAdapter::default());
         let mut header_sync = HeaderSync::new(
-            mock_adapter.clone().into(),
+            mock_adapter.as_multi_sender(),
             TimeDuration::from_secs(10),
             TimeDuration::from_secs(2),
             TimeDuration::from_secs(120),
@@ -429,7 +430,7 @@ mod test {
     fn test_sync_headers_fork_from_final_block() {
         let mock_adapter = Arc::new(MockPeerManagerAdapter::default());
         let mut header_sync = HeaderSync::new(
-            mock_adapter.clone().into(),
+            mock_adapter.as_multi_sender(),
             TimeDuration::from_secs(10),
             TimeDuration::from_secs(2),
             TimeDuration::from_secs(120),
@@ -539,7 +540,7 @@ mod test {
 
         // Setup header_sync with expectation of 25 headers/second
         let mut header_sync = HeaderSync::new(
-            network_adapter.clone().into(),
+            network_adapter.as_multi_sender(),
             TimeDuration::from_secs(1),
             TimeDuration::from_secs(1),
             TimeDuration::from_secs(3),
@@ -633,7 +634,7 @@ mod test {
     fn test_sync_from_very_behind() {
         let mock_adapter = Arc::new(MockPeerManagerAdapter::default());
         let mut header_sync = HeaderSync::new(
-            mock_adapter.clone().into(),
+            mock_adapter.as_multi_sender(),
             TimeDuration::from_secs(10),
             TimeDuration::from_secs(2),
             TimeDuration::from_secs(120),

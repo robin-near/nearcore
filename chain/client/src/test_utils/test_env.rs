@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::adapter::ProcessTxResponse;
 use crate::Client;
-use near_async::messaging::CanSend;
+use near_async::messaging::{CanSend, IntoMultiSender};
 use near_chain::test_utils::ValidatorSchedule;
 use near_chain::{ChainGenesis, Provenance};
 use near_chunks::client::ShardsManagerResponse;
@@ -393,7 +393,7 @@ impl TestEnv {
             num_validator_seats,
             Some(self.get_client_id(idx).clone()),
             false,
-            self.network_adapters[idx].clone().into(),
+            self.network_adapters[idx].clone().as_multi_sender(),
             self.shards_manager_adapters[idx].clone(),
             self.chain_genesis.clone(),
             self.clients[idx].epoch_manager.clone(),
