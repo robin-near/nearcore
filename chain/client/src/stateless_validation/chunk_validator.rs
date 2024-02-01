@@ -564,6 +564,7 @@ pub(crate) fn send_chunk_endorsement_to_block_producers(
                 .process_chunk_endorsement(chunk_header, endorsement.clone())
                 .unwrap();
         } else {
+            super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_SENT.inc();
             network_sender.send(PeerManagerMessageRequest::NetworkRequests(
                 NetworkRequests::ChunkEndorsement(block_producer, endorsement.clone()),
             ));

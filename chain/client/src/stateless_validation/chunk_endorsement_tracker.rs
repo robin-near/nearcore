@@ -51,6 +51,7 @@ impl ChunkEndorsementTracker {
         chunk_header: &ShardChunkHeader,
         endorsement: ChunkEndorsement,
     ) -> Result<(), Error> {
+        super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_RECEIVED.inc();
         let chunk_hash = endorsement.chunk_hash();
         let account_id = &endorsement.account_id;
 
@@ -61,11 +62,27 @@ impl ChunkEndorsementTracker {
             .is_some_and(|existing_endorsements| existing_endorsements.get(account_id).is_some())
         {
             tracing::debug!(target: "stateless_validation", ?endorsement, "Already received chunk endorsement.");
+            super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_RECEIVED_BUT_DROPPED
+                .get_metric_with_label_values(&["duplicate"])
+                .unwrap()
+                .inc();
             return Ok(());
         }
 
-        if !self.epoch_manager.verify_chunk_endorsement(chunk_header, &endorsement)? {
+        let chunk_endorsement_verification =
+            self.epoch_manager.verify_chunk_endorsement(chunk_header, &endorsement);
+        if let Err(err) = &chunk_endorsement_verification {
+            super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_RECEIVED_BUT_DROPPED
+                .get_metric_with_label_values(&["missing_header"])
+                .unwrap()
+                .inc();
+        }
+        if !chunk_endorsement_verification? {
             tracing::error!(target: "stateless_validation", ?endorsement, "Invalid chunk endorsement.");
+            super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_RECEIVED_BUT_DROPPED
+                .get_metric_with_label_values(&["invalid"])
+                .unwrap()
+                .inc();
             return Err(Error::InvalidChunkEndorsement);
         }
 
