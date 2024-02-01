@@ -734,7 +734,7 @@ impl Doomslug {
                         } else {
                             let delay = self.timer.get_delay(
                                 self.timer.height.saturating_sub(self.largest_final_height.get()),
-                            ) / 6;
+                            ) / 2;
 
                             let ready = now > when + delay;
                             span.record("need_to_wait", !ready);
