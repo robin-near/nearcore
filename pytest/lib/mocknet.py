@@ -22,7 +22,7 @@ from transaction import sign_payment_tx_and_get_hash, sign_staking_tx_and_get_ha
 DEFAULT_KEY_TARGET = '/tmp/mocknet'
 KEY_TARGET_ENV_VAR = 'NEAR_PYTEST_KEY_TARGET'
 # NODE_SSH_KEY_PATH = '~/.ssh/near_ops'
-NODE_SSH_KEY_PATH = None
+NODE_SSH_KEY_PATH = '~/.ssh/id_rsa'
 NODE_USERNAME = 'ubuntu'
 NUM_ACCOUNTS = 26 * 2
 PROJECT = 'near-mocknet'
@@ -916,7 +916,7 @@ def create_and_upload_genesis_file_from_empty_genesis(
         total_supply += int(account.get('locked', 0))
         total_supply += int(account.get('amount', 0))
     genesis_config['total_supply'] = str(total_supply)
-    genesis_config['protocol_version'] = 57
+    genesis_config['protocol_version'] = 80
     genesis_config['epoch_length'] = int(epoch_length)
     genesis_config['num_block_producer_seats'] = int(num_seats)
     genesis_config['protocol_reward_rate'] = [1, 10]

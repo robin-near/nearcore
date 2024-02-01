@@ -90,6 +90,10 @@ def override_config(node, config):
             "produce_duplicate_blocks": True
         }
     """
+    config["consensus"]["min_block_production_delay"] = {
+        "secs": 1,
+        "nanos": 0,
+    }
 
 
 class Role(Enum):

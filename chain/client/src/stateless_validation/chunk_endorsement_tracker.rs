@@ -71,7 +71,7 @@ impl ChunkEndorsementTracker {
 
         let chunk_endorsement_verification =
             self.epoch_manager.verify_chunk_endorsement(chunk_header, &endorsement);
-        if let Err(err) = &chunk_endorsement_verification {
+        if let Err(_) = &chunk_endorsement_verification {
             super::metrics::NUM_CHUNK_ENDORSEMENT_MESSAGES_RECEIVED_BUT_DROPPED
                 .get_metric_with_label_values(&["missing_header"])
                 .unwrap()
