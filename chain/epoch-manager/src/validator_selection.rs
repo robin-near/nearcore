@@ -150,8 +150,11 @@ pub fn proposals_to_epoch_info(
                 }
             }
         }
-        chunk_producers_settlement
-            .shuffle(&mut EpochInfo::shard_assignment_shuffling_rng(&rng_seed));
+        if checked_feature!("stable", ShuffleTrackedShards, next_version) {
+            chunk_producers_settlement
+                .shuffle(&mut EpochInfo::shard_assignment_shuffling_rng(&rng_seed));
+        }
+
         chunk_producers_settlement
     } else {
         if chunk_producers.is_empty() {
