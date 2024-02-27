@@ -2,8 +2,8 @@ use crate::trie::{
     DEFAULT_SHARD_CACHE_DELETIONS_QUEUE_CAPACITY, DEFAULT_SHARD_CACHE_TOTAL_SIZE_LIMIT,
 };
 use crate::DBCol;
+use near_async::time::Duration;
 use near_primitives::shard_layout::ShardUId;
-use std::time::Duration;
 use std::{collections::HashMap, iter::FromIterator};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -294,7 +294,7 @@ impl Default for StoreConfig {
             // we do several disk reads from `FlatStateMisc` and `FlatStateDeltas`.
             // One second should be enough to save deltas on start and catch up
             // flat storage head quickly. State read work is much more expensive.
-            flat_storage_creation_period: Duration::from_secs(1),
+            flat_storage_creation_period: Duration::seconds(1),
 
             state_snapshot_config: Default::default(),
 
