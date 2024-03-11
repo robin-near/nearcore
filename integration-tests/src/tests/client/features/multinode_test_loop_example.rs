@@ -135,6 +135,28 @@ enum TestEvent {
 
 const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 
+/// Pre-deploy in genesis any contract for a given account.
+pub fn add_contract(genesis: &mut Genesis, account_id: &AccountId, code: Vec<u8>) {
+    let mut is_account_record_found = false;
+    let hash = CryptoHash::hash_bytes(&code);
+    let records = genesis.force_read_records().as_mut();
+    for record in records.iter_mut() {
+        if let StateRecord::Account { account_id: record_account_id, ref mut account } = record {
+            if record_account_id == account_id {
+                is_account_record_found = true;
+                account.set_code_hash(hash);
+            }
+        }
+    }
+    if !is_account_record_found {
+        records.push(StateRecord::Account {
+            account_id: account_id.clone(),
+            account: Account::new(0, 0, 0, hash, 0, PROTOCOL_VERSION),
+        });
+    }
+    records.push(StateRecord::Contract { account_id: account_id.clone(), code });
+}
+
 #[test]
 fn test_client_with_multi_test_loop() {
     const NUM_CLIENTS: usize = 4;
@@ -200,7 +222,9 @@ fn test_client_with_multi_test_loop() {
         // The total supply must be correct to pass validation.
         genesis_config.total_supply += initial_balance + staked;
     }
-    let genesis = Genesis::new(genesis_config, GenesisRecords(records)).unwrap();
+    let ft_contract = &accounts[0];
+    let mut genesis = Genesis::new(genesis_config, GenesisRecords(records)).unwrap();
+    add_contract(&mut genesis, ft_contract, near_test_contracts::ft_contract().to_vec());
 
     let mut datas = Vec::new();
     for idx in 0..NUM_CLIENTS {
@@ -390,6 +414,31 @@ fn test_client_with_multi_test_loop() {
     }
     test.run_instant();
 
+    for i in 0..accounts.len() {
+        let tx = SignedTransaction::call(
+            1,
+            accounts[i].clone(),
+            ft_contract.clone(),
+            &create_user_test_signer(&accounts[i]),
+            0,
+            "new_default_meta".to_string(),
+            br#"{"owner_id": "alice.near", "total_supply": "1000000"}"#.to_vec(),
+            30_000_000_000_000,
+            *test.data[0].client.client.chain.get_block_by_height(10002).unwrap().hash(),
+        );
+        drop(
+            test.sender()
+                .for_index(i % NUM_CLIENTS)
+                .into_wrapped_multi_sender::<ClientSenderForNetworkMessage, ClientSenderForNetwork>(
+                )
+                .send_async(ProcessTxRequest {
+                    transaction: tx,
+                    is_forwarded: false,
+                    check_only: false,
+                }),
+        );
+    }
+
     let mut balances = accounts
         .iter()
         .cloned()
@@ -398,12 +447,12 @@ fn test_client_with_multi_test_loop() {
     for i in 0..accounts.len() {
         let amount = ONE_NEAR * (i as u128 + 1);
         let tx = SignedTransaction::send_money(
-            1,
+            2,
             accounts[i].clone(),
             accounts[(i + 1) % accounts.len()].clone(),
             &create_user_test_signer(&accounts[i]),
             amount,
-            *test.data[0].client.client.chain.get_block_by_height(10002).unwrap().hash(),
+            *test.data[0].client.client.chain.get_block_by_height(10003).unwrap().hash(),
         );
         *balances.get_mut(&accounts[i]).unwrap() -= amount;
         *balances.get_mut(&accounts[(i + 1) % accounts.len()]).unwrap() += amount;
