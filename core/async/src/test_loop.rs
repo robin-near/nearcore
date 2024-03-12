@@ -293,7 +293,6 @@ impl<Data, Event: Debug + Send + 'static> TestLoop<Data, Event> {
     /// Helper to push events we have just received into the heap.
     fn queue_received_events(&mut self) {
         for event in self.pending_events.lock().unwrap().events.drain(..) {
-            info!("Queuing new event at index {}: {:?}", self.next_event_index, event.event);
             self.events.push(EventInHeap {
                 due: self.current_time + event.delay,
                 event: event.event,
