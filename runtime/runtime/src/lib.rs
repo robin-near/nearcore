@@ -1332,6 +1332,7 @@ impl Runtime {
         let mut delayed_receipts_indices: DelayedReceiptIndices =
             get(&state_update, &TrieKey::DelayedReceiptIndices)?.unwrap_or_default();
         let initial_delayed_receipt_indices = delayed_receipts_indices.clone();
+        tracing::info!("Delayed receipt indices before apply: {:?}", delayed_receipts_indices);
 
         if !apply_state.is_new_chunk
             && protocol_version >= ProtocolFeature::FixApplyChunks.protocol_version()
@@ -1631,6 +1632,8 @@ impl Runtime {
         if yielded_promise_indices != initial_yielded_promise_indices {
             set(&mut state_update, TrieKey::YieldedPromiseQueueIndices, &yielded_promise_indices);
         }
+
+        tracing::info!("Delayed receipt indices after apply: {:?}", delayed_receipts_indices);
 
         check_balance(
             &apply_state.config,

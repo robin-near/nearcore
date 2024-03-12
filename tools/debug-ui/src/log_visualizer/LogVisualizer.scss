@@ -41,6 +41,10 @@
                 background-color: #cfc;
             }
 
+            &.matches-search {
+                outline: 2px solid red;
+            }
+
             .content {
                 overflow: hidden;
 

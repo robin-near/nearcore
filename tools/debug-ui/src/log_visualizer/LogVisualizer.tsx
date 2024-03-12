@@ -3,7 +3,7 @@ import { LogViewer } from '@patternfly/react-log-viewer';
 import { LogFileDrop } from '../LogFileDrop';
 import './LogVisualizer.scss';
 import { prettyPrint } from '../pretty-print';
-import { EventItemCollection } from './events';
+import {EventItem, EventItemCollection} from './events';
 import { Layouts, SizesConfig } from './layout';
 import { ArrowColumn, ArrowGroup, makeOutgoingArrowsForItem } from './arrows';
 
@@ -21,6 +21,7 @@ const LAYOUT_SIZES: SizesConfig = {
 export const LogVisualizer = () => {
     const [logLines, setLogLines] = useState<string[]>([]);
     const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+    const [searchTerm, setSearchTerm] = useState<string>("");
 
     const { events, arrowGroups, layouts } = useMemo(() => {
         const events = EventItemCollection.parseFromLogLines(logLines);
@@ -38,6 +39,9 @@ export const LogVisualizer = () => {
     return (
         <div className="log-visualizer">
             {logLines.length === 0 && <LogFileDrop onFileDrop={setLogLines} />}
+            {logLines.length > 0 && <div className="visualizer-search">
+                Search: <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+            </div>}
             <div
                 className="visualizer-content"
                 onClick={() => setSelectedEventId(null)}
@@ -174,7 +178,10 @@ export const LogVisualizer = () => {
                     return (
                         <div
                             key={`event ${event.id}`}
-                            className={'event' + (event.id == selectedEventId ? ' selected' : '')}
+                            className={
+                                'event'
+                                + (event.id == selectedEventId ? ' selected' : '')
+                                + (matchesSearchTerm(event, searchTerm) ? ' matches-search' : '')}
                             style={{
                                 left: layouts.getItemXOffset(event.column),
                                 top: layouts.getItemYOffset(event.row),
@@ -185,7 +192,8 @@ export const LogVisualizer = () => {
                                 setSelectedEventId(event.id);
                                 e.stopPropagation();
                             }}>
-                            <div className="content">
+                            <div
+                                className="content">
                                 <div className="title">{event.title}</div>
                                 {event.subtitle && <div className="subtitle">{event.subtitle}</div>}
                             </div>
@@ -245,4 +253,11 @@ function drawLine(
                 height: to.y - from.y,
             }}></div>
     );
+}
+
+function matchesSearchTerm(event: EventItem, searchTerm: string): boolean {
+    if (searchTerm.length < 3) {
+        return false;
+    }
+    return event.logRows.find(row => row.includes(searchTerm)) !== undefined;
 }

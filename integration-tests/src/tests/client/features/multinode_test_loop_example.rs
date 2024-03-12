@@ -166,7 +166,7 @@ fn test_client_with_multi_test_loop() {
     let validator_stake = 1000000 * ONE_NEAR;
     let initial_balance = 10000 * ONE_NEAR;
     let accounts =
-        (0..100).map(|i| format!("account{}", i).parse().unwrap()).collect::<Vec<AccountId>>();
+        (0..10).map(|i| format!("account{}", i).parse().unwrap()).collect::<Vec<AccountId>>();
 
     // TODO: Make some builder for genesis.
     let mut genesis_config = GenesisConfig {
@@ -183,7 +183,7 @@ fn test_client_with_multi_test_loop() {
         ),
         min_gas_price: 0,
         max_gas_price: 0,
-        gas_limit: 100000000000000,
+        gas_limit: 10000000000000,
         transaction_validity_period: 1000,
         validators: (0..NUM_CLIENTS)
             .map(|idx| AccountInfo {
@@ -449,13 +449,13 @@ fn test_client_with_multi_test_loop() {
         let tx = SignedTransaction::send_money(
             2,
             accounts[i].clone(),
-            accounts[(i + 1) % accounts.len()].clone(),
+            accounts[0].clone(),
             &create_user_test_signer(&accounts[i]),
             amount,
             *test.data[0].client.client.chain.get_block_by_height(10003).unwrap().hash(),
         );
         *balances.get_mut(&accounts[i]).unwrap() -= amount;
-        *balances.get_mut(&accounts[(i + 1) % accounts.len()]).unwrap() += amount;
+        *balances.get_mut(&accounts[0]).unwrap() += amount;
         drop(
             test.sender()
                 .for_index(i % NUM_CLIENTS)
@@ -469,8 +469,8 @@ fn test_client_with_multi_test_loop() {
         );
     }
     test.run_until(
-        |data| data[0].client.client.chain.head().unwrap().height == 10008,
-        Duration::seconds(8),
+        |data| data[0].client.client.chain.head().unwrap().height == 10030,
+        Duration::seconds(30),
     );
 
     for account in &accounts {

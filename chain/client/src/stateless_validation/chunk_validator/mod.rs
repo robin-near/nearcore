@@ -4,6 +4,7 @@ pub mod orphan_witness_pool;
 use super::processing_tracker::ProcessingDoneTracker;
 use crate::stateless_validation::chunk_endorsement_tracker::ChunkEndorsementTracker;
 use crate::{metrics, Client};
+use borsh::BorshDeserialize;
 use itertools::Itertools;
 use near_async::futures::{AsyncComputationSpawner, AsyncComputationSpawnerExt};
 use near_async::messaging::Sender;
@@ -22,9 +23,11 @@ use near_chain_primitives::Error;
 use near_epoch_manager::EpochManagerAdapter;
 use near_network::types::{NetworkRequests, PeerManagerMessageRequest};
 use near_pool::TransactionGroupIteratorWrapper;
+use near_primitives::challenge::{PartialState, TrieValue};
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::merkle::merklize;
 use near_primitives::receipt::Receipt;
+use near_primitives::shard_layout::ShardUId;
 use near_primitives::sharding::{ChunkHash, ReceiptProof, ShardChunkHeader};
 use near_primitives::stateless_validation::{
     ChunkEndorsement, ChunkStateWitness, ChunkStateWitnessInner,
@@ -33,9 +36,10 @@ use near_primitives::transaction::SignedTransaction;
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::ShardId;
 use near_primitives::validator_signer::ValidatorSigner;
-use near_store::PartialStorage;
+use near_store::{NibbleSlice, PartialStorage, RawTrieNode, RawTrieNodeWithSize};
 use orphan_witness_pool::OrphanStateWitnessPool;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 // After validating a chunk state witness, we ideally need to send the chunk endorsement
@@ -133,7 +137,7 @@ impl ChunkValidator {
             let _processing_done_tracker_capture = processing_done_tracker;
 
             match validate_chunk_state_witness(
-                state_witness_inner,
+                state_witness_inner.clone(),
                 pre_validation_result,
                 epoch_manager.as_ref(),
                 runtime_adapter.as_ref(),
@@ -148,12 +152,202 @@ impl ChunkValidator {
                     );
                 }
                 Err(err) => {
-                    tracing::error!("Failed to validate chunk: {:?}", err);
+                    let printout = serde_json::to_string_pretty(
+                        &PartialStateParser::parse_and_serialize_partial_state(
+                            state_witness_inner.main_state_transition.base_state,
+                        ),
+                    )
+                    .unwrap();
+                    tracing::error!(
+                        "Failed to validate chunk: {:?}, partial state:\n{}",
+                        err,
+                        printout
+                    );
+                    panic!();
                 }
             }
         });
         Ok(())
     }
+}
+
+struct PartialStateParser {
+    nodes: HashMap<CryptoHash, TrieValue>,
+}
+
+impl PartialStateParser {
+    /// Takes the flattened partial trie nodes and turn them into a hierarchical view,
+    /// automatically finding the root. Only used for debugging.
+    pub fn parse_and_serialize_partial_state(partial_state: PartialState) -> DebugTrieNode {
+        let PartialState::TrieValues(nodes) = partial_state;
+        let parser = Self::new(&nodes);
+        let root = parser.find_root().unwrap();
+        parser.serialize_node("".to_owned(), root)
+    }
+
+    fn new(nodes: &[TrieValue]) -> Self {
+        Self {
+            nodes: nodes
+                .iter()
+                .map(|node| {
+                    let hash = hash(&node);
+                    (hash, node.clone())
+                })
+                .collect(),
+        }
+    }
+
+    /// Finds what's most likely the root node, which is the node that isn't listed
+    /// as a child of any other node.
+    fn find_root(&self) -> Option<CryptoHash> {
+        let mut nodes_not_yet_seen_as_children: HashSet<CryptoHash> = HashSet::new();
+        for hash in self.nodes.keys() {
+            nodes_not_yet_seen_as_children.insert(*hash);
+        }
+        for data in self.nodes.values() {
+            // Note that here it's possible that we're parsing a value that is not a trie
+            // node, so we may get some false positive. But that is very rare and only
+            // a problem if a child parsed from such a ill-constructed value happens to
+            // be the root hash. In that case, we would fail to find the root and will just
+            // fall back to showing the raw values.
+            let children = self.detect_possible_children_of(&data);
+            for child in children {
+                nodes_not_yet_seen_as_children.remove(&child);
+            }
+        }
+        if nodes_not_yet_seen_as_children.len() == 1 {
+            nodes_not_yet_seen_as_children.iter().next().copied()
+        } else {
+            None
+        }
+    }
+
+    /// Parses the given data that is possibly a trie node (and possibly a value),
+    /// and if it looks like a trie node, return all its children hashes (nodes and
+    /// values).
+    fn detect_possible_children_of(&self, data: &[u8]) -> Vec<CryptoHash> {
+        let Ok(node) = RawTrieNodeWithSize::try_from_slice(data) else {
+            return vec![];
+        };
+        match &node.node {
+            RawTrieNode::Leaf(_, value) => {
+                vec![value.hash]
+            }
+            RawTrieNode::BranchNoValue(children) => {
+                children.iter().map(|(_, child)| *child).collect()
+            }
+            RawTrieNode::BranchWithValue(value, children) => children
+                .iter()
+                .map(|(_, child)| *child)
+                .chain(std::iter::once(value.hash))
+                .collect(),
+            RawTrieNode::Extension(_, child) => vec![*child],
+        }
+    }
+
+    /// Visits node, serializing it as entity debug output.
+    fn serialize_node(&self, path: String, hash: CryptoHash) -> DebugTrieNode {
+        let Some(data) = self.nodes.get(&hash) else {
+            // This is a partial trie, so missing is very normal.
+            return DebugTrieNode { hash, path, missing: true, children: Vec::new(), value: None };
+        };
+        let mut ret_node = DebugTrieNode {
+            hash,
+            path: path.clone(),
+            missing: false,
+            children: Vec::new(),
+            value: None,
+        };
+        let node = RawTrieNodeWithSize::try_from_slice(data.as_ref()).unwrap();
+        match &node.node {
+            RawTrieNode::Leaf(extension, value_ref) => {
+                let (nibbles, _) = NibbleSlice::from_encoded(&extension);
+                let leaf_path =
+                    path + TriePath::nibbles_to_hex(&nibbles.iter().collect::<Vec<_>>()).as_str();
+                ret_node.children.push(self.serialize_value(leaf_path, value_ref.hash).into());
+            }
+            RawTrieNode::BranchNoValue(children) => {
+                for (index, child) in children.iter() {
+                    let child_path = path.clone() + TriePath::nibbles_to_hex(&[index]).as_str();
+                    ret_node.children.push(self.serialize_node(child_path, *child).into());
+                }
+            }
+            RawTrieNode::BranchWithValue(value_ref, children) => {
+                ret_node.children.push(self.serialize_value(path.clone(), value_ref.hash).into());
+                for (index, child) in children.iter() {
+                    let child_path = path.clone() + TriePath::nibbles_to_hex(&[index]).as_str();
+                    ret_node.children.push(self.serialize_node(child_path, *child).into());
+                }
+            }
+            RawTrieNode::Extension(extension, child) => {
+                let (nibbles, _) = NibbleSlice::from_encoded(&extension);
+                let child_path =
+                    path + TriePath::nibbles_to_hex(&nibbles.iter().collect::<Vec<_>>()).as_str();
+                ret_node.children.push(self.serialize_node(child_path, *child).into());
+            }
+        }
+        ret_node
+    }
+
+    fn serialize_value(&self, path: String, hash: CryptoHash) -> DebugTrieNode {
+        let value = match self.nodes.get(&hash) {
+            Some(data) => hex::encode(data),
+            // This is a partial trie, so missing is very normal.
+            None => "(missing)".to_string(),
+        };
+        DebugTrieNode { missing: false, children: Vec::new(), value: Some(value), path, hash }
+    }
+}
+
+/// A helper to represent the complete location of a trie node with a string.
+/// The format is "shard_uid/state_root/path", where path is a hex-encoded
+/// string of nibbles (which may be of odd length, because each nibble is 4 bits
+/// which is a single hex character).
+pub struct TriePath {
+    pub shard_uid: ShardUId,
+    pub state_root: CryptoHash,
+    pub path: Vec<u8>,
+}
+
+impl TriePath {
+    pub fn to_string(&self) -> String {
+        format!("{}/{}/{}", self.shard_uid, self.state_root, Self::nibbles_to_hex(&self.path))
+    }
+
+    pub fn parse(encoded: String) -> Option<TriePath> {
+        let mut parts = encoded.split("/");
+        let shard_uid = parts.next()?.parse().ok()?;
+        let state_root = parts.next()?.parse().ok()?;
+        let nibbles = parts.next()?;
+        let path = Self::nibbles_from_hex(nibbles)?;
+        Some(TriePath { shard_uid, state_root, path })
+    }
+
+    /// Format of nibbles is an array of 4-bit integers.
+    pub fn nibbles_to_hex(nibbles: &[u8]) -> String {
+        nibbles.iter().map(|x| format!("{:x}", x)).collect::<Vec<_>>().join("")
+    }
+
+    /// Format of returned value is an array of 4-bit integers, or None if parsing failed.
+    pub fn nibbles_from_hex(hex: &str) -> Option<Vec<u8>> {
+        let mut result = Vec::new();
+        for nibble in hex.chars() {
+            result.push(u8::from_str_radix(&nibble.to_string(), 16).ok()?);
+        }
+        Some(result)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct DebugTrieNode {
+    hash: CryptoHash,
+    path: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    missing: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<Box<DebugTrieNode>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
 }
 
 /// Checks that proposed `transactions` are valid for a chunk with `chunk_header`.

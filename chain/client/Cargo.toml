@@ -42,6 +42,7 @@ tokio.workspace = true
 tracing.workspace = true
 yansi.workspace = true
 bytesize.workspace = true
+hex.workspace = true
 
 near-async.workspace = true
 near-cache.workspace = true
@@ -53,6 +54,7 @@ near-client-primitives.workspace = true
 near-crypto.workspace = true
 near-dyn-configs.workspace = true
 near-epoch-manager.workspace = true
+near-jsonrpc-primitives.workspace = true
 near-network.workspace = true
 near-o11y.workspace = true
 near-performance-metrics-macros.workspace = true
