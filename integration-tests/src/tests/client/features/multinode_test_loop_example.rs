@@ -444,7 +444,7 @@ fn test_repro_in_memory_trie_bug() {
     let validator_stake = 1000000 * ONE_NEAR;
     let initial_balance = 10000 * ONE_NEAR;
     let accounts =
-        (0..100).map(|i| format!("account{}", i).parse().unwrap()).collect::<Vec<AccountId>>();
+        (0..20).map(|i| format!("account{}", i).parse().unwrap()).collect::<Vec<AccountId>>();
 
     // TODO: Make some builder for genesis.
     let mut genesis_config = GenesisConfig {
@@ -712,9 +712,9 @@ fn test_repro_in_memory_trie_bug() {
         accounts[0].clone(),
         ft_account.clone(),
         &create_user_test_signer(&accounts[0]),
-        1 * ONE_NEAR,
+        0,
         "new_default_meta".to_owned(),
-        r#"{"owner_id": "account0", "total_supply": 1000000}"#.as_bytes().to_vec(),
+        r#"{"owner_id": "account0", "total_supply": "1000000"}"#.as_bytes().to_vec(),
         100000000000000,
         ref_block_hash_1,
     );
@@ -729,7 +729,7 @@ fn test_repro_in_memory_trie_bug() {
         check_only: false,
     }));
     drop(tx_sender.send_async(ProcessTxRequest {
-        transaction: ft_init_tx,
+        transaction: ft_init_tx.clone(),
         is_forwarded: false,
         check_only: false,
     }));
@@ -743,30 +743,69 @@ fn test_repro_in_memory_trie_bug() {
         test.data.tx_outcome(ft_deploy_contract_tx.get_hash()).status,
         FinalExecutionStatus::SuccessValue(_)
     );
+    assert_matches!(
+        test.data.tx_outcome(ft_init_tx.get_hash()).status,
+        FinalExecutionStatus::SuccessValue(_)
+    );
+
+    let mut storage_deposit_txn_hashes = Vec::new();
+    for i in 1..accounts.len() {
+        let tx = SignedTransaction::call(
+            1,
+            accounts[i].clone(),
+            ft_account.clone(),
+            &create_user_test_signer(&accounts[i]),
+            1 * ONE_NEAR,
+            "storage_deposit".to_owned(),
+            format!(r#"{{"account_id": "{}"}}"#, accounts[i].as_str()).as_bytes().to_vec(),
+            100000000000000,
+            ref_block_hash_1,
+        );
+        storage_deposit_txn_hashes.push(tx.get_hash());
+        drop(tx_sender.send_async(ProcessTxRequest {
+            transaction: tx,
+            is_forwarded: false,
+            check_only: false,
+        }));
+    }
+
+    test.run_until(
+        |data| data[0].client.client.chain.head().unwrap().height == 10011,
+        Duration::seconds(6),
+    );
+
+    for txn_hash in storage_deposit_txn_hashes {
+        assert_matches!(
+            test.data.tx_outcome(txn_hash).status,
+            FinalExecutionStatus::SuccessValue(_)
+        );
+    }
 
     let mut balances =
         accounts.iter().cloned().map(|account| (account, 0u128)).collect::<HashMap<_, _>>();
     balances.insert(accounts[0].clone(), 1000000);
 
-    for i in 0..accounts.len() {
+    let mut transfer_txn_hashes = Vec::new();
+    for i in 1..accounts.len() {
         let amount = 1 * (i as u128 + 1);
         let tx = SignedTransaction::call(
             100 + i as u64,
             accounts[0].clone(),
             ft_account.clone(),
             &create_user_test_signer(&accounts[0]),
-            0,
+            1,
             "ft_transfer".to_owned(),
             format!(
-                r#"{{"receiver_id": "{}", "amount": {}, "memo": null}}"#,
+                r#"{{"receiver_id": "{}", "amount": "{}", "memo": null}}"#,
                 accounts[i].as_str(),
                 amount
             )
             .as_bytes()
             .to_vec(),
-            0,
+            100000000000000,
             ref_block_hash_1,
         );
+        transfer_txn_hashes.push(tx.get_hash());
         *balances.get_mut(&accounts[0]).unwrap() -= amount;
         *balances.get_mut(&accounts[i]).unwrap() += amount;
         drop(tx_sender.send_async(ProcessTxRequest {
@@ -776,9 +815,18 @@ fn test_repro_in_memory_trie_bug() {
         }));
     }
     test.run_until(
-        |data| data[0].client.client.chain.head().unwrap().height == 10011,
-        Duration::seconds(6),
+        |data| data[0].client.client.chain.head().unwrap().height == 10018,
+        Duration::seconds(20),
     );
+
+    for (i, txn_hash) in transfer_txn_hashes.into_iter().enumerate() {
+        assert_matches!(
+            test.data.tx_outcome(txn_hash).status,
+            FinalExecutionStatus::SuccessValue(_),
+            "Transfer #{} failed",
+            i,
+        );
+    }
 
     for account in &accounts {
         let balance = test.data.view_call(
@@ -786,10 +834,10 @@ fn test_repro_in_memory_trie_bug() {
             "ft_balance_of",
             format!(r#"{{"account_id": "{}"}}"#, account.as_str()).as_bytes(),
         );
-        let balance = String::from_utf8(balance).unwrap().parse::<u128>().unwrap();
+        let balance = String::from_utf8(balance).unwrap();
         assert_eq!(
             balance,
-            *balances.get(account).unwrap(),
+            format!("\"{}\"", *balances.get(account).unwrap()),
             "Account balance mismatch for account {}",
             account
         );
