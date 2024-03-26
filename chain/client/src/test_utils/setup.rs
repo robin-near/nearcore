@@ -121,6 +121,7 @@ pub fn setup(
         },
         None,
         Arc::new(RayonAsyncComputationSpawner),
+        None,
     )
     .unwrap();
     let genesis_block = chain.get_block(&chain.genesis().hash().clone()).unwrap();
@@ -262,6 +263,7 @@ pub fn setup_only_view(
         },
         None,
         Arc::new(RayonAsyncComputationSpawner),
+        None,
     )
     .unwrap();
 
@@ -1036,6 +1038,7 @@ pub fn setup_synchronous_shards_manager(
         }, // irrelevant
         None,
         Arc::new(RayonAsyncComputationSpawner),
+        None,
     )
     .unwrap();
     let chain_head = chain.head().unwrap();
