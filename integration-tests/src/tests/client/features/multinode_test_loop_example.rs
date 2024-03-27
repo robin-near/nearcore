@@ -263,7 +263,7 @@ fn test_client_with_multi_test_loop() {
 
         let store_config = StoreConfig {
             path: Some(homedir.clone()),
-            load_mem_tries_for_all_shards: false,
+            load_mem_tries_for_tracked_shards: true,
             ..Default::default()
         };
         let opener = NodeStorage::opener(&homedir, false, &store_config, None);
