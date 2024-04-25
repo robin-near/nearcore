@@ -372,11 +372,13 @@ impl FlatStorage {
     ) -> Result<(), FlatStorageError> {
         let mut guard = self.0.write().expect(crate::flat::POISONED_LOCK_ERR);
         if !guard.move_head_enabled {
+            tracing::debug!(target: "store", "Skipping flat head update because move head is disabled");
             return Ok(());
         }
 
         let new_head = guard.get_new_flat_head(*block_hash, strict)?;
         if new_head == guard.flat_head.hash {
+            tracing::debug!(target: "store", "Skipping flat head update because flat head is the same as new head");
             return Ok(());
         }
 

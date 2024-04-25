@@ -131,6 +131,11 @@ impl FlatStorageManager {
                     }
                 }
             });
+        } else {
+            tracing::debug!(
+                "Not updating flat head for shard {:?} because flat storage manager does not exist",
+                shard_uid
+            );
         }
         Ok(())
     }
