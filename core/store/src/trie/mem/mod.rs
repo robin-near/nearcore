@@ -223,13 +223,10 @@ mod tests {
                                 let root = MemTrieNodeId::new(
                                     arena,
                                     InputMemTrieNode::Leaf {
-                                        value: FlatStateValue::Inlined(
+                                        value: &FlatStateValue::Inlined(
                                             format!("{}", height).into_bytes(),
                                         ),
-                                        extension: NibbleSlice::new(&[])
-                                            .encoded(true)
-                                            .to_vec()
-                                            .into_boxed_slice(),
+                                        extension: &NibbleSlice::new(&[]).encoded(true).to_vec(),
                                     },
                                 );
                                 root.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();

@@ -39,7 +39,7 @@ pub fn trim_database(old: Store, genesis_config: &GenesisConfig, new: Store) -> 
                 sharding_version.to_le_bytes().to_vec(),
                 (sharding_version + 1).to_le_bytes().to_vec(),
                 6,
-                move |key, value| {
+                move |_, key, value| {
                     tx.send((key.to_vec(), value.to_vec())).unwrap();
                 },
                 true,
@@ -99,7 +99,7 @@ pub fn trim_database(old: Store, genesis_config: &GenesisConfig, new: Store) -> 
                 DBCol::State,
                 non_inlined_keys,
                 6,
-                move |key, value| {
+                move |_, key, value| {
                     tx.send((key.to_vec(), value.map(|value| value.to_vec()))).unwrap();
                 },
                 true,

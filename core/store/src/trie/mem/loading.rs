@@ -3,10 +3,12 @@ use super::MemTries;
 use crate::flat::store_helper::{
     decode_flat_state_db_key, get_all_deltas_metadata, get_delta_changes, get_flat_storage_status,
 };
-use crate::flat::{FlatStorageError, FlatStorageStatus};
+use crate::flat::FlatStorageStatus;
+use crate::parallel_iter::StoreParallelIterator;
 use crate::trie::mem::construction::TrieConstructor;
 use crate::trie::mem::updating::apply_memtrie_changes;
 use crate::{DBCol, Store};
+use borsh::BorshDeserialize;
 use near_primitives::errors::StorageError;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
@@ -15,6 +17,7 @@ use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, StateRoot};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::collections::BTreeSet;
+use std::sync::mpsc::channel;
 use std::time::Instant;
 use tracing::{debug, info};
 
@@ -31,18 +34,44 @@ pub fn load_trie_from_flat_state(
     tries.construct_root(block_height, |arena| -> Result<Option<MemTrieNodeId>, StorageError> {
         info!(target: "memtrie", shard_uid=%shard_uid, "Loading trie from flat state...");
         let load_start = Instant::now();
+        let (tx, rx) = channel::<(usize, Vec<u8>, FlatStateValue)>();
+
+        let start_time = Instant::now();
+        {
+            let mut next_shard_uid = shard_uid.clone();
+            next_shard_uid.shard_id+= 1;
+            let store = store.clone();
+            std::thread::spawn(move || {
+        StoreParallelIterator::for_each_in_range(
+            store, DBCol::FlatState, borsh::to_vec(&shard_uid).unwrap(), borsh::to_vec(&next_shard_uid).unwrap(), 8,
+        move |chunk_id, key, value| {
+            let (_, key) = decode_flat_state_db_key(&key).unwrap();
+            let value = FlatStateValue::try_from_slice(value).unwrap();
+            tx.send((chunk_id, key, value)).unwrap();
+        }, true);
+    });
+    }
+        let mut data = Vec::<Vec::<(Vec<u8>, FlatStateValue)>>::new();
+        let mut total_keys = 0;
+        while let Ok((chunk_id, key, value)) = rx.recv() {
+            while data.len() <= chunk_id {
+                data.push(Vec::new());
+            }
+            data[chunk_id].push((key, value));
+            total_keys += 1;
+        }
+        data.retain(|chunk| !chunk.is_empty());
+        data.sort_unstable_by(|a: &Vec<(Vec<u8>, FlatStateValue)>, b| a[0].0.cmp(&b[0].0));
+
+        info!(target: "memtrie", shard_uid=%shard_uid, "Loaded {} keys in {} chunks from flat state in {:?}", total_keys, data.len(), start_time.elapsed());
+        // std::process::exit(1);
+
+        let start_time = Instant::now();
         let mut recon = TrieConstructor::new(arena);
         let mut num_keys_loaded = 0;
-        for item in store
-            .iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &borsh::to_vec(&shard_uid).unwrap())
+        for chunk in data {
+        for (key, value) in chunk
         {
-            let (key, value) = item.map_err(|err| {
-                FlatStorageError::StorageInternalError(format!("Error iterating over FlatState: {err}"))
-            })?;
-            let (_, key) = decode_flat_state_db_key(&key).map_err(|err| {
-                FlatStorageError::StorageInternalError(format!(
-                    "invalid FlatState key format: {err}"
-                ))})?;
             recon.add_leaf(&key, value);
             num_keys_loaded += 1;
             if num_keys_loaded % 1000000 == 0 {
@@ -55,6 +84,9 @@ pub fn load_trie_from_flat_state(
                 );
             }
         }
+    }
+        info!(target: "memtrie", shard_uid=%shard_uid, "Loaded {} keys in {:?}, allocated {} new vectors", num_keys_loaded, start_time.elapsed(), recon.num_freelist_misses);
+
         let root_id = match recon.finalize() {
             Some(root_id) => root_id,
             None => {
@@ -187,6 +219,7 @@ mod tests {
     use crate::trie::mem::loading::load_trie_from_flat_state;
     use crate::trie::mem::lookup::memtrie_lookup;
     use crate::{DBCol, KeyLookupMode, NibbleSlice, ShardTries, Store, Trie, TrieUpdate};
+    use near_o11y::testonly::init_test_logger;
     use near_primitives::congestion_info::CongestionInfo;
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
