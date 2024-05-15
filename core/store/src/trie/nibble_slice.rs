@@ -102,11 +102,8 @@ impl<'a> NibbleSlice<'a> {
     /// Get the nibble at position `i`.
     #[inline(always)]
     pub fn at(&self, i: usize) -> u8 {
-        if (self.offset + i) & 1 == 1 {
-            self.data[(self.offset + i) / 2] & 15u8
-        } else {
-            self.data[(self.offset + i) / 2] >> 4
-        }
+        let shift = if (self.offset + i) & 1 == 1 { 0 } else { 4 };
+        (self.data[(self.offset + i) / 2] >> shift) & 0xf
     }
 
     /// Return object which represents a view on to this slice (further) offset by `i` nibbles.
@@ -147,15 +144,36 @@ impl<'a> NibbleSlice<'a> {
     /// Encode while nibble slice in prefixed hex notation, noting whether it `is_leaf`.
     #[inline]
     pub fn encoded(&self, is_leaf: bool) -> ElasticArray36<u8> {
+        let mut to = ElasticArray36::new();
         let l = self.len();
-        let mut r = ElasticArray36::new();
-        let mut i = l % 2;
-        r.push(if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 });
-        while i < l {
-            r.push(self.at(i) * 16 + self.at(i + 1));
-            i += 2;
+        let parity = l % 2;
+        let mut first_byte: u8 = 0;
+        if parity == 1 {
+            first_byte = 0x10 + self.at(0);
         }
-        r
+        if is_leaf {
+            first_byte |= 0x20;
+        }
+        to.push(first_byte);
+        let from_byte = (self.offset + parity) / 2;
+        to.append_slice(&self.data[from_byte..]);
+        to
+    }
+
+    #[inline]
+    pub fn encode_to(&self, is_leaf: bool, to: &mut Vec<u8>) {
+        let l = self.len();
+        let parity = l % 2;
+        let mut first_byte: u8 = 0;
+        if parity == 1 {
+            first_byte = 0x10 + self.at(0);
+        }
+        if is_leaf {
+            first_byte |= 0x20;
+        }
+        to.push(first_byte);
+        let from_byte = (self.offset + parity) / 2;
+        to.extend_from_slice(&self.data[from_byte..]);
     }
 
     pub fn merge_encoded(&self, other: &Self, is_leaf: bool) -> ElasticArray36<u8> {
@@ -193,6 +211,17 @@ impl<'a> NibbleSlice<'a> {
             i += 2;
         }
         r
+    }
+
+    pub fn encode_leftmost_to(&self, n: usize, is_leaf: bool, to: &mut Vec<u8>) {
+        let l = min(self.len(), n);
+        to.resize(1 + l / 2, 0);
+        let mut i = l % 2;
+        to[0] = if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 };
+        while i < l {
+            to[i / 2 + 1] = self.at(i) * 16 + self.at(i + 1);
+            i += 2;
+        }
     }
 
     // Helper to convert nibbles to bytes.
