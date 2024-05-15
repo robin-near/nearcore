@@ -79,11 +79,11 @@ impl<'a> MemTrieNodePtr<'a> {
 
 /// Used to construct a new in-memory trie node.
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum InputMemTrieNode {
-    Leaf { value: FlatStateValue, extension: Box<[u8]> },
-    Extension { extension: Box<[u8]>, child: MemTrieNodeId },
+pub enum InputMemTrieNode<'a> {
+    Leaf { value: &'a FlatStateValue, extension: &'a [u8] },
+    Extension { extension: &'a [u8], child: MemTrieNodeId },
     Branch { children: [Option<MemTrieNodeId>; 16] },
-    BranchWithValue { children: [Option<MemTrieNodeId>; 16], value: FlatStateValue },
+    BranchWithValue { children: [Option<MemTrieNodeId>; 16], value: &'a FlatStateValue },
 }
 
 /// A view of the encoded data of `MemTrieNode`, obtainable via

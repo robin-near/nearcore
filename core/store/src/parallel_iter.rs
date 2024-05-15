@@ -3,7 +3,7 @@ use near_async::time::{Duration, Instant};
 use std::fmt::Display;
 use std::ops::Range;
 use std::str::FromStr;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +13,7 @@ struct ParallelIterationOptions {
     min_time_before_split: Duration,
     store: Store,
     column: DBCol,
-    callback: Arc<dyn Fn(&[u8], Option<&[u8]>) + Send + Sync>,
+    callback: Arc<dyn Fn(usize, &[u8], Option<&[u8]>) + Send + Sync>,
 }
 
 /// Provides parallel iteration and lookup over a Store. It is intended to be
@@ -46,6 +46,8 @@ struct ParallelIterationSharedState {
     /// A status indicator for each thread, showing which item they are working
     /// on (or if they are free). This is used for debug printing only.
     thread_work: Mutex<Vec<Option<WorkItem>>>,
+    /// TODO
+    next_chunk_id: AtomicUsize,
 }
 
 impl ParallelIterationSharedState {
@@ -69,6 +71,7 @@ impl ParallelIterationSharedState {
 /// receiving ends to error, and that's when the worker threads will exit.
 struct WorkQueueItem {
     work: WorkItem,
+    chunk_id: usize,
     work_sender: Arc<flume::Sender<WorkQueueItem>>,
 }
 
@@ -80,16 +83,22 @@ impl StoreParallelIterator {
         let shared_state = Arc::new(ParallelIterationSharedState {
             num_threads_free: AtomicUsize::new(options.num_threads),
             thread_work: Mutex::new(vec![None; options.num_threads]),
+            next_chunk_id: AtomicUsize::new(0),
         });
         let tx = Arc::new(tx);
-        tx.send(WorkQueueItem { work: initial_task, work_sender: tx.clone() }).unwrap();
+        tx.send(WorkQueueItem {
+            work: initial_task,
+            chunk_id: shared_state.next_chunk_id.fetch_add(1, Ordering::Relaxed),
+            work_sender: tx.clone(),
+        })
+        .unwrap();
         drop(tx);
         for idx in 0..options.num_threads {
             let rx = rx.clone();
             let shared_state = shared_state.clone();
             let options = options.clone();
             let thread = std::thread::spawn(move || loop {
-                let Ok(WorkQueueItem { work, work_sender }) = rx.recv() else {
+                let Ok(WorkQueueItem { work, chunk_id, work_sender }) = rx.recv() else {
                     // If receiving fails, it means all senders are dropped,
                     // i.e. there is no more work to do.
                     break;
@@ -120,7 +129,7 @@ impl StoreParallelIterator {
 
                         for kv in iter {
                             let (key, value) = kv.unwrap();
-                            (options.callback)(&key, Some(&value));
+                            (options.callback)(chunk_id, &key, Some(&value));
                             if Instant::now() > min_time_to_split {
                                 if shared_state
                                     .num_threads_free
@@ -138,6 +147,9 @@ impl StoreParallelIterator {
                                         work_sender
                                             .send(WorkQueueItem {
                                                 work: work_item,
+                                                chunk_id: shared_state
+                                                    .next_chunk_id
+                                                    .fetch_add(1, Ordering::Relaxed),
                                                 work_sender: work_sender.clone(),
                                             })
                                             .unwrap();
@@ -151,7 +163,11 @@ impl StoreParallelIterator {
                         for i in range.start..range.end {
                             let key = &keys[i];
                             let value = options.store.get_raw_bytes(options.column, key).unwrap();
-                            (options.callback)(key, value.as_ref().map(|slice| slice.as_slice()));
+                            (options.callback)(
+                                chunk_id,
+                                key,
+                                value.as_ref().map(|slice| slice.as_slice()),
+                            );
                             if Instant::now() > min_time_to_split && i + 1 < range.end {
                                 if shared_state
                                     .num_threads_free
@@ -164,6 +180,9 @@ impl StoreParallelIterator {
                                         work_sender
                                             .send(WorkQueueItem {
                                                 work: work_item,
+                                                chunk_id: shared_state
+                                                    .next_chunk_id
+                                                    .fetch_add(1, Ordering::Relaxed),
                                                 work_sender: work_sender.clone(),
                                             })
                                             .unwrap();
@@ -217,7 +236,7 @@ impl StoreParallelIterator {
         start: Vec<u8>,
         end: Vec<u8>,
         num_threads: usize,
-        callback: impl Fn(&[u8], &[u8]) + Send + Sync + 'static,
+        callback: impl Fn(usize, &[u8], &[u8]) + Send + Sync + 'static,
         print_progress: bool,
     ) {
         let options = ParallelIterationOptions {
@@ -225,7 +244,7 @@ impl StoreParallelIterator {
             min_time_before_split: Duration::milliseconds(100),
             store,
             column,
-            callback: Arc::new(move |key, value| callback(key, value.unwrap())),
+            callback: Arc::new(move |chunk_id, key, value| callback(chunk_id, key, value.unwrap())),
         };
         let iter = StoreParallelIterator::new(options, WorkItem::new_range(start, end));
         if print_progress {
@@ -242,7 +261,7 @@ impl StoreParallelIterator {
         column: DBCol,
         keys: Vec<Vec<u8>>,
         num_threads: usize,
-        callback: impl Fn(&[u8], Option<&[u8]>) + Send + Sync + 'static,
+        callback: impl Fn(usize, &[u8], Option<&[u8]>) + Send + Sync + 'static,
         print_progress: bool,
     ) {
         let options = ParallelIterationOptions {
@@ -634,7 +653,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 3,
-                move |key: &[u8], value: &[u8]| {
+                move |_, key: &[u8], value: &[u8]| {
                     assert!(read_data
                         .lock()
                         .unwrap()
@@ -674,7 +693,7 @@ mod tests {
                 DBCol::BlockHeader,
                 data.keys().cloned().collect(),
                 3,
-                move |key: &[u8], value: Option<&[u8]>| {
+                move |_, key: &[u8], value: Option<&[u8]>| {
                     assert!(read_data
                         .lock()
                         .unwrap()

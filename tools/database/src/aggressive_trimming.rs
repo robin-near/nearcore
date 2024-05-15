@@ -57,7 +57,7 @@ impl AggressiveTrimmingCommand {
                 sharding_version.to_le_bytes().to_vec(),
                 (sharding_version + 1).to_le_bytes().to_vec(),
                 6,
-                move |key, value| {
+                move |_, key, value| {
                     let value = FlatStateValue::try_from_slice(value).unwrap();
                     match value {
                         FlatStateValue::Ref(r) => {
@@ -95,7 +95,7 @@ impl AggressiveTrimmingCommand {
                 Vec::new(),
                 Vec::new(),
                 6,
-                move |key: &[u8], value| {
+                move |_, key: &[u8], value| {
                     let key = KeyForFlatStateDelta::try_from_slice(key).unwrap();
                     if key.shard_uid.version != sharding_version {
                         return;
@@ -138,7 +138,7 @@ impl AggressiveTrimmingCommand {
                 DBCol::State,
                 keys,
                 6,
-                move |key, value| {
+                move |_, key, value| {
                     assert!(value.is_some(), "Key not found: {}", hex::encode(&key));
                     let value = value.unwrap().to_vec();
                     let mut values = values_read.lock().unwrap();
