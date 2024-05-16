@@ -58,7 +58,7 @@ impl<'a> MemTrieNodePtrMut<'a> {
             NodeKind::Leaf => {}
             _ => {
                 let mut nonleaf = decoder.peek::<NonLeafHeader>();
-                nonleaf.hash = hash(&borsh::to_vec(&raw_trie_node_with_size).unwrap());
+                nonleaf.hash = hash(&borsh::to_vec(&raw_trie_node_with_size).unwrap()).into();
                 decoder.overwrite(nonleaf);
             }
         }
@@ -69,7 +69,7 @@ impl<'a> MemTrieNodePtrMut<'a> {
         let mut decoder = self.as_const().decoder();
         match decoder.decode::<CommonHeader>().kind {
             NodeKind::Leaf => true,
-            _ => decoder.peek::<NonLeafHeader>().hash != CryptoHash::default(),
+            _ => decoder.peek::<NonLeafHeader>().hash.0 != CryptoHash::default(),
         }
     }
 

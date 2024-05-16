@@ -1,35 +1,13 @@
-use crate::trie::mem::arena::{Arena, ArenaPtr, ArenaPtrMut, ArenaSliceMut};
-use borsh::{BorshDeserialize, BorshSerialize};
-use std::io::Write;
-
 use super::FlexibleDataHeader;
-
-/// Implementing this trait indicates that the type can be borsh serialized and
-/// the length of the serialization is a constant.
-///
-/// TODO: it would be nice to generate this, or test the correctness of the
-/// `SERIALIZED_SIZE` specification. For now, we rely on higher-level testing.
-pub trait BorshFixedSize {
-    const SERIALIZED_SIZE: usize;
-}
+use crate::trie::mem::arena::unsafe_ser::UnsafeSerde;
+use crate::trie::mem::arena::{Arena, ArenaPtr, ArenaPtrMut, ArenaSliceMut};
+use near_primitives::hash::CryptoHash;
+use std::mem::size_of;
 
 /// Facilitates allocation and encoding of flexibly-sized data.
 pub struct RawEncoder<'a> {
     data: ArenaSliceMut<'a>,
     pos: usize,
-}
-
-// To make it easier to use borsh serialization.
-impl<'a> Write for RawEncoder<'a> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.data.raw_slice_mut()[self.pos..self.pos + buf.len()].copy_from_slice(buf);
-        self.pos += buf.len();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 impl<'a> RawEncoder<'a> {
@@ -42,8 +20,9 @@ impl<'a> RawEncoder<'a> {
 
     /// Encodes the given fixed-size field to the current encoder position,
     /// and then advances the position by the encoded size of the field.
-    pub fn encode<T: BorshSerialize>(&mut self, data: T) {
-        data.serialize(self).unwrap();
+    pub fn encode<T: UnsafeSerde>(&mut self, data: T) {
+        data.unsafe_serialize(self.data.subslice_mut(self.pos, size_of::<T>()).raw_slice_mut());
+        self.pos += size_of::<T>();
     }
 
     /// Encodes the given flexibly-sized part of the data to the current
@@ -80,18 +59,18 @@ impl<'a> RawDecoder<'a> {
 
     /// Decodes a fixed-size field at the current decoder position, and then
     /// advances the position by the size of the field.
-    pub fn decode<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
-        let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);
-        let result = T::try_from_slice(slice.raw_slice()).unwrap();
-        self.pos += T::SERIALIZED_SIZE;
+    pub fn decode<T: UnsafeSerde>(&mut self) -> T {
+        let slice = self.data.slice(self.pos, size_of::<T>());
+        let result = T::unsafe_deserialize(slice.raw_slice());
+        self.pos += size_of::<T>();
         result
     }
 
     /// Decodes a fixed-sized field at the current position, but does not
     /// advance the position.
-    pub fn peek<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
-        let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);
-        T::try_from_slice(slice.raw_slice()).unwrap()
+    pub fn peek<T: UnsafeSerde>(&mut self) -> T {
+        let slice = self.data.slice(self.pos, size_of::<T>());
+        T::unsafe_deserialize(slice.raw_slice())
     }
 
     /// Decodes a flexibly-sized part of the data at the current position,
@@ -117,24 +96,42 @@ impl<'a> RawDecoderMut<'a> {
     }
 
     /// Same with `RawDecoder::decode`.
-    pub fn decode<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
-        let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);
-        let result = T::try_from_slice(slice.raw_slice()).unwrap();
-        self.pos += T::SERIALIZED_SIZE;
+    pub fn decode<T: UnsafeSerde>(&mut self) -> T {
+        let slice = self.data.slice(self.pos, size_of::<T>());
+        let result = T::unsafe_deserialize(slice.raw_slice());
+        self.pos += size_of::<T>();
         result
     }
 
     /// Same with `RawDecoder::peek`.
-    pub fn peek<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
-        let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);
-        T::try_from_slice(slice.raw_slice()).unwrap()
+    pub fn peek<T: UnsafeSerde>(&mut self) -> T {
+        let slice = self.data.slice(self.pos, size_of::<T>());
+        T::unsafe_deserialize(slice.raw_slice())
     }
 
     /// Overwrites the data at the current position with the given data,
     /// and advances the position by the size of the data.
-    pub fn overwrite<T: BorshSerialize + BorshFixedSize>(&mut self, data: T) {
-        let mut slice = self.data.slice_mut(self.pos, T::SERIALIZED_SIZE);
-        data.serialize(&mut slice.raw_slice_mut()).unwrap();
-        self.pos += T::SERIALIZED_SIZE;
+    pub fn overwrite<T: UnsafeSerde>(&mut self, data: T) {
+        let mut slice = self.data.slice_mut(self.pos, size_of::<T>());
+        data.unsafe_serialize(slice.raw_slice_mut());
+        self.pos += size_of::<T>();
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct UnalignedCryptoHash(pub CryptoHash);
+
+impl UnsafeSerde for UnalignedCryptoHash {}
+
+impl From<CryptoHash> for UnalignedCryptoHash {
+    fn from(hash: CryptoHash) -> Self {
+        Self(hash)
+    }
+}
+
+impl From<UnalignedCryptoHash> for CryptoHash {
+    fn from(hash: UnalignedCryptoHash) -> Self {
+        hash.0
     }
 }

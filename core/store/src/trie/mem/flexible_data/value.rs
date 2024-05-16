@@ -1,9 +1,9 @@
+use super::encoding::UnalignedCryptoHash;
+use super::FlexibleDataHeader;
+use crate::trie::mem::arena::unsafe_ser::UnsafeSerde;
 use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut};
 use crate::trie::OptimizedValueRef;
-
-use super::encoding::BorshFixedSize;
-use super::FlexibleDataHeader;
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshDeserialize;
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::{FlatStateValue, ValueRef};
 
@@ -12,16 +12,15 @@ use near_primitives::state::{FlatStateValue, ValueRef};
 ///
 /// The flexible part of the data is either the inlined value as a byte array,
 /// or a CryptoHash representing the reference hash.
-#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub struct EncodedValueHeader {
     // The high bit is 1 if the value is inlined, 0 if it is a reference.
     // The lower bits are the length of the value.
     length_and_inlined: u32,
 }
 
-impl BorshFixedSize for EncodedValueHeader {
-    const SERIALIZED_SIZE: usize = std::mem::size_of::<u32>();
-}
+impl UnsafeSerde for EncodedValueHeader {}
 
 impl EncodedValueHeader {
     const INLINED_MASK: u32 = 0x80000000;

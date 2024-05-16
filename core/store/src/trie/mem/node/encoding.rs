@@ -1,17 +1,19 @@
 use super::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
+use crate::trie::mem::arena::unsafe_ser::UnsafeSerde;
 use crate::trie::mem::arena::{Arena, ArenaPos};
 use crate::trie::mem::flexible_data::children::EncodedChildrenHeader;
-use crate::trie::mem::flexible_data::encoding::{BorshFixedSize, RawDecoder, RawEncoder};
+use crate::trie::mem::flexible_data::encoding::{RawDecoder, RawEncoder, UnalignedCryptoHash};
 use crate::trie::mem::flexible_data::extension::EncodedExtensionHeader;
 use crate::trie::mem::flexible_data::value::EncodedValueHeader;
 use crate::trie::mem::flexible_data::FlexibleDataHeader;
 use crate::trie::TRIE_COSTS;
-use borsh::{BorshDeserialize, BorshSerialize};
 use elastic_array::ElasticArray16;
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
+use std::mem::size_of;
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, BorshSerialize, BorshDeserialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[repr(u8)]
 pub(crate) enum NodeKind {
     Leaf,
     Extension,
@@ -19,46 +21,42 @@ pub(crate) enum NodeKind {
     BranchWithValue,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct CommonHeader {
     refcount: u32,
     pub(crate) kind: NodeKind,
 }
 
-impl BorshFixedSize for CommonHeader {
-    const SERIALIZED_SIZE: usize = std::mem::size_of::<u32>() + std::mem::size_of::<u8>();
-}
+impl UnsafeSerde for CommonHeader {}
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct NonLeafHeader {
-    pub(crate) hash: CryptoHash,
+    pub(crate) hash: UnalignedCryptoHash,
     pub(crate) memory_usage: u64,
 }
 
+impl UnsafeSerde for NonLeafHeader {}
+
 impl NonLeafHeader {
     pub(crate) fn new(memory_usage: u64, node_hash: Option<CryptoHash>) -> Self {
-        Self { hash: node_hash.unwrap_or_default(), memory_usage }
+        Self { hash: node_hash.unwrap_or_default().into(), memory_usage }
     }
 }
 
-impl BorshFixedSize for NonLeafHeader {
-    const SERIALIZED_SIZE: usize = std::mem::size_of::<CryptoHash>() + std::mem::size_of::<u64>();
-}
-
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct LeafHeader {
     common: CommonHeader,
     value: EncodedValueHeader,
     extension: EncodedExtensionHeader,
 }
 
-impl BorshFixedSize for LeafHeader {
-    const SERIALIZED_SIZE: usize = CommonHeader::SERIALIZED_SIZE
-        + EncodedValueHeader::SERIALIZED_SIZE
-        + EncodedExtensionHeader::SERIALIZED_SIZE;
-}
+impl UnsafeSerde for LeafHeader {}
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct ExtensionHeader {
     common: CommonHeader,
     nonleaf: NonLeafHeader,
@@ -66,27 +64,20 @@ pub(crate) struct ExtensionHeader {
     extension: EncodedExtensionHeader,
 }
 
-impl BorshFixedSize for ExtensionHeader {
-    const SERIALIZED_SIZE: usize = CommonHeader::SERIALIZED_SIZE
-        + NonLeafHeader::SERIALIZED_SIZE
-        + ArenaPos::SERIALIZED_SIZE
-        + EncodedExtensionHeader::SERIALIZED_SIZE;
-}
+impl UnsafeSerde for ExtensionHeader {}
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct BranchHeader {
     common: CommonHeader,
     nonleaf: NonLeafHeader,
     children: EncodedChildrenHeader,
 }
 
-impl BorshFixedSize for BranchHeader {
-    const SERIALIZED_SIZE: usize = CommonHeader::SERIALIZED_SIZE
-        + NonLeafHeader::SERIALIZED_SIZE
-        + EncodedChildrenHeader::SERIALIZED_SIZE;
-}
+impl UnsafeSerde for BranchHeader {}
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub(crate) struct BranchWithValueHeader {
     common: CommonHeader,
     nonleaf: NonLeafHeader,
@@ -94,12 +85,7 @@ pub(crate) struct BranchWithValueHeader {
     children: EncodedChildrenHeader,
 }
 
-impl BorshFixedSize for BranchWithValueHeader {
-    const SERIALIZED_SIZE: usize = CommonHeader::SERIALIZED_SIZE
-        + NonLeafHeader::SERIALIZED_SIZE
-        + EncodedValueHeader::SERIALIZED_SIZE
-        + EncodedChildrenHeader::SERIALIZED_SIZE;
-}
+impl UnsafeSerde for BranchWithValueHeader {}
 
 impl MemTrieNodeId {
     /// Encodes the data.
@@ -170,7 +156,7 @@ impl MemTrieNodeId {
                 let value_header = EncodedValueHeader::from_input(&value);
                 let mut data = RawEncoder::new(
                     arena,
-                    LeafHeader::SERIALIZED_SIZE
+                    size_of::<LeafHeader>()
                         + extension_header.flexible_data_length()
                         + value_header.flexible_data_length(),
                 );
@@ -187,7 +173,7 @@ impl MemTrieNodeId {
                 let extension_header = EncodedExtensionHeader::from_input(&extension);
                 let mut data = RawEncoder::new(
                     arena,
-                    ExtensionHeader::SERIALIZED_SIZE + extension_header.flexible_data_length(),
+                    size_of::<ExtensionHeader>() + extension_header.flexible_data_length(),
                 );
                 data.encode(ExtensionHeader {
                     common: CommonHeader { refcount: 0, kind: NodeKind::Extension },
@@ -202,7 +188,7 @@ impl MemTrieNodeId {
                 let children_header = EncodedChildrenHeader::from_input(&children);
                 let mut data = RawEncoder::new(
                     arena,
-                    BranchHeader::SERIALIZED_SIZE + children_header.flexible_data_length(),
+                    size_of::<BranchHeader>() + children_header.flexible_data_length(),
                 );
                 data.encode(BranchHeader {
                     common: CommonHeader { refcount: 0, kind: NodeKind::Branch },
@@ -217,7 +203,7 @@ impl MemTrieNodeId {
                 let value_header = EncodedValueHeader::from_input(&value);
                 let mut data = RawEncoder::new(
                     arena,
-                    BranchWithValueHeader::SERIALIZED_SIZE
+                    size_of::<BranchWithValueHeader>()
                         + children_header.flexible_data_length()
                         + value_header.flexible_data_length(),
                 );
@@ -291,7 +277,7 @@ impl<'a> MemTrieNodePtr<'a> {
                 let header = decoder.decode::<ExtensionHeader>();
                 let extension = decoder.decode_flexible(&header.extension);
                 MemTrieNodeView::Extension {
-                    hash: header.nonleaf.hash,
+                    hash: header.nonleaf.hash.into(),
                     memory_usage: header.nonleaf.memory_usage,
                     extension,
                     child: MemTrieNodePtr::from(self.ptr.arena().ptr(header.child)),
@@ -301,7 +287,7 @@ impl<'a> MemTrieNodePtr<'a> {
                 let header = decoder.decode::<BranchHeader>();
                 let children = decoder.decode_flexible(&header.children);
                 MemTrieNodeView::Branch {
-                    hash: header.nonleaf.hash,
+                    hash: header.nonleaf.hash.into(),
                     memory_usage: header.nonleaf.memory_usage,
                     children,
                 }
@@ -311,7 +297,7 @@ impl<'a> MemTrieNodePtr<'a> {
                 let children = decoder.decode_flexible(&header.children);
                 let value = decoder.decode_flexible(&header.value);
                 MemTrieNodeView::BranchWithValue {
-                    hash: header.nonleaf.hash,
+                    hash: header.nonleaf.hash.into(),
                     memory_usage: header.nonleaf.memory_usage,
                     children,
                     value,
@@ -328,21 +314,21 @@ impl<'a> MemTrieNodePtr<'a> {
         match kind {
             NodeKind::Leaf => {
                 let header = decoder.decode::<LeafHeader>();
-                LeafHeader::SERIALIZED_SIZE
+                size_of::<LeafHeader>()
                     + header.extension.flexible_data_length()
                     + header.value.flexible_data_length()
             }
             NodeKind::Extension => {
                 let header = decoder.decode::<ExtensionHeader>();
-                ExtensionHeader::SERIALIZED_SIZE + header.extension.flexible_data_length()
+                size_of::<ExtensionHeader>() + header.extension.flexible_data_length()
             }
             NodeKind::Branch => {
                 let header = decoder.decode::<BranchHeader>();
-                BranchHeader::SERIALIZED_SIZE + header.children.flexible_data_length()
+                size_of::<BranchHeader>() + header.children.flexible_data_length()
             }
             NodeKind::BranchWithValue => {
                 let header = decoder.decode::<BranchWithValueHeader>();
-                BranchWithValueHeader::SERIALIZED_SIZE
+                size_of::<BranchWithValueHeader>()
                     + header.children.flexible_data_length()
                     + header.value.flexible_data_length()
             }

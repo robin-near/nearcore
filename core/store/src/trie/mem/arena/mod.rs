@@ -1,12 +1,11 @@
 mod alloc;
 mod metrics;
+pub mod unsafe_ser;
 use self::alloc::Allocator;
-use borsh::{BorshDeserialize, BorshSerialize};
+use self::unsafe_ser::UnsafeSerde;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::mem::size_of;
-
-use super::flexible_data::encoding::BorshFixedSize;
 
 /// Arena to store in-memory trie nodes.
 /// Includes a bump allocator that can free nodes.
@@ -29,31 +28,18 @@ pub struct ArenaMemory {
     chunks: Vec<Vec<u8>>,
 }
 
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    Hash,
-    PartialEq,
-    Eq,
-    Default,
-    PartialOrd,
-    Ord,
-    BorshSerialize,
-    BorshDeserialize,
-)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Default, PartialOrd, Ord)]
+#[repr(C, packed)]
 pub struct ArenaPos {
     chunk: u32,
     pos: u32,
 }
 
-impl BorshFixedSize for ArenaPos {
-    const SERIALIZED_SIZE: usize = 8;
-}
+impl UnsafeSerde for ArenaPos {}
 
 impl Display for ArenaPos {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "c{:X}:p{:X}", self.chunk, self.pos)
+        write!(f, "c{:X}:p{:X}", self.chunk(), self.pos())
     }
 }
 
@@ -67,7 +53,7 @@ impl ArenaPos {
     }
 
     pub fn offset_by(self, offset: usize) -> Self {
-        Self { chunk: self.chunk, pos: self.pos + u32::try_from(offset).unwrap() }
+        Self { chunk: self.chunk, pos: self.pos + offset as u32 }
     }
 
     pub(crate) const fn invalid() -> Self {
@@ -85,11 +71,20 @@ impl ArenaMemory {
     }
 
     fn raw_slice(&self, pos: ArenaPos, len: usize) -> &[u8] {
-        &self.chunks[pos.chunk()][pos.pos()..pos.pos() + len]
+        unsafe {
+            let chunk: &Vec<u8> = self.chunks.get_unchecked(pos.chunk());
+            std::slice::from_raw_parts(chunk.as_ptr().add(pos.pos() as usize) as *const u8, len)
+        }
     }
 
     fn raw_slice_mut(&mut self, pos: ArenaPos, len: usize) -> &mut [u8] {
-        &mut self.chunks[pos.chunk()][pos.pos()..pos.pos() + len]
+        unsafe {
+            let chunk: &mut Vec<u8> = self.chunks.get_unchecked_mut(pos.chunk());
+            std::slice::from_raw_parts_mut(
+                chunk.as_mut_ptr().add(pos.pos() as usize) as *mut u8,
+                len,
+            )
+        }
     }
 
     /// Provides read access to a region of memory in the arena.
@@ -193,7 +188,7 @@ impl<'a> ArenaPtr<'a> {
 
     /// Reads an ArenaPos at the memory pointed to by this pointer.
     pub fn read_pos(&self) -> ArenaPos {
-        ArenaPos::try_from_slice(&self.arena.raw_slice(self.pos, size_of::<usize>())).unwrap()
+        ArenaPos::unsafe_deserialize(&self.arena.raw_slice(self.pos, size_of::<usize>()))
     }
 }
 
@@ -229,13 +224,13 @@ impl<'a> ArenaSlice<'a> {
     /// Reads a usize at the given offset in the slice (bounds checked),
     /// and returns it as a pointer.
     pub fn read_ptr_at(&self, pos: usize) -> ArenaPtr<'a> {
-        let pos = ArenaPos::try_from_slice(&self.raw_slice()[pos..][..size_of::<usize>()]).unwrap();
+        let pos = ArenaPos::unsafe_deserialize(&self.subslice(pos, size_of::<usize>()).raw_slice());
         ArenaPtr { arena: self.arena, pos }
     }
 
     /// Returns a slice within this slice. This checks bounds.
     pub fn subslice(&self, start: usize, len: usize) -> ArenaSlice<'a> {
-        assert!(start + len <= self.len);
+        // assert!(start + len <= self.len);
         ArenaSlice { arena: self.arena, pos: self.pos.offset_by(start), len }
     }
 }
@@ -295,14 +290,10 @@ impl<'a> ArenaSliceMut<'a> {
 
     /// Writes a ArenaPos at the given offset in the slice (bounds checked).
     pub fn write_pos_at(&mut self, offset: usize, to_write: ArenaPos) {
-        assert!(offset + ArenaPos::SERIALIZED_SIZE <= self.len);
-        to_write
-            .serialize(
-                &mut &mut self
-                    .arena
-                    .raw_slice_mut(self.pos.offset_by(offset), ArenaPos::SERIALIZED_SIZE),
-            )
-            .unwrap();
+        // assert!(offset + ArenaPos::SERIALIZED_SIZE <= self.len);
+        to_write.unsafe_serialize(
+            self.arena.raw_slice_mut(self.pos.offset_by(offset), size_of::<ArenaPos>()),
+        )
     }
 
     /// Provides mutable raw memory access.
@@ -313,7 +304,7 @@ impl<'a> ArenaSliceMut<'a> {
     /// Provides a subslice that is also mutable, which is only possible while
     /// holding a mutable reference to the original slice.
     pub fn subslice_mut<'b>(&'b mut self, start: usize, len: usize) -> ArenaSliceMut<'b> {
-        assert!(start + len <= self.len);
+        // assert!(start + len <= self.len);
         ArenaSliceMut { arena: self.arena, pos: self.pos.offset_by(start), len }
     }
 }

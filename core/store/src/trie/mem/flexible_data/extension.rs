@@ -1,19 +1,17 @@
 use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut};
 
-use super::encoding::BorshFixedSize;
 use super::FlexibleDataHeader;
-use borsh::{BorshDeserialize, BorshSerialize};
+use crate::trie::mem::arena::unsafe_ser::UnsafeSerde;
 
 /// Flexibly-sized data header for a trie extension path (which is simply
 /// a byte array).
-#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub struct EncodedExtensionHeader {
     length: u16,
 }
 
-impl BorshFixedSize for EncodedExtensionHeader {
-    const SERIALIZED_SIZE: usize = std::mem::size_of::<u16>();
-}
+impl UnsafeSerde for EncodedExtensionHeader {}
 
 impl FlexibleDataHeader for EncodedExtensionHeader {
     type InputData = [u8];

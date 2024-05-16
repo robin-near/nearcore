@@ -1,24 +1,20 @@
-use std::mem::size_of;
-
-use borsh::{BorshDeserialize, BorshSerialize};
-
-use super::encoding::BorshFixedSize;
 use super::FlexibleDataHeader;
+use crate::trie::mem::arena::unsafe_ser::UnsafeSerde;
 use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut};
 use crate::trie::mem::node::{MemTrieNodeId, MemTrieNodePtr};
 use crate::trie::Children;
+use std::mem::size_of;
 
 /// Flexibly-sized data header for a variable-sized list of children trie nodes.
 /// The header contains a 16-bit mask of which children are present, and the
 /// flexible part is one pointer for each present child.
-#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
 pub struct EncodedChildrenHeader {
     mask: u16,
 }
 
-impl BorshFixedSize for EncodedChildrenHeader {
-    const SERIALIZED_SIZE: usize = std::mem::size_of::<u16>();
-}
+impl UnsafeSerde for EncodedChildrenHeader {}
 
 impl FlexibleDataHeader for EncodedChildrenHeader {
     type InputData = [Option<MemTrieNodeId>; 16];

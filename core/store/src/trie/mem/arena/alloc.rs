@@ -5,7 +5,7 @@ use super::{ArenaMemory, ArenaPos, ArenaSliceMut};
 use crate::trie::mem::arena::metrics::{
     MEM_TRIE_ARENA_ACTIVE_ALLOCS_BYTES, MEM_TRIE_ARENA_MEMORY_USAGE_BYTES,
 };
-use crate::trie::mem::flexible_data::encoding::BorshFixedSize;
+use std::mem::size_of;
 
 /// Simple bump allocator with freelists.
 ///
@@ -132,7 +132,7 @@ impl Allocator {
         self.active_allocs_bytes_gauge.set(self.active_allocs_bytes as i64);
         self.active_allocs_count_gauge.set(self.active_allocs_count as i64);
         let size_class = allocation_class(len);
-        arena.slice_mut(pos, ArenaPos::SERIALIZED_SIZE).write_pos_at(0, self.freelists[size_class]);
+        arena.slice_mut(pos, size_of::<ArenaPos>()).write_pos_at(0, self.freelists[size_class]);
         self.freelists[size_class] = pos;
     }
 
