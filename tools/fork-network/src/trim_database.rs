@@ -4,7 +4,7 @@ use near_chain_configs::GenesisConfig;
 use near_epoch_manager::{EpochManager, EpochManagerAdapter};
 use near_primitives::{borsh::BorshDeserialize, state::FlatStateValue};
 use near_store::flat::store_helper::{decode_flat_state_db_key, encode_flat_state_db_key};
-use near_store::parallel_iter::StoreParallelIterator;
+use near_store::parallel_iter::{ParallelIterationOptions, StoreParallelIterator};
 use near_store::{DBCol, Store};
 
 /// Trims the database for forknet by rebuilding the entire database with only the FlatState
@@ -38,11 +38,10 @@ pub fn trim_database(old: Store, genesis_config: &GenesisConfig, new: Store) -> 
                 DBCol::FlatState,
                 sharding_version.to_le_bytes().to_vec(),
                 (sharding_version + 1).to_le_bytes().to_vec(),
-                6,
                 move |_, key, value| {
                     tx.send((key.to_vec(), value.to_vec())).unwrap();
                 },
-                true,
+                ParallelIterationOptions::default(),
             );
         })
     };
@@ -98,11 +97,10 @@ pub fn trim_database(old: Store, genesis_config: &GenesisConfig, new: Store) -> 
                 old,
                 DBCol::State,
                 non_inlined_keys,
-                6,
                 move |_, key, value| {
                     tx.send((key.to_vec(), value.map(|value| value.to_vec()))).unwrap();
                 },
-                true,
+                ParallelIterationOptions::default(),
             );
         })
     };

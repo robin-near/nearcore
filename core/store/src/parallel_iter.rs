@@ -7,13 +7,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 
+pub type RangeId = usize;
+
 #[derive(Clone)]
-struct ParallelIterationOptions {
+pub struct ParallelIterationOptions {
     num_threads: usize,
     min_time_before_split: Duration,
-    store: Store,
-    column: DBCol,
-    callback: Arc<dyn Fn(usize, &[u8], Option<&[u8]>) + Send + Sync>,
+    max_entries_per_range: usize,
+    print_progress: bool,
+}
+
+impl Default for ParallelIterationOptions {
+    fn default() -> Self {
+        Self {
+            num_threads: num_cpus::get(),
+            min_time_before_split: Duration::milliseconds(10),
+            max_entries_per_range: 1000000,
+            print_progress: true,
+        }
+    }
 }
 
 /// Provides parallel iteration and lookup over a Store. It is intended to be
@@ -39,6 +51,8 @@ pub struct StoreParallelIterator {
 }
 
 struct ParallelIterationSharedState {
+    /// Receiver of tasks.
+    work_receiver: flume::Receiver<WorkQueueItem>,
     /// Number of threads that are not currently doing any work. This is used
     /// by threads that do have work to do to check if they should split their
     /// work.
@@ -46,8 +60,8 @@ struct ParallelIterationSharedState {
     /// A status indicator for each thread, showing which item they are working
     /// on (or if they are free). This is used for debug printing only.
     thread_work: Mutex<Vec<Option<WorkItem>>>,
-    /// TODO
-    next_chunk_id: AtomicUsize,
+    /// The range ID to assign to the next work item.
+    next_range_id: AtomicUsize,
 }
 
 impl ParallelIterationSharedState {
@@ -63,6 +77,18 @@ impl ParallelIterationSharedState {
         }
         result
     }
+
+    /// Returns whether a thread that has work should consider splitting the work.
+    fn should_split(&self) -> bool {
+        // Consider splitting if there are free threads and there is no work to be picked up.
+        // The latter condition is more expensive as it involves a lock, but it's OK because
+        // it's rare that the former be true but latter be false.
+        self.num_threads_free.load(Ordering::Relaxed) > 0 && self.work_receiver.len() == 0
+    }
+
+    fn next_range_id(&self) -> RangeId {
+        self.next_range_id.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// The work queue consists of `WorkItem`s, but with each queue element we also
@@ -71,34 +97,44 @@ impl ParallelIterationSharedState {
 /// receiving ends to error, and that's when the worker threads will exit.
 struct WorkQueueItem {
     work: WorkItem,
-    chunk_id: usize,
+    range_id: usize,
     work_sender: Arc<flume::Sender<WorkQueueItem>>,
 }
 
 impl StoreParallelIterator {
     /// Creates a new parallel iterator that performs the given task.
-    fn new(options: ParallelIterationOptions, initial_task: WorkItem) -> Self {
+    fn new(
+        options: ParallelIterationOptions,
+        store: Store,
+        column: DBCol,
+        callback: Arc<dyn Fn(usize, &[u8], Option<&[u8]>) + Send + Sync>,
+        initial_task: WorkItem,
+    ) -> Self {
         let (tx, rx) = flume::unbounded::<WorkQueueItem>();
         let mut threads = Vec::new();
         let shared_state = Arc::new(ParallelIterationSharedState {
+            work_receiver: rx,
             num_threads_free: AtomicUsize::new(options.num_threads),
             thread_work: Mutex::new(vec![None; options.num_threads]),
-            next_chunk_id: AtomicUsize::new(0),
+            next_range_id: AtomicUsize::new(0),
         });
         let tx = Arc::new(tx);
         tx.send(WorkQueueItem {
             work: initial_task,
-            chunk_id: shared_state.next_chunk_id.fetch_add(1, Ordering::Relaxed),
+            range_id: shared_state.next_range_id.fetch_add(1, Ordering::Relaxed),
             work_sender: tx.clone(),
         })
         .unwrap();
         drop(tx);
         for idx in 0..options.num_threads {
-            let rx = rx.clone();
             let shared_state = shared_state.clone();
             let options = options.clone();
+            let store = store.clone();
+            let callback = callback.clone();
             let thread = std::thread::spawn(move || loop {
-                let Ok(WorkQueueItem { work, chunk_id, work_sender }) = rx.recv() else {
+                let Ok(WorkQueueItem { work, range_id, work_sender }) =
+                    shared_state.work_receiver.recv()
+                else {
                     // If receiving fails, it means all senders are dropped,
                     // i.e. there is no more work to do.
                     break;
@@ -115,6 +151,7 @@ impl StoreParallelIterator {
                         options.min_time_before_split.as_seconds_f64()
                             * (rand::random::<f64>() + 1.0),
                     );
+                let mut current_range_entries: usize = 0;
 
                 match work {
                     WorkItem::Range(range) => {
@@ -125,54 +162,57 @@ impl StoreParallelIterator {
                         };
                         let end =
                             if range.end.is_empty() { None } else { Some(range.end.as_slice()) };
-                        let iter = options.store.iter_range_raw_bytes(options.column, start, end);
+                        let iter = store.iter_range_raw_bytes(column, start, end);
 
                         for kv in iter {
                             let (key, value) = kv.unwrap();
-                            (options.callback)(chunk_id, &key, Some(&value));
-                            if Instant::now() > min_time_to_split {
-                                if shared_state
-                                    .num_threads_free
-                                    .load(std::sync::atomic::Ordering::Relaxed)
-                                    > 0
-                                {
-                                    let next_key = IterationRange::next_key(&key);
-                                    if &next_key == &range.end {
-                                        break;
-                                    }
-                                    let remaining_range =
-                                        IterationRange::new(next_key, range.end.clone());
-                                    let work_items = WorkItem::Range(remaining_range).divide();
-                                    for work_item in work_items {
-                                        work_sender
-                                            .send(WorkQueueItem {
-                                                work: work_item,
-                                                chunk_id: shared_state
-                                                    .next_chunk_id
-                                                    .fetch_add(1, Ordering::Relaxed),
-                                                work_sender: work_sender.clone(),
-                                            })
-                                            .unwrap();
-                                    }
+                            callback(range_id, &key, Some(&value));
+                            current_range_entries += 1;
+                            if Instant::now() > min_time_to_split && shared_state.should_split() {
+                                let next_key = IterationRange::next_key(&key);
+                                if &next_key == &range.end {
                                     break;
                                 }
+                                let remaining_range =
+                                    IterationRange::new(next_key, range.end.clone());
+                                let work_items = WorkItem::Range(remaining_range).divide();
+                                for work_item in work_items {
+                                    work_sender
+                                        .send(WorkQueueItem {
+                                            work: work_item,
+                                            range_id: shared_state.next_range_id(),
+                                            work_sender: work_sender.clone(),
+                                        })
+                                        .unwrap();
+                                }
+                                break;
+                            }
+                            if current_range_entries >= options.max_entries_per_range {
+                                let next_key = IterationRange::next_key(&key);
+                                if &next_key == &range.end {
+                                    break;
+                                }
+                                let remaining_range =
+                                    IterationRange::new(next_key, range.end.clone());
+                                work_sender
+                                    .send(WorkQueueItem {
+                                        work: WorkItem::Range(remaining_range),
+                                        range_id: shared_state.next_range_id(),
+                                        work_sender: work_sender.clone(),
+                                    })
+                                    .unwrap();
+                                break;
                             }
                         }
                     }
                     WorkItem::Lookup(keys, range) => {
                         for i in range.start..range.end {
                             let key = &keys[i];
-                            let value = options.store.get_raw_bytes(options.column, key).unwrap();
-                            (options.callback)(
-                                chunk_id,
-                                key,
-                                value.as_ref().map(|slice| slice.as_slice()),
-                            );
-                            if Instant::now() > min_time_to_split && i + 1 < range.end {
-                                if shared_state
-                                    .num_threads_free
-                                    .load(std::sync::atomic::Ordering::Relaxed)
-                                    > 0
+                            let value = store.get_raw_bytes(column, key).unwrap();
+                            callback(range_id, key, value.as_ref().map(|slice| slice.as_slice()));
+                            current_range_entries += 1;
+                            if i + 1 < range.end {
+                                if Instant::now() > min_time_to_split && shared_state.should_split()
                                 {
                                     let work_items =
                                         WorkItem::Lookup(keys.clone(), i + 1..range.end).divide();
@@ -180,13 +220,21 @@ impl StoreParallelIterator {
                                         work_sender
                                             .send(WorkQueueItem {
                                                 work: work_item,
-                                                chunk_id: shared_state
-                                                    .next_chunk_id
-                                                    .fetch_add(1, Ordering::Relaxed),
+                                                range_id: shared_state.next_range_id(),
                                                 work_sender: work_sender.clone(),
                                             })
                                             .unwrap();
                                     }
+                                    break;
+                                }
+                                if current_range_entries >= options.max_entries_per_range {
+                                    work_sender
+                                        .send(WorkQueueItem {
+                                            work: WorkItem::Lookup(keys.clone(), i + 1..range.end),
+                                            range_id: shared_state.next_range_id(),
+                                            work_sender: work_sender.clone(),
+                                        })
+                                        .unwrap();
                                     break;
                                 }
                             }
@@ -230,23 +278,29 @@ impl StoreParallelIterator {
     /// Start is inclusive, end is exclusive. If end is the empty array, it is unbounded.
     /// This may be used no matter what the distribution of the keys are; it will
     /// internally automatically balance the work between the specified number of threads.
+    ///
+    /// The callback is called with the parameters (range_id, key, value). Callback
+    /// invocations carrying the same range_id are guaranteed to be in key order, and
+    /// furthermore, the range of keys returned for each range_id are disjoint. The
+    /// range_id is a dense ID meaning that it can be used to index into an array, with
+    /// the maximum value of range_id being one less than the total amount of parallel
+    /// tasks ever created during the iteration.
     pub fn for_each_in_range(
         store: Store,
         column: DBCol,
         start: Vec<u8>,
         end: Vec<u8>,
-        num_threads: usize,
         callback: impl Fn(usize, &[u8], &[u8]) + Send + Sync + 'static,
-        print_progress: bool,
+        options: ParallelIterationOptions,
     ) {
-        let options = ParallelIterationOptions {
-            num_threads,
-            min_time_before_split: Duration::milliseconds(100),
+        let print_progress = options.print_progress;
+        let iter = StoreParallelIterator::new(
+            options,
             store,
             column,
-            callback: Arc::new(move |chunk_id, key, value| callback(chunk_id, key, value.unwrap())),
-        };
-        let iter = StoreParallelIterator::new(options, WorkItem::new_range(start, end));
+            Arc::new(move |range_id, key, value| callback(range_id, key, value.unwrap())),
+            WorkItem::new_range(start, end),
+        );
         if print_progress {
             iter.wait_for_completion_and_print_progress();
         }
@@ -256,23 +310,28 @@ impl StoreParallelIterator {
     /// This may be used no matter what the key/value size distributions are; if there is
     /// any imbalance, it will internally automatically balance the work between the specified
     /// number of threads.
+    ///
+    /// The callback is called with the parameters (range_id, key, value). Callback
+    /// invocations carrying the same range_id are guaranteed to correspond to a contiguous
+    /// range of keys as specified in the `keys` array. The range_id is a dense ID meaning that it
+    /// can be used to index into an array, with the maximum value of range_id being one
+    /// less than the total amount of parallel tasks ever created during the iteration.
     pub fn lookup_keys(
         store: Store,
         column: DBCol,
         keys: Vec<Vec<u8>>,
-        num_threads: usize,
         callback: impl Fn(usize, &[u8], Option<&[u8]>) + Send + Sync + 'static,
-        print_progress: bool,
+        options: ParallelIterationOptions,
     ) {
-        let options = ParallelIterationOptions {
-            num_threads,
-            min_time_before_split: Duration::milliseconds(100),
+        let num_keys = keys.len();
+        let print_progress = options.print_progress;
+        let iter = StoreParallelIterator::new(
+            options,
             store,
             column,
-            callback: Arc::new(callback),
-        };
-        let num_keys = keys.len();
-        let iter = StoreParallelIterator::new(options, WorkItem::new_lookup(keys, 0..num_keys));
+            Arc::new(callback),
+            WorkItem::new_lookup(keys, 0..num_keys),
+        );
         if print_progress {
             iter.wait_for_completion_and_print_progress();
         }
@@ -299,12 +358,12 @@ impl WorkItem {
             WorkItem::Lookup(keys, range) => {
                 let start = range.start;
                 let end = range.end;
-                let chunks = 16.min(end - start);
-                let chunk_size = (end - start) / chunks;
+                let ranges = 16.min(end - start);
+                let range_size = (end - start) / ranges;
                 let mut result = Vec::new();
-                for i in 0..chunks {
-                    let start = start + i * chunk_size;
-                    let end = if i == chunks - 1 { end } else { start + chunk_size };
+                for i in 0..ranges {
+                    let start = start + i * range_size;
+                    let end = if i == ranges - 1 { end } else { start + range_size };
                     result.push(WorkItem::Lookup(keys.clone(), start..end));
                 }
                 result
@@ -499,10 +558,10 @@ impl Display for IterationRange {
 #[cfg(test)]
 mod tests {
     use super::StoreParallelIterator;
-    use crate::parallel_iter::{IterationRange, WorkItem};
+    use crate::parallel_iter::{IterationRange, ParallelIterationOptions, WorkItem};
     use crate::test_utils::create_test_store;
     use crate::DBCol;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::{Arc, Mutex};
 
@@ -645,27 +704,50 @@ mod tests {
         update.commit().unwrap();
 
         let read_data = Arc::new(Mutex::new(BTreeMap::new()));
+        // For each range, (min key, max key, num keys).
+        let ranges = Arc::new(Mutex::new(HashMap::<usize, (Vec<u8>, Vec<u8>, usize)>::new()));
         {
             let read_data = read_data.clone();
+            let ranges = ranges.clone();
             StoreParallelIterator::for_each_in_range(
                 store,
                 DBCol::BlockHeader,
                 Vec::new(),
                 Vec::new(),
-                3,
-                move |_, key: &[u8], value: &[u8]| {
+                move |range_id, key: &[u8], value: &[u8]| {
                     assert!(read_data
                         .lock()
                         .unwrap()
                         .insert(key.to_vec(), value.to_vec())
                         .is_none());
+                    // Within the same range, the keys must be in order.
+                    let mut ranges = ranges.lock().unwrap();
+                    ranges
+                        .entry(range_id)
+                        .and_modify(|(_, last, num_keys)| {
+                            assert!(last.as_slice() < key);
+                            *last = key.to_vec();
+                            *num_keys += 1;
+                        })
+                        .or_insert_with(|| (key.to_vec(), key.to_vec(), 1));
                 },
-                true,
+                ParallelIterationOptions { max_entries_per_range: 1000, ..Default::default() },
             );
         }
 
         let read_data = read_data.lock().unwrap();
         assert_eq!(*read_data, data);
+
+        // Check that the key ranges returned for the ranges are disjoint.
+        let ranges = ranges.lock().unwrap();
+        for (_, range) in ranges.iter() {
+            assert!(range.2 <= 1000);
+        }
+        let mut sorted_key_ranges = ranges.values().collect::<Vec<_>>();
+        sorted_key_ranges.sort();
+        for i in 1..sorted_key_ranges.len() {
+            assert!(&sorted_key_ranges[i - 1].1 < &sorted_key_ranges[i].0);
+        }
     }
 
     #[test]
@@ -685,27 +767,51 @@ mod tests {
         }
         update.commit().unwrap();
 
+        let shuffled_keys =
+            data.keys().cloned().collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
+        let key_to_index = shuffled_keys
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, key)| (key, index))
+            .collect::<HashMap<_, _>>();
+
         let read_data = Arc::new(Mutex::new(BTreeMap::new()));
+        let range_last_key_index = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
+        let range_num_keys = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
         {
             let read_data = read_data.clone();
+            let range_num_keys = range_num_keys.clone();
             StoreParallelIterator::lookup_keys(
                 store,
                 DBCol::BlockHeader,
-                data.keys().cloned().collect(),
-                3,
-                move |_, key: &[u8], value: Option<&[u8]>| {
+                shuffled_keys,
+                move |range_id, key: &[u8], value: Option<&[u8]>| {
                     assert!(read_data
                         .lock()
                         .unwrap()
                         .insert(key.to_vec(), value.unwrap().to_vec())
                         .is_none());
+                    // The range must return keys in the order of contiguous indexes in the original list.
+                    let mut range_last_key_index = range_last_key_index.lock().unwrap();
+                    let key_index = *key_to_index.get(key).unwrap();
+                    if let Some(last_index) = range_last_key_index.insert(range_id, key_index) {
+                        assert_eq!(last_index + 1, key_index);
+                    }
+
+                    let mut range_num_keys = range_num_keys.lock().unwrap();
+                    *range_num_keys.entry(range_id).or_insert(0) += 1;
                 },
-                true,
+                ParallelIterationOptions { max_entries_per_range: 1000, ..Default::default() },
             );
         }
 
-        let read_data: std::sync::MutexGuard<BTreeMap<Vec<u8>, Vec<u8>>> =
-            read_data.lock().unwrap();
+        let read_data = read_data.lock().unwrap();
         assert_eq!(*read_data, data);
+
+        let range_num_keys = range_num_keys.lock().unwrap();
+        for (_, num_keys) in range_num_keys.iter() {
+            assert!(*num_keys <= 1000);
+        }
     }
 }

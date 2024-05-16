@@ -43,6 +43,14 @@ impl MemTrieNodeId {
     }
 }
 
+/// This is for internal use only, so that we can put `MemTrieNodeId` in an
+/// ElasticArray.
+impl Default for MemTrieNodeId {
+    fn default() -> Self {
+        Self { pos: ArenaPos::invalid() }
+    }
+}
+
 /// Pointer to an in-memory trie node that allows read-only access to the node
 /// and all its descendants.
 #[derive(Clone, Copy, PartialEq, Eq)]

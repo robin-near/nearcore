@@ -159,12 +159,12 @@ impl<'a> NibbleSlice<'a> {
     }
 
     #[inline]
-    pub fn encode_to_vec(&self, is_leaf: bool, to: &mut Vec<u8>) {
+    pub fn encode_to(&self, is_leaf: bool, mut to: impl FnMut(u8)) {
         let l = self.len();
         let mut i = l % 2;
-        to.push(if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 });
+        to(if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 });
         while i < l {
-            to.push(self.at(i) * 16 + self.at(i + 1));
+            to(self.at(i) * 16 + self.at(i + 1));
             i += 2;
         }
     }
@@ -206,12 +206,12 @@ impl<'a> NibbleSlice<'a> {
         r
     }
 
-    pub fn encode_leftmost_to_vec(&self, n: usize, is_leaf: bool, to: &mut Vec<u8>) {
+    pub fn encode_leftmost_to(&self, n: usize, is_leaf: bool, mut to: impl FnMut(u8)) {
         let l = min(self.len(), n);
         let mut i = l % 2;
-        to.push(if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 });
+        to(if i == 1 { 0x10 + self.at(0) } else { 0 } + if is_leaf { 0x20 } else { 0 });
         while i < l {
-            to.push(self.at(i) * 16 + self.at(i + 1));
+            to(self.at(i) * 16 + self.at(i + 1));
             i += 2;
         }
     }

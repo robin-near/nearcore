@@ -1,7 +1,9 @@
 use super::arena::Arena;
+use super::freelist::{ReusableVecU8, VecU8Freelist};
 use super::node::MemTrieNodeId;
 use crate::trie::mem::node::InputMemTrieNode;
 use crate::NibbleSlice;
+use elastic_array::ElasticArray4;
 use near_primitives::state::FlatStateValue;
 
 /// Algorithm to construct a trie from a given stream of sorted leaf values.
@@ -64,8 +66,7 @@ use near_primitives::state::FlatStateValue;
 pub struct TrieConstructor<'a> {
     arena: &'a mut Arena,
     segments: Vec<TrieConstructionSegment>,
-    vector_freelists: Vec<Vec<u8>>,
-    pub num_freelist_misses: usize,
+    trail_freelist: VecU8Freelist,
 }
 
 /// A segment of the rightmost path of the trie under construction, as
@@ -77,35 +78,49 @@ struct TrieConstructionSegment {
     is_branch: bool,
     // The trail, an edge below this node. If this is a branch node,
     // it is the rightmost child edge. It is an encoded NibbleSlice.
-    trail: Vec<u8>,
+    // We use a freelist here because this would otherwise be frequently
+    // allocated and deallocated and slow down construction significantly.
+    trail: ReusableVecU8,
     // If present, it is either a Leaf node or BranchWithValue.
     value: Option<FlatStateValue>,
     // Only used if is_branch is true. The children that are already
     // constructed. The last child currently being constructed is not in here.
-    children: Vec<(u8, MemTrieNodeId)>,
+    children: ElasticArray4<(u8, MemTrieNodeId)>,
     // Only used for extension nodes; the child that is already constructed.
     child: Option<MemTrieNodeId>,
 }
 
 impl TrieConstructionSegment {
     /// Prepares a segment that represents a branch node, possibly with value.
-    fn new_branch(initial_trail: Vec<u8>, value: Option<FlatStateValue>) -> Self {
-        Self { is_branch: true, trail: initial_trail, value, children: Vec::new(), child: None }
+    fn new_branch(initial_trail: ReusableVecU8, value: Option<FlatStateValue>) -> Self {
+        Self {
+            is_branch: true,
+            trail: initial_trail,
+            value,
+            children: Default::default(),
+            child: None,
+        }
     }
 
     /// Prepares a segment that represents an extension node.
-    fn new_extension(trail: Vec<u8>) -> Self {
+    fn new_extension(trail: ReusableVecU8) -> Self {
         let nibbles = NibbleSlice::from_encoded(&trail);
         assert!(!nibbles.1); // nibble slice is not leaf
         assert!(!nibbles.0.is_empty()); // extension nibbles cannot be empty
-        Self { is_branch: false, trail, value: None, children: Vec::new(), child: None }
+        Self { is_branch: false, trail, value: None, children: Default::default(), child: None }
     }
 
     /// Prepares a segment that represents a leaf node.
-    fn new_leaf(trail: Vec<u8>, value: FlatStateValue) -> Self {
+    fn new_leaf(trail: ReusableVecU8, value: FlatStateValue) -> Self {
         let nibbles = NibbleSlice::from_encoded(&trail);
         assert!(nibbles.1);
-        Self { is_branch: false, trail, value: Some(value), children: Vec::new(), child: None }
+        Self {
+            is_branch: false,
+            trail,
+            value: Some(value),
+            children: Default::default(),
+            child: None,
+        }
     }
 
     fn is_leaf(&self) -> bool {
@@ -138,47 +153,51 @@ impl TrieConstructionSegment {
     }
 }
 
-impl Drop for TrieConstructionSegment {
-    fn drop(&mut self) {
-        debug_assert!(self.trail.is_empty());
+trait NibblesHelper {
+    fn encode_to_vec(&self, freelist: &mut VecU8Freelist, is_leaf: bool) -> ReusableVecU8;
+    fn encode_leftmost_to_vec(
+        &self,
+        freelist: &mut VecU8Freelist,
+        len: usize,
+        is_leaf: bool,
+    ) -> ReusableVecU8;
+}
+
+impl NibblesHelper for NibbleSlice<'_> {
+    fn encode_to_vec(&self, freelist: &mut VecU8Freelist, is_leaf: bool) -> ReusableVecU8 {
+        let mut vec = freelist.alloc();
+        self.encode_to(is_leaf, |b| vec.push(b));
+        vec
+    }
+
+    fn encode_leftmost_to_vec(
+        &self,
+        freelist: &mut VecU8Freelist,
+        len: usize,
+        is_leaf: bool,
+    ) -> ReusableVecU8 {
+        let mut vec = freelist.alloc();
+        self.encode_leftmost_to(len, is_leaf, |b| vec.push(b));
+        vec
     }
 }
 
 impl<'a> TrieConstructor<'a> {
     pub fn new(arena: &'a mut Arena) -> Self {
-        Self { arena, segments: vec![], vector_freelists: vec![], num_freelist_misses: 0 }
+        // We should only have as many allocations as the number of segments
+        // alive, which is at most the length of keys. We give a generous
+        // margin on top of that. If this is exceeded in production, an error
+        // is printed; if exceeded in debug, it panics.
+        const EXPECTED_FREELIST_MAX_ALLOCATIONS: usize = 4096;
+        Self {
+            arena,
+            segments: vec![],
+            trail_freelist: VecU8Freelist::new(EXPECTED_FREELIST_MAX_ALLOCATIONS),
+        }
     }
 
-    fn encode_nibbles(&mut self, nibble: &NibbleSlice<'_>, is_leaf: bool) -> Vec<u8> {
-        let mut vec = self.vector_freelists.pop().unwrap_or_else(|| {
-            self.num_freelist_misses += 1;
-            Vec::new()
-        });
-        nibble.encode_to_vec(is_leaf, &mut vec);
-        vec
-    }
-
-    fn encode_nibbles_leftmost(
-        &mut self,
-        nibble: &NibbleSlice<'_>,
-        len: usize,
-        is_leaf: bool,
-    ) -> Vec<u8> {
-        let mut vec = self.vector_freelists.pop().unwrap_or_else(|| {
-            self.num_freelist_misses += 1;
-            Vec::new()
-        });
-        nibble.encode_leftmost_to_vec(len, is_leaf, &mut vec);
-        vec
-    }
-
-    fn recycle_vec(&mut self, mut v: Vec<u8>) {
-        v.clear();
-        self.vector_freelists.push(v);
-    }
-
-    fn recycle_segment(&mut self, mut segment: TrieConstructionSegment) {
-        self.recycle_vec(std::mem::take(&mut segment.trail));
+    fn recycle_segment(&mut self, segment: TrieConstructionSegment) {
+        self.trail_freelist.free(segment.trail);
     }
 
     /// Encodes the bottom-most segment into a node, and pops it off the stack.
@@ -238,17 +257,21 @@ impl<'a> TrieConstructor<'a> {
             if common_prefix_len > 0 {
                 let mut segment = self.segments.pop().unwrap();
                 assert!(!segment.is_branch);
-                let old_trail = std::mem::take(&mut segment.trail);
-                let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&old_trail);
+                let (extension_nibbles, was_leaf) = NibbleSlice::from_encoded(&segment.trail);
                 assert_eq!(was_leaf, segment.is_leaf());
                 assert_eq!(was_leaf, segment.child.is_none());
 
                 let top_segment = TrieConstructionSegment::new_extension(
-                    self.encode_nibbles_leftmost(&extension_nibbles, common_prefix_len, false),
+                    extension_nibbles.encode_leftmost_to_vec(
+                        &mut self.trail_freelist,
+                        common_prefix_len,
+                        false,
+                    ),
                 );
-                segment.trail =
-                    self.encode_nibbles(&extension_nibbles.mid(common_prefix_len), was_leaf);
-                self.recycle_vec(old_trail);
+                let new_trail = extension_nibbles
+                    .mid(common_prefix_len)
+                    .encode_to_vec(&mut &mut self.trail_freelist, was_leaf);
+                self.trail_freelist.free(std::mem::replace(&mut segment.trail, new_trail));
                 self.segments.push(top_segment);
                 self.segments.push(segment);
                 nibbles = nibbles.mid(common_prefix_len);
@@ -259,10 +282,9 @@ impl<'a> TrieConstructor<'a> {
             if self.segments.last().unwrap().is_branch {
                 // If the existing segment is a branch, we simply add another
                 // case of the branch.
-                let mut segment = self.segments.pop().unwrap();
-                self.recycle_vec(std::mem::take(&mut segment.trail));
-                segment.trail = self.encode_nibbles_leftmost(&nibbles, 1, false);
-                self.segments.push(segment);
+                let segment = self.segments.last_mut().unwrap();
+                let new_trail = nibbles.encode_leftmost_to_vec(&mut self.trail_freelist, 1, false);
+                self.trail_freelist.free(std::mem::replace(&mut segment.trail, new_trail));
                 nibbles = nibbles.mid(1);
                 break;
             } else {
@@ -278,7 +300,7 @@ impl<'a> TrieConstructor<'a> {
                 // for this branch node begins with the old trail's first nibble.
                 // We'll insert the new leaf later.
                 let mut top_segment = TrieConstructionSegment::new_branch(
-                    self.encode_nibbles_leftmost(&extension_nibbles, 1, false),
+                    extension_nibbles.encode_leftmost_to_vec(&mut self.trail_freelist, 1, false),
                     None,
                 );
                 if extension_nibbles.len() > 1 || was_leaf {
@@ -287,9 +309,9 @@ impl<'a> TrieConstructor<'a> {
                     // Similarly, if the old segment had just 1 nibble but was a
                     // leaf, we still need to keep the leaf but now with empty
                     // trail on the leaf.
-                    let new_trail = self.encode_nibbles(&extension_nibbles.mid(1), was_leaf);
-                    self.recycle_vec(std::mem::take(&mut segment.trail));
-                    segment.trail = new_trail;
+                    let new_trail =
+                        extension_nibbles.mid(1).encode_to_vec(&mut self.trail_freelist, was_leaf);
+                    self.trail_freelist.free(std::mem::replace(&mut segment.trail, new_trail));
                     self.segments.push(top_segment);
                     self.segments.push(segment);
                     // The bottom segment is no longer relevant to our new leaf,
@@ -306,10 +328,9 @@ impl<'a> TrieConstructor<'a> {
                 // At this point we have popped the old case of the branch node,
                 // so we advance the branch node to point to our new leaf
                 // segment that we'll add below.
-                let mut segment = self.segments.pop().unwrap();
-                self.recycle_vec(std::mem::take(&mut segment.trail));
-                segment.trail = self.encode_nibbles_leftmost(&nibbles, 1, false);
-                self.segments.push(segment);
+                let segment = self.segments.last_mut().unwrap();
+                let new_trail = nibbles.encode_leftmost_to_vec(&mut self.trail_freelist, 1, false);
+                self.trail_freelist.free(std::mem::replace(&mut segment.trail, new_trail));
                 nibbles = nibbles.mid(1);
                 break;
             }
@@ -331,17 +352,17 @@ impl<'a> TrieConstructor<'a> {
                 // If the original leaf node had an extension within it, we need
                 // to create an extension above the branch node.
                 let top_segment = TrieConstructionSegment::new_extension(
-                    self.encode_nibbles(&extension_nibbles, false),
+                    extension_nibbles.encode_to_vec(&mut self.trail_freelist, false),
                 );
                 self.segments.push(top_segment);
             }
             // Now let's construct our branch node, and add our new leaf node below it.
             let mid_segment = TrieConstructionSegment::new_branch(
-                self.encode_nibbles_leftmost(&nibbles, 1, false),
+                nibbles.encode_leftmost_to_vec(&mut self.trail_freelist, 1, false),
                 std::mem::take(&mut segment.value),
             );
             let bottom_segment = TrieConstructionSegment::new_leaf(
-                self.encode_nibbles(&nibbles.mid(1), true),
+                nibbles.mid(1).encode_to_vec(&mut self.trail_freelist, true),
                 value,
             );
             self.segments.push(mid_segment);
@@ -350,8 +371,10 @@ impl<'a> TrieConstructor<'a> {
         } else {
             // Otherwise we're at one branch of a branch node (or we're at root),
             // so just append the leaf.
-            let segment =
-                TrieConstructionSegment::new_leaf(self.encode_nibbles(&nibbles, true), value);
+            let segment = TrieConstructionSegment::new_leaf(
+                nibbles.encode_to_vec(&mut self.trail_freelist, true),
+                value,
+            );
             self.segments.push(segment);
         }
     }

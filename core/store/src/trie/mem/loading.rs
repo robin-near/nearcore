@@ -3,16 +3,16 @@ use super::MemTries;
 use crate::flat::store_helper::{
     decode_flat_state_db_key, get_all_deltas_metadata, get_delta_changes, get_flat_storage_status,
 };
-use crate::flat::FlatStorageStatus;
-use crate::parallel_iter::StoreParallelIterator;
+use crate::flat::{FlatStorageError, FlatStorageStatus};
+use crate::parallel_iter::{ParallelIterationOptions, RangeId, StoreParallelIterator};
 use crate::trie::mem::construction::TrieConstructor;
 use crate::trie::mem::updating::apply_memtrie_changes;
 use crate::{DBCol, Store};
-use borsh::BorshDeserialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use near_primitives::errors::StorageError;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
-use near_primitives::state::FlatStateValue;
+use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, StateRoot};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
@@ -23,69 +23,29 @@ use tracing::{debug, info};
 
 /// Loads a trie from the FlatState column. The returned `MemTries` contains
 /// exactly one trie root.
+///
+/// `parallelize` can be used to speed up reading from db. However, it should
+/// only be used when no other work is being done, such as during initial
+/// startup. It also incurs a higher peak memory usage.
 pub fn load_trie_from_flat_state(
     store: &Store,
     shard_uid: ShardUId,
     state_root: CryptoHash,
     block_height: BlockHeight,
+    parallelize: bool,
 ) -> Result<MemTries, StorageError> {
     let mut tries = MemTries::new(shard_uid);
 
     tries.construct_root(block_height, |arena| -> Result<Option<MemTrieNodeId>, StorageError> {
         info!(target: "memtrie", shard_uid=%shard_uid, "Loading trie from flat state...");
         let load_start = Instant::now();
-        let (tx, rx) = channel::<(usize, Vec<u8>, FlatStateValue)>();
-
-        let start_time = Instant::now();
-        {
-            let mut next_shard_uid = shard_uid.clone();
-            next_shard_uid.shard_id+= 1;
-            let store = store.clone();
-            std::thread::spawn(move || {
-        StoreParallelIterator::for_each_in_range(
-            store, DBCol::FlatState, borsh::to_vec(&shard_uid).unwrap(), borsh::to_vec(&next_shard_uid).unwrap(), 8,
-        move |chunk_id, key, value| {
-            let (_, key) = decode_flat_state_db_key(&key).unwrap();
-            let value = FlatStateValue::try_from_slice(value).unwrap();
-            tx.send((chunk_id, key, value)).unwrap();
-        }, true);
-    });
-    }
-        let mut data = Vec::<Vec::<(Vec<u8>, FlatStateValue)>>::new();
-        let mut total_keys = 0;
-        while let Ok((chunk_id, key, value)) = rx.recv() {
-            while data.len() <= chunk_id {
-                data.push(Vec::new());
-            }
-            data[chunk_id].push((key, value));
-            total_keys += 1;
-        }
-        data.retain(|chunk| !chunk.is_empty());
-        data.sort_unstable_by(|a: &Vec<(Vec<u8>, FlatStateValue)>, b| a[0].0.cmp(&b[0].0));
-
-        info!(target: "memtrie", shard_uid=%shard_uid, "Loaded {} keys in {} chunks from flat state in {:?}", total_keys, data.len(), start_time.elapsed());
-        // std::process::exit(1);
-
-        let start_time = Instant::now();
         let mut recon = TrieConstructor::new(arena);
-        let mut num_keys_loaded = 0;
-        for chunk in data {
-        for (key, value) in chunk
-        {
-            recon.add_leaf(&key, value);
-            num_keys_loaded += 1;
-            if num_keys_loaded % 1000000 == 0 {
-                debug!(
-                    target: "memtrie",
-                    %shard_uid,
-                    "Loaded {} keys, current key: {}",
-                    num_keys_loaded,
-                    hex::encode(&key)
-                );
-            }
+
+        if parallelize {
+            load_memtrie_from_flat_state_in_parallel_no_hash_computation(store, shard_uid, &mut recon);
+        } else {
+            load_memtrie_from_flat_state_single_threaded_no_hash_computation(store, shard_uid, &mut recon)?;
         }
-    }
-        info!(target: "memtrie", shard_uid=%shard_uid, "Loaded {} keys in {:?}, allocated {} new vectors", num_keys_loaded, start_time.elapsed(), recon.num_freelist_misses);
 
         let root_id = match recon.finalize() {
             Some(root_id) => root_id,
@@ -98,8 +58,7 @@ pub fn load_trie_from_flat_state(
         debug!(
             target: "memtrie",
             %shard_uid,
-            "Loaded {} keys; computing hash and memory usage...",
-            num_keys_loaded
+            "Computing hash and memory usage...",
         );
         let mut subtrees = Vec::new();
         root_id.as_ptr_mut(arena.memory_mut()).take_small_subtrees(1024 * 1024, &mut subtrees);
@@ -116,6 +75,124 @@ pub fn load_trie_from_flat_state(
         Ok(Some(root.id()))
     })?;
     Ok(tries)
+}
+
+/// A more memory-efficient version of `FlatStateValue` that is 16 bytes
+/// in size instead of 40.
+#[derive(BorshSerialize, BorshDeserialize)]
+enum MemEfficientFlatStateValue {
+    Ref(Box<ValueRef>),
+    Inlined(Box<[u8]>),
+}
+
+impl From<MemEfficientFlatStateValue> for FlatStateValue {
+    fn from(value: MemEfficientFlatStateValue) -> Self {
+        match value {
+            MemEfficientFlatStateValue::Ref(value) => FlatStateValue::Ref(*value),
+            MemEfficientFlatStateValue::Inlined(value) => FlatStateValue::Inlined(value.into_vec()),
+        }
+    }
+}
+
+fn load_memtrie_from_flat_state_in_parallel_no_hash_computation(
+    store: &Store,
+    shard_uid: ShardUId,
+    recon: &mut TrieConstructor<'_>,
+) {
+    let (tx, rx) = channel::<(RangeId, Box<[u8]>, MemEfficientFlatStateValue)>();
+
+    let start_time = Instant::now();
+    {
+        let mut next_shard_uid = shard_uid.clone();
+        next_shard_uid.shard_id += 1;
+        let store = store.clone();
+        std::thread::spawn(move || {
+            StoreParallelIterator::for_each_in_range(
+                store,
+                DBCol::FlatState,
+                borsh::to_vec(&shard_uid).unwrap(),
+                borsh::to_vec(&next_shard_uid).unwrap(),
+                move |range_id, key, value| {
+                    // Do all the decoding and memory allocations in the iteration thread,
+                    // because this can be slow if done in a single thread.
+                    let (_, key) = decode_flat_state_db_key(&key).unwrap();
+                    let value = MemEfficientFlatStateValue::try_from_slice(value).unwrap();
+                    tx.send((range_id, key.into_boxed_slice(), value)).unwrap();
+                },
+                ParallelIterationOptions::default(),
+            );
+        });
+    }
+
+    // Data is organized per range_id; the parallel iterator guarantees that
+    // the keys for each range_id are sorted. This way, we only need to sort
+    // the ranges, not individual keys.
+    let mut data = Vec::<Vec<(Box<[u8]>, MemEfficientFlatStateValue)>>::new();
+    let mut total_keys = 0;
+    while let Ok((range_id, key, value)) = rx.recv() {
+        while data.len() <= range_id {
+            data.push(Vec::new());
+        }
+        data[range_id].push((key, value));
+        total_keys += 1;
+    }
+    data.retain(|range| !range.is_empty());
+    data.sort_unstable_by(|a, b| a[0].0.cmp(&b[0].0));
+
+    info!(target: "memtrie", shard_uid=%shard_uid, "Read {} keys in {} ranges from flat state in {:?}", total_keys, data.len(), start_time.elapsed());
+
+    let start_time = Instant::now();
+    let mut num_keys_loaded = 0;
+    // As we iterate through the ranges, we will also be deallocating them.
+    // This way, as we construct the trie and consume more memory, we're
+    // also freeing memory at the same time.
+    for range in data {
+        for (key, value) in range {
+            recon.add_leaf(&key, value.into());
+            num_keys_loaded += 1;
+            if num_keys_loaded % 1000000 == 0 {
+                debug!(
+                    target: "memtrie",
+                    %shard_uid,
+                    "Loaded {} keys, current key: {}",
+                    num_keys_loaded,
+                    hex::encode(&key)
+                );
+            }
+        }
+    }
+    info!(target: "memtrie", shard_uid=%shard_uid, "Constructed memtrie with {} keys in {:?}", num_keys_loaded, start_time.elapsed());
+}
+
+fn load_memtrie_from_flat_state_single_threaded_no_hash_computation(
+    store: &Store,
+    shard_uid: ShardUId,
+    recon: &mut TrieConstructor<'_>,
+) -> Result<(), StorageError> {
+    let mut num_keys_loaded = 0;
+    for item in store
+        .iter_prefix_ser::<FlatStateValue>(DBCol::FlatState, &borsh::to_vec(&shard_uid).unwrap())
+    {
+        let (key, value) = item.map_err(|err| {
+            FlatStorageError::StorageInternalError(format!("Error iterating over FlatState: {err}"))
+        })?;
+        let (_, key) = decode_flat_state_db_key(&key).map_err(|err| {
+            FlatStorageError::StorageInternalError(format!("invalid FlatState key format: {err}"))
+        })?;
+        recon.add_leaf(&key, value);
+        num_keys_loaded += 1;
+        if num_keys_loaded % 1000000 == 0 {
+            debug!(
+                target: "memtrie",
+                %shard_uid,
+                "Loaded {} keys, current key: {}",
+                num_keys_loaded,
+                hex::encode(&key)
+            );
+        }
+    }
+    info!(target: "memtrie", shard_uid=%shard_uid, "Loaded {} keys", num_keys_loaded);
+    Ok(())
 }
 
 fn get_state_root(
@@ -150,6 +227,7 @@ pub fn load_trie_from_flat_state_and_delta(
     store: &Store,
     shard_uid: ShardUId,
     state_root: Option<StateRoot>,
+    parallelize: bool,
 ) -> Result<MemTries, StorageError> {
     debug!(target: "memtrie", %shard_uid, "Loading base trie from flat state...");
     let flat_head = match get_flat_storage_status(&store, shard_uid)? {
@@ -168,7 +246,8 @@ pub fn load_trie_from_flat_state_and_delta(
     };
 
     let mut mem_tries =
-        load_trie_from_flat_state(&store, shard_uid, state_root, flat_head.height).unwrap();
+        load_trie_from_flat_state(&store, shard_uid, state_root, flat_head.height, parallelize)
+            .unwrap();
 
     debug!(target: "memtrie", %shard_uid, "Loading flat state deltas...");
     // We load the deltas in order of height, so that we always have the previous state root
@@ -219,7 +298,6 @@ mod tests {
     use crate::trie::mem::loading::load_trie_from_flat_state;
     use crate::trie::mem::lookup::memtrie_lookup;
     use crate::{DBCol, KeyLookupMode, NibbleSlice, ShardTries, Store, Trie, TrieUpdate};
-    use near_o11y::testonly::init_test_logger;
     use near_primitives::congestion_info::CongestionInfo;
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
@@ -231,7 +309,7 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
-    fn check(keys: Vec<Vec<u8>>) {
+    fn check_maybe_parallelize(keys: Vec<Vec<u8>>, parallelize: bool) {
         let shard_tries = TestTriesBuilder::new().with_flat_storage(true).build();
         let shard_uid = ShardUId::single_shard();
         let changes = keys.iter().map(|key| (key.to_vec(), Some(key.to_vec()))).collect::<Vec<_>>();
@@ -246,9 +324,14 @@ mod tests {
         let state_root = test_populate_trie(&shard_tries, &Trie::EMPTY_ROOT, shard_uid, changes);
 
         eprintln!("Trie and flat storage populated");
-        let in_memory_trie =
-            load_trie_from_flat_state(&shard_tries.get_store(), shard_uid, state_root, 123)
-                .unwrap();
+        let in_memory_trie = load_trie_from_flat_state(
+            &shard_tries.get_store(),
+            shard_uid,
+            state_root,
+            123,
+            parallelize,
+        )
+        .unwrap();
         eprintln!("In memory trie loaded");
 
         if keys.is_empty() {
@@ -311,6 +394,11 @@ mod tests {
             }
             check(keys);
         }
+    }
+
+    fn check(keys: Vec<Vec<u8>>) {
+        check_maybe_parallelize(keys.clone(), false);
+        check_maybe_parallelize(keys, true);
     }
 
     fn nibbles(hex: &str) -> Vec<u8> {
@@ -498,7 +586,7 @@ mod tests {
         // Load into memory. It should load the base flat state (block 0), plus all
         // four deltas. We'll check against the state roots at each block; they should
         // all exist in the loaded memtrie.
-        let mem_tries = load_trie_from_flat_state_and_delta(&store, shard_uid, None).unwrap();
+        let mem_tries = load_trie_from_flat_state_and_delta(&store, shard_uid, None, true).unwrap();
 
         assert_eq!(
             memtrie_lookup(mem_tries.get_root(&state_root_0).unwrap(), &test_key.to_vec(), None)
