@@ -8,7 +8,7 @@ use near_primitives::state::FlatStateValue;
 use near_store::flat::delta::KeyForFlatStateDelta;
 use near_store::flat::store_helper::{decode_flat_state_db_key, encode_flat_state_db_key};
 use near_store::flat::FlatStateChanges;
-use near_store::parallel_iter::StoreParallelIterator;
+use near_store::parallel_iter::{ParallelIterationOptions, StoreParallelIterator};
 use near_store::{DBCol, Store};
 use nearcore::{load_config, open_storage};
 use std::collections::BTreeMap;
@@ -56,8 +56,7 @@ impl AggressiveTrimmingCommand {
                 DBCol::FlatState,
                 sharding_version.to_le_bytes().to_vec(),
                 (sharding_version + 1).to_le_bytes().to_vec(),
-                6,
-                move |key, value| {
+                move |_, key, value| {
                     let value = FlatStateValue::try_from_slice(value).unwrap();
                     match value {
                         FlatStateValue::Ref(r) => {
@@ -74,7 +73,7 @@ impl AggressiveTrimmingCommand {
                         FlatStateValue::Inlined(_) => {}
                     }
                 },
-                true,
+                ParallelIterationOptions::default(),
             );
         }
 
@@ -94,8 +93,7 @@ impl AggressiveTrimmingCommand {
                 DBCol::FlatStateChanges,
                 Vec::new(),
                 Vec::new(),
-                6,
-                move |key: &[u8], value| {
+                move |_, key: &[u8], value| {
                     let key = KeyForFlatStateDelta::try_from_slice(key).unwrap();
                     if key.shard_uid.version != sharding_version {
                         return;
@@ -114,7 +112,7 @@ impl AggressiveTrimmingCommand {
                         }
                     }
                 },
-                true,
+                ParallelIterationOptions::default(),
             );
         }
 
@@ -137,14 +135,13 @@ impl AggressiveTrimmingCommand {
                 store.clone(),
                 DBCol::State,
                 keys,
-                6,
-                move |key, value| {
+                move |_, key, value| {
                     assert!(value.is_some(), "Key not found: {}", hex::encode(&key));
                     let value = value.unwrap().to_vec();
                     let mut values = values_read.lock().unwrap();
                     values.insert(key.to_vec(), value);
                 },
-                true,
+                ParallelIterationOptions::default(),
             )
         }
 
