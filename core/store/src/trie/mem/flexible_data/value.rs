@@ -1,4 +1,4 @@
-use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut};
+use crate::trie::mem::arena::{ArenaSlice, ArenaSliceMut, IArenaMemory};
 use crate::trie::OptimizedValueRef;
 
 use super::encoding::BorshFixedSize;
@@ -36,7 +36,7 @@ impl EncodedValueHeader {
 
 impl FlexibleDataHeader for EncodedValueHeader {
     type InputData = FlatStateValue;
-    type View<'a> = ValueView<'a>;
+    type View<'a, Memory: IArenaMemory> = ValueView<'a>;
 
     fn from_input(value: &FlatStateValue) -> Self {
         match value {
@@ -60,7 +60,11 @@ impl FlexibleDataHeader for EncodedValueHeader {
         }
     }
 
-    fn encode_flexible_data(&self, value: &FlatStateValue, target: &mut ArenaSliceMut<'_>) {
+    fn encode_flexible_data<Memory: IArenaMemory>(
+        &self,
+        value: &FlatStateValue,
+        target: &mut ArenaSliceMut<'_, Memory>,
+    ) {
         let (length, inlined) = self.decode();
         match value {
             FlatStateValue::Ref(value_ref) => {
@@ -76,10 +80,13 @@ impl FlexibleDataHeader for EncodedValueHeader {
         }
     }
 
-    fn decode_flexible_data<'a>(&self, source: &ArenaSlice<'a>) -> ValueView<'a> {
+    fn decode_flexible_data<'a, Memory: IArenaMemory>(
+        &self,
+        source: &ArenaSlice<'a, Memory>,
+    ) -> ValueView<'a> {
         let (length, inlined) = self.decode();
         if inlined {
-            ValueView::Inlined(source.clone())
+            ValueView::Inlined(source.raw_slice())
         } else {
             ValueView::Ref { length, hash: CryptoHash::try_from_slice(source.raw_slice()).unwrap() }
         }
@@ -90,7 +97,7 @@ impl FlexibleDataHeader for EncodedValueHeader {
 #[derive(Debug, Clone)]
 pub enum ValueView<'a> {
     Ref { length: u32, hash: CryptoHash },
-    Inlined(ArenaSlice<'a>),
+    Inlined(&'a [u8]),
 }
 
 impl<'a> ValueView<'a> {
@@ -99,7 +106,7 @@ impl<'a> ValueView<'a> {
             Self::Ref { length, hash } => {
                 FlatStateValue::Ref(ValueRef { length: *length, hash: *hash })
             }
-            Self::Inlined(data) => FlatStateValue::Inlined(data.raw_slice().to_vec()),
+            Self::Inlined(data) => FlatStateValue::Inlined(data.to_vec()),
         }
     }
 

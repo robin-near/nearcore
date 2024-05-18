@@ -1,13 +1,15 @@
 use super::node::MemTrieNodeId;
+use super::top_down::load_memtrie_in_parallel;
 use super::MemTries;
 use crate::flat::store_helper::{
     decode_flat_state_db_key, get_all_deltas_metadata, get_delta_changes, get_flat_storage_status,
 };
 use crate::flat::{FlatStorageError, FlatStorageStatus};
 use crate::parallel_iter::{ParallelIterationOptions, RangeId, StoreParallelIterator};
+use crate::trie::mem::arena::{Arena, IArena};
 use crate::trie::mem::construction::TrieConstructor;
 use crate::trie::mem::updating::apply_memtrie_changes;
-use crate::{DBCol, Store};
+use crate::{DBCol, NibbleSlice, Store};
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_primitives::errors::StorageError;
 use near_primitives::hash::CryptoHash;
@@ -15,7 +17,6 @@ use near_primitives::shard_layout::{get_block_shard_uid, ShardUId};
 use near_primitives::state::{FlatStateValue, ValueRef};
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, StateRoot};
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::collections::BTreeSet;
 use std::mem::size_of;
 use std::sync::mpsc::channel;
@@ -35,18 +36,33 @@ pub fn load_trie_from_flat_state(
     block_height: BlockHeight,
     parallelize: bool,
 ) -> Result<MemTries, StorageError> {
-    let mut tries = MemTries::new(shard_uid);
+    if parallelize {
+        let load_start = Instant::now();
+        let data = load_memtrie_entries_from_flat_storage(store, shard_uid);
+        if data.is_empty() {
+            info!(target: "memtrie", shard_uid=%shard_uid, "No keys loaded, trie is empty");
+            return Ok(MemTries::new(shard_uid));
+        }
+        let (arena, root_id) = load_memtrie_in_parallel(data, 1000, shard_uid);
 
+        info!(target: "memtrie", shard_uid=%shard_uid, "Done loading trie from flat state, took {:?}", load_start.elapsed());
+        let root = root_id.as_ptr(arena.memory());
+        assert_eq!(
+            root.view().node_hash(),
+            state_root,
+            "In-memory trie for shard {} has incorrect state root",
+            shard_uid
+        );
+        return Ok(MemTries::new_from_arena_and_root(shard_uid, block_height, arena, root_id));
+    }
+
+    let mut tries = MemTries::new(shard_uid);
     tries.construct_root(block_height, |arena| -> Result<Option<MemTrieNodeId>, StorageError> {
         info!(target: "memtrie", shard_uid=%shard_uid, "Loading trie from flat state...");
         let load_start = Instant::now();
         let mut recon = TrieConstructor::new(arena);
 
-        if parallelize {
-            load_memtrie_from_flat_state_in_parallel_no_hash_computation(store, shard_uid, &mut recon);
-        } else {
-            load_memtrie_from_flat_state_single_threaded_no_hash_computation(store, shard_uid, &mut recon)?;
-        }
+        load_memtrie_from_flat_state_single_threaded(store, shard_uid, &mut recon)?;
 
         let root_id = match recon.finalize() {
             Some(root_id) => root_id,
@@ -56,17 +72,6 @@ pub fn load_trie_from_flat_state(
             }
         };
 
-        debug!(
-            target: "memtrie",
-            %shard_uid,
-            "Computing hash and memory usage...",
-        );
-        let mut subtrees = Vec::new();
-        root_id.as_ptr_mut(arena.memory_mut()).take_small_subtrees(1024 * 1024, &mut subtrees);
-        subtrees.into_par_iter().for_each(|mut subtree| {
-            subtree.compute_hash_recursively();
-        });
-        root_id.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
         info!(target: "memtrie", shard_uid=%shard_uid, "Done loading trie from flat state, took {:?}", load_start.elapsed());
 
         let root = root_id.as_ptr(arena.memory());
@@ -81,9 +86,15 @@ pub fn load_trie_from_flat_state(
 /// A more memory-efficient version of `FlatStateValue` that is 16 bytes
 /// in size instead of 40.
 #[derive(BorshSerialize, BorshDeserialize)]
-enum MemEfficientFlatStateValue {
+pub(crate) enum MemEfficientFlatStateValue {
     Ref(Box<ValueRef>),
     Inlined(Box<[u8]>),
+}
+
+impl Default for MemEfficientFlatStateValue {
+    fn default() -> Self {
+        MemEfficientFlatStateValue::Inlined(Box::new([]))
+    }
 }
 
 impl From<MemEfficientFlatStateValue> for FlatStateValue {
@@ -104,11 +115,10 @@ impl MemEfficientFlatStateValue {
     }
 }
 
-fn load_memtrie_from_flat_state_in_parallel_no_hash_computation(
+fn load_memtrie_entries_from_flat_storage(
     store: &Store,
     shard_uid: ShardUId,
-    recon: &mut TrieConstructor<'_>,
-) {
+) -> Vec<Vec<(Box<[u8]>, MemEfficientFlatStateValue)>> {
     let (tx, rx) = channel::<(RangeId, Box<[u8]>, MemEfficientFlatStateValue)>();
 
     let start_time = Instant::now();
@@ -153,33 +163,13 @@ fn load_memtrie_from_flat_state_in_parallel_no_hash_computation(
 
     info!(target: "memtrie", shard_uid=%shard_uid, "Read {} keys in {} ranges (totaling {} bytes) from flat state in {:?}", total_keys, data.len(), total_size, start_time.elapsed());
 
-    let start_time = Instant::now();
-    let mut num_keys_loaded = 0;
-    // As we iterate through the ranges, we will also be deallocating them.
-    // This way, as we construct the trie and consume more memory, we're
-    // also freeing memory at the same time.
-    for range in data {
-        for (key, value) in range {
-            recon.add_leaf(&key, value.into());
-            num_keys_loaded += 1;
-            if num_keys_loaded % 1000000 == 0 {
-                debug!(
-                    target: "memtrie",
-                    %shard_uid,
-                    "Loaded {} keys, current key: {}",
-                    num_keys_loaded,
-                    hex::encode(&key)
-                );
-            }
-        }
-    }
-    info!(target: "memtrie", shard_uid=%shard_uid, "Constructed memtrie with {} keys in {:?}", num_keys_loaded, start_time.elapsed());
+    data
 }
 
-fn load_memtrie_from_flat_state_single_threaded_no_hash_computation(
+fn load_memtrie_from_flat_state_single_threaded(
     store: &Store,
     shard_uid: ShardUId,
-    recon: &mut TrieConstructor<'_>,
+    recon: &mut TrieConstructor<'_, Arena>,
 ) -> Result<(), StorageError> {
     let mut num_keys_loaded = 0;
     for item in store
@@ -191,7 +181,7 @@ fn load_memtrie_from_flat_state_single_threaded_no_hash_computation(
         let (_, key) = decode_flat_state_db_key(&key).map_err(|err| {
             FlatStorageError::StorageInternalError(format!("invalid FlatState key format: {err}"))
         })?;
-        recon.add_leaf(&key, value);
+        recon.add_leaf(NibbleSlice::new(&key), value);
         num_keys_loaded += 1;
         if num_keys_loaded % 1000000 == 0 {
             debug!(
@@ -374,7 +364,7 @@ mod tests {
             // Do another access with the trie to see how many nodes we're supposed to
             // have accessed.
             let temp_trie = shard_tries.get_trie_for_shard(shard_uid, state_root);
-            temp_trie.get_optimized_ref(key, crate::KeyLookupMode::Trie).unwrap();
+            temp_trie.get_optimized_ref(key, KeyLookupMode::Trie).unwrap();
             assert_eq!(
                 temp_trie.get_trie_nodes_count().db_reads,
                 nodes_accessed.len() as u64,
