@@ -1,5 +1,4 @@
 use super::node::MemTrieNodeId;
-use super::top_down::load_memtrie_in_parallel;
 use super::MemTries;
 use crate::flat::store_helper::{
     decode_flat_state_db_key, get_all_deltas_metadata, get_delta_changes, get_flat_storage_status,
@@ -8,6 +7,7 @@ use crate::flat::{FlatStorageError, FlatStorageStatus};
 use crate::parallel_iter::{ParallelIterationOptions, RangeId, StoreParallelIterator};
 use crate::trie::mem::arena::{Arena, IArena};
 use crate::trie::mem::construction::TrieConstructor;
+use crate::trie::mem::partial_state::load_memtrie_in_parallel;
 use crate::trie::mem::updating::apply_memtrie_changes;
 use crate::{DBCol, NibbleSlice, Store};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -36,14 +36,15 @@ pub fn load_trie_from_flat_state(
     block_height: BlockHeight,
     parallelize: bool,
 ) -> Result<MemTries, StorageError> {
-    if parallelize {
+    if parallelize && state_root != CryptoHash::default() {
         let load_start = Instant::now();
-        let data = load_memtrie_entries_from_flat_storage(store, shard_uid);
-        if data.is_empty() {
-            info!(target: "memtrie", shard_uid=%shard_uid, "No keys loaded, trie is empty");
-            return Ok(MemTries::new(shard_uid));
-        }
-        let (arena, root_id) = load_memtrie_in_parallel(data, 1000, shard_uid);
+        let (arena, root_id) = load_memtrie_in_parallel(
+            store.clone(),
+            shard_uid,
+            state_root,
+            100 * 1024 * 1024,
+            shard_uid.to_string(),
+        )?;
 
         info!(target: "memtrie", shard_uid=%shard_uid, "Done loading trie from flat state, took {:?}", load_start.elapsed());
         let root = root_id.as_ptr(arena.memory());
