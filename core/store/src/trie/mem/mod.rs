@@ -1,4 +1,4 @@
-use self::arena::Arena;
+use self::arena::{Arena, IArena};
 use self::metrics::MEM_TRIE_NUM_ROOTS;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
 use self::updating::MemTrieUpdate;
@@ -17,6 +17,8 @@ pub mod loading;
 pub mod lookup;
 pub mod metrics;
 pub mod node;
+mod partial_state;
+mod top_down;
 pub mod updating;
 
 /// Check this, because in the code we conveniently assume usize is 8 bytes.
@@ -56,6 +58,18 @@ impl MemTries {
         }
     }
 
+    pub fn new_from_arena_and_root(
+        shard_uid: ShardUId,
+        block_height: BlockHeight,
+        arena: Arena,
+        root: MemTrieNodeId,
+    ) -> Self {
+        let mut tries =
+            Self { arena, roots: HashMap::new(), heights: Default::default(), shard_uid };
+        tries.insert_root(root.as_ptr(tries.arena.memory()).view().node_hash(), root, block_height);
+        tries
+    }
+
     /// Inserts a new root into the trie. The given function should perform
     /// the entire construction of the new trie, possibly based on some existing
     /// trie nodes. This internally takes care of refcounting.
@@ -83,7 +97,7 @@ impl MemTries {
         assert_ne!(state_root, CryptoHash::default());
         let heights = self.heights.entry(block_height).or_default();
         heights.push(state_root);
-        let new_ref = mem_root.add_ref(&mut self.arena);
+        let new_ref = mem_root.add_ref(self.arena.memory_mut());
         if new_ref == 1 {
             self.roots.entry(state_root).or_default().push(mem_root);
         }
@@ -93,7 +107,7 @@ impl MemTries {
     }
 
     /// Returns a root node corresponding to the given state root.
-    pub fn get_root<'a>(&'a self, state_root: &CryptoHash) -> Option<MemTrieNodePtr<'a>> {
+    pub fn get_root(&self, state_root: &CryptoHash) -> Option<MemTrieNodePtr> {
         assert_ne!(state_root, &CryptoHash::default());
         self.roots.get(state_root).map(|ids| ids[0].as_ptr(self.arena.memory()))
     }
@@ -174,6 +188,7 @@ impl MemTries {
 mod tests {
     use super::node::{InputMemTrieNode, MemTrieNodeId};
     use super::MemTries;
+    use crate::trie::mem::arena::IArena;
     use crate::NibbleSlice;
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::ShardUId;
@@ -231,7 +246,6 @@ mod tests {
                                         extension: &NibbleSlice::new(&[]).encoded(true),
                                     },
                                 );
-                                root.as_ptr_mut(arena.memory_mut()).compute_hash_recursively();
                                 Ok(Some(root))
                             })
                             .unwrap();
