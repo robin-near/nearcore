@@ -116,14 +116,6 @@ impl<'a, Memory: IArenaMemory> RawDecoderMut<'a, Memory> {
         RawDecoderMut { data, pos: 0 }
     }
 
-    /// Same with `RawDecoder::decode`.
-    pub fn decode<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
-        let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);
-        let result = T::try_from_slice(slice.raw_slice()).unwrap();
-        self.pos += T::SERIALIZED_SIZE;
-        result
-    }
-
     /// Same with `RawDecoder::peek`.
     pub fn peek<T: BorshDeserialize + BorshFixedSize>(&mut self) -> T {
         let slice = self.data.slice(self.pos, T::SERIALIZED_SIZE);

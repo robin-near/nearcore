@@ -1,4 +1,5 @@
 mod alloc;
+pub mod concurrent;
 mod metrics;
 use self::alloc::Allocator;
 use borsh::{BorshDeserialize, BorshSerialize};

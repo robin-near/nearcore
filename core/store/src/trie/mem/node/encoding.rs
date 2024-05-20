@@ -8,8 +8,6 @@ use crate::trie::mem::flexible_data::FlexibleDataHeader;
 use borsh::{BorshDeserialize, BorshSerialize};
 use elastic_array::ElasticArray16;
 use near_primitives::hash::CryptoHash;
-use near_primitives::state::FlatStateValue;
-use crate::trie::TRIE_COSTS;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, BorshSerialize, BorshDeserialize)]
 pub(crate) enum NodeKind {
@@ -36,8 +34,8 @@ pub(crate) struct NonLeafHeader {
 }
 
 impl NonLeafHeader {
-    pub(crate) fn new(memory_usage: u64, node_hash: Option<CryptoHash>) -> Self {
-        Self { hash: node_hash.unwrap_or_default(), memory_usage }
+    pub(crate) fn new(memory_usage: u64, node_hash: CryptoHash) -> Self {
+        Self { hash: node_hash, memory_usage }
     }
 }
 
@@ -127,43 +125,14 @@ impl MemTrieNodeId {
             }
             _ => {}
         }
-        // Let's also compute the memory usage of the node. We only do this for
-        // non-leaf nodes, because for leaf node it is very easy to just
-        // compute it on demand, so there's no need to store it.
-        let memory_usage = match &node {
-            InputMemTrieNode::Leaf { .. } => 0,
-            InputMemTrieNode::Extension { extension, child } => {
-                TRIE_COSTS.node_cost
-                    + extension.len() as u64 * TRIE_COSTS.byte_of_key
-                    + child.as_ptr(arena.memory()).view().memory_usage()
-            }
-            InputMemTrieNode::Branch { children } => {
-                let mut memory_usage = TRIE_COSTS.node_cost;
-                for child in children.iter() {
-                    if let Some(child) = child {
-                        memory_usage += child.as_ptr(arena.memory()).view().memory_usage();
-                    }
-                }
-                memory_usage
-            }
-            InputMemTrieNode::BranchWithValue { children, value } => {
-                let value_len = match value {
-                    FlatStateValue::Ref(value_ref) => value_ref.len(),
-                    FlatStateValue::Inlined(value) => value.len(),
-                };
-                let mut memory_usage = TRIE_COSTS.node_cost
-                    + value_len as u64 * TRIE_COSTS.byte_of_value
-                    + TRIE_COSTS.node_cost;
-                for child in children.iter() {
-                    if let Some(child) = child {
-                        memory_usage += child.as_ptr(arena.memory()).view().memory_usage();
-                    }
-                }
-                memory_usage
-            }
+        // Prepare the raw node, for memory usage and hash computation.
+        let raw_node_with_size = if matches!(&node, InputMemTrieNode::Leaf { .. }) {
+            None
+        } else {
+            Some(node.to_raw_trie_node_with_size(arena.memory()))
         };
-        // Finally, encode the data. We're still leaving the hash empty; that
-        // will be computed later in parallel.
+
+        // Finally, encode the data.
         let data = match node {
             InputMemTrieNode::Leaf { value, extension } => {
                 let extension_header = EncodedExtensionHeader::from_input(extension);
@@ -189,9 +158,13 @@ impl MemTrieNodeId {
                     arena,
                     ExtensionHeader::SERIALIZED_SIZE + extension_header.flexible_data_length(),
                 );
+                let raw_node_with_size = raw_node_with_size.unwrap();
                 data.encode(ExtensionHeader {
                     common: CommonHeader { refcount: 0, kind: NodeKind::Extension },
-                    nonleaf: NonLeafHeader::new(memory_usage, node_hash),
+                    nonleaf: NonLeafHeader::new(
+                        raw_node_with_size.memory_usage,
+                        node_hash.unwrap_or_else(|| raw_node_with_size.hash()),
+                    ),
                     child: child.pos,
                     extension: extension_header,
                 });
@@ -204,9 +177,13 @@ impl MemTrieNodeId {
                     arena,
                     BranchHeader::SERIALIZED_SIZE + children_header.flexible_data_length(),
                 );
+                let raw_node_with_size = raw_node_with_size.unwrap();
                 data.encode(BranchHeader {
                     common: CommonHeader { refcount: 0, kind: NodeKind::Branch },
-                    nonleaf: NonLeafHeader::new(memory_usage, node_hash),
+                    nonleaf: NonLeafHeader::new(
+                        raw_node_with_size.memory_usage,
+                        node_hash.unwrap_or_else(|| raw_node_with_size.hash()),
+                    ),
                     children: children_header,
                 });
                 data.encode_flexible(&children_header, &children);
@@ -221,9 +198,13 @@ impl MemTrieNodeId {
                         + children_header.flexible_data_length()
                         + value_header.flexible_data_length(),
                 );
+                let raw_node_with_size = raw_node_with_size.unwrap();
                 data.encode(BranchWithValueHeader {
                     common: CommonHeader { refcount: 0, kind: NodeKind::BranchWithValue },
-                    nonleaf: NonLeafHeader::new(memory_usage, node_hash),
+                    nonleaf: NonLeafHeader::new(
+                        raw_node_with_size.memory_usage,
+                        node_hash.unwrap_or_else(|| raw_node_with_size.hash()),
+                    ),
                     children: children_header,
                     value: value_header,
                 });

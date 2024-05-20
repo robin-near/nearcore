@@ -139,3 +139,56 @@ pub enum MemTrieNodeViewGeneric<'a, Memory: IArenaMemory> {
 }
 
 pub type MemTrieNodeView<'a> = MemTrieNodeViewGeneric<'a, ArenaMemory>;
+
+impl<'a> InputMemTrieNode<'a> {
+    pub fn to_raw_trie_node_with_size<Memory: IArenaMemory>(
+        &self,
+        arena: &Memory,
+    ) -> RawTrieNodeWithSize {
+        match self {
+            Self::Leaf { .. } => {
+                unreachable!("Leaf nodes do not need hash computation")
+            }
+            Self::Extension { extension, child, .. } => {
+                let view = child.as_ptr(arena).view();
+                let memory_usage = TRIE_COSTS.node_cost
+                    + extension.len() as u64 * TRIE_COSTS.byte_of_key
+                    + view.memory_usage();
+                let node = RawTrieNode::Extension(extension.to_vec(), view.node_hash());
+                RawTrieNodeWithSize { node, memory_usage }
+            }
+            Self::Branch { children, .. } => {
+                let mut memory_usage = TRIE_COSTS.node_cost;
+                let mut hashes = [None; 16];
+                for (i, child) in children.iter().enumerate() {
+                    if let Some(child) = child {
+                        let view = child.as_ptr(arena).view();
+                        hashes[i] = Some(view.node_hash());
+                        memory_usage += view.memory_usage();
+                    }
+                }
+                let node = RawTrieNode::BranchNoValue(Children(hashes));
+                RawTrieNodeWithSize { node, memory_usage }
+            }
+            Self::BranchWithValue { children, value, .. } => {
+                let value_len = match value {
+                    FlatStateValue::Ref(value_ref) => value_ref.len(),
+                    FlatStateValue::Inlined(value) => value.len(),
+                };
+                let mut memory_usage = TRIE_COSTS.node_cost
+                    + value_len as u64 * TRIE_COSTS.byte_of_value
+                    + TRIE_COSTS.node_cost;
+                let mut hashes = [None; 16];
+                for (i, child) in children.iter().enumerate() {
+                    if let Some(child) = child {
+                        let view = child.as_ptr(arena).view();
+                        hashes[i] = Some(view.node_hash());
+                        memory_usage += view.memory_usage();
+                    }
+                }
+                let node = RawTrieNode::BranchWithValue(value.to_value_ref(), Children(hashes));
+                RawTrieNodeWithSize { node, memory_usage }
+            }
+        }
+    }
+}
