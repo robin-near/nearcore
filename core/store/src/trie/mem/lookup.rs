@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::arena::STArenaMemory;
 use super::flexible_data::value::ValueView;
 use super::metrics::MEM_TRIE_NUM_LOOKUPS;
 use super::node::{MemTrieNodePtr, MemTrieNodeView};
@@ -14,7 +15,7 @@ use near_primitives::hash::CryptoHash;
 /// Even if the key is not found, the nodes that were accessed to make that
 /// determination will be added to the vector.
 pub fn memtrie_lookup<'a>(
-    root: MemTrieNodePtr<'a>,
+    root: MemTrieNodePtr<'a, STArenaMemory>,
     key: &[u8],
     mut nodes_accessed: Option<&mut Vec<(CryptoHash, Arc<[u8]>)>>,
 ) -> Option<ValueView<'a>> {
@@ -30,14 +31,14 @@ pub fn memtrie_lookup<'a>(
         }
         match view {
             MemTrieNodeView::Leaf { extension, value } => {
-                if nibbles == NibbleSlice::from_encoded(extension.raw_slice()).0 {
+                if nibbles == NibbleSlice::from_encoded(extension).0 {
                     return Some(value);
                 } else {
                     return None;
                 }
             }
             MemTrieNodeView::Extension { extension, child, .. } => {
-                let extension_nibbles = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                let extension_nibbles = NibbleSlice::from_encoded(extension).0;
                 if nibbles.starts_with(&extension_nibbles) {
                     nibbles = nibbles.mid(extension_nibbles.len());
                     node = child;

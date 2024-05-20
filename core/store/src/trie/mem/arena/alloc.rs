@@ -1,7 +1,7 @@
 use near_o11y::metrics::IntGauge;
 
 use super::metrics::MEM_TRIE_ARENA_ACTIVE_ALLOCS_COUNT;
-use super::{ArenaMemory, ArenaPos, ArenaSliceMut};
+use super::{ArenaMemory, ArenaPos, ArenaSliceMut, STArenaMemory};
 use crate::trie::mem::arena::metrics::{
     MEM_TRIE_ARENA_ACTIVE_ALLOCS_BYTES, MEM_TRIE_ARENA_MEMORY_USAGE_BYTES,
 };
@@ -46,7 +46,7 @@ pub struct Allocator {
 const MAX_ALLOC_SIZE: usize = 16 * 1024;
 const ROUND_UP_TO_8_BYTES_UNDER: usize = 256;
 const ROUND_UP_TO_64_BYTES_UNDER: usize = 1024;
-const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+pub(crate) const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 /// Calculates the allocation class (an index from 0 to NUM_ALLOCATION_CLASSES)
 /// for the given size that we wish to allocate.
@@ -91,7 +91,7 @@ impl Allocator {
 
     /// Adds a new chunk to the arena, and updates the next_alloc_pos to the beginning of
     /// the new chunk.
-    fn new_chunk(&mut self, arena: &mut ArenaMemory) {
+    fn new_chunk(&mut self, arena: &mut STArenaMemory) {
         arena.chunks.push(vec![0; CHUNK_SIZE]);
         self.next_alloc_pos =
             ArenaPos { chunk: u32::try_from(arena.chunks.len() - 1).unwrap(), pos: 0 };
@@ -99,7 +99,11 @@ impl Allocator {
     }
 
     /// Allocates a slice of the given size in the arena.
-    pub fn allocate<'a>(&mut self, arena: &'a mut ArenaMemory, size: usize) -> ArenaSliceMut<'a> {
+    pub fn allocate<'a>(
+        &mut self,
+        arena: &'a mut STArenaMemory,
+        size: usize,
+    ) -> ArenaSliceMut<'a, STArenaMemory> {
         assert!(size <= MAX_ALLOC_SIZE, "Cannot allocate {} bytes", size);
         self.active_allocs_bytes += size;
         self.active_allocs_count += 1;
@@ -126,7 +130,7 @@ impl Allocator {
 
     /// Deallocates the given slice from the arena; the slice's `pos` and `len`
     /// must be the same as an allocation that was returned earlier.
-    pub fn deallocate(&mut self, arena: &mut ArenaMemory, pos: ArenaPos, len: usize) {
+    pub fn deallocate(&mut self, arena: &mut STArenaMemory, pos: ArenaPos, len: usize) {
         self.active_allocs_bytes -= len;
         self.active_allocs_count -= 1;
         self.active_allocs_bytes_gauge.set(self.active_allocs_bytes as i64);
@@ -146,12 +150,12 @@ impl Allocator {
 mod test {
     use super::MAX_ALLOC_SIZE;
     use crate::trie::mem::arena::alloc::CHUNK_SIZE;
-    use crate::trie::mem::arena::Arena;
+    use crate::trie::mem::arena::{Arena, ArenaWithDealloc, STArena};
     use std::mem::size_of;
 
     #[test]
     fn test_allocate_deallocate() {
-        let mut arena = Arena::new("".to_owned());
+        let mut arena = STArena::new("".to_owned());
         // Repeatedly allocate and deallocate.
         for i in 0..10 {
             let mut slices = Vec::new();
@@ -184,7 +188,7 @@ mod test {
 
     #[test]
     fn test_allocation_reuse() {
-        let mut arena = Arena::new("".to_owned());
+        let mut arena = STArena::new("".to_owned());
         // Repeatedly allocate and deallocate. New allocations should reuse
         // old deallocated memory.
         for _ in 0..10 {
