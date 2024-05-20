@@ -1,7 +1,7 @@
 use near_o11y::metrics::IntGauge;
 
 use super::metrics::MEM_TRIE_ARENA_ACTIVE_ALLOCS_COUNT;
-use super::{ArenaMemory, ArenaPos, ArenaSliceMut};
+use super::{ArenaMemory, ArenaPos, ArenaSliceMut, IArenaMemory};
 use crate::trie::mem::arena::metrics::{
     MEM_TRIE_ARENA_ACTIVE_ALLOCS_BYTES, MEM_TRIE_ARENA_MEMORY_USAGE_BYTES,
 };
@@ -46,7 +46,7 @@ pub struct Allocator {
 const MAX_ALLOC_SIZE: usize = 16 * 1024;
 const ROUND_UP_TO_8_BYTES_UNDER: usize = 256;
 const ROUND_UP_TO_64_BYTES_UNDER: usize = 1024;
-const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+pub(crate) const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 /// Calculates the allocation class (an index from 0 to NUM_ALLOCATION_CLASSES)
 /// for the given size that we wish to allocate.
@@ -99,7 +99,11 @@ impl Allocator {
     }
 
     /// Allocates a slice of the given size in the arena.
-    pub fn allocate<'a>(&mut self, arena: &'a mut ArenaMemory, size: usize) -> ArenaSliceMut<'a> {
+    pub fn allocate<'a>(
+        &mut self,
+        arena: &'a mut ArenaMemory,
+        size: usize,
+    ) -> ArenaSliceMut<'a, ArenaMemory> {
         assert!(size <= MAX_ALLOC_SIZE, "Cannot allocate {} bytes", size);
         self.active_allocs_bytes += size;
         self.active_allocs_count += 1;
@@ -146,7 +150,7 @@ impl Allocator {
 mod test {
     use super::MAX_ALLOC_SIZE;
     use crate::trie::mem::arena::alloc::CHUNK_SIZE;
-    use crate::trie::mem::arena::Arena;
+    use crate::trie::mem::arena::{Arena, IArena, IArenaWithDealloc};
     use std::mem::size_of;
 
     #[test]

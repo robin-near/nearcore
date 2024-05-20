@@ -1,17 +1,15 @@
-use crate::trie::mem::arena::ArenaMemory;
+use near_primitives::hash::{CryptoHash, hash};
+use crate::trie::mem::arena::IArenaMemory;
 use crate::trie::mem::flexible_data::encoding::RawDecoderMut;
-
 use super::encoding::{CommonHeader, NodeKind, NonLeafHeader};
-use super::{MemTrieNodePtr, MemTrieNodePtrMut};
+use super::{MemTrieNodePtrGeneric, MemTrieNodePtrMut};
 
-use near_primitives::hash::{hash, CryptoHash};
-
-impl<'a> MemTrieNodePtrMut<'a> {
-    fn as_const<'b>(&'b self) -> MemTrieNodePtr<'b> {
-        MemTrieNodePtr { ptr: self.ptr.ptr() }
+impl<'a, Memory: IArenaMemory> MemTrieNodePtrMut<'a, Memory> {
+    fn as_const<'b>(&'b self) -> MemTrieNodePtrGeneric<'b, Memory> {
+        MemTrieNodePtrGeneric { ptr: self.ptr.ptr() }
     }
 
-    pub(crate) fn decoder_mut<'b>(&'b mut self) -> RawDecoderMut<'b> {
+    pub(crate) fn decoder_mut(&mut self) -> RawDecoderMut<Memory> {
         RawDecoderMut::new(self.ptr.ptr_mut())
     }
 
@@ -21,8 +19,8 @@ impl<'a> MemTrieNodePtrMut<'a> {
     /// Despite being implemented with unsafe code, this is a safe operation
     /// because the children subtrees are disjoint (even if there are multiple
     /// roots). It is very similar to `split_at_mut` on mutable slices.
-    fn split_children_mut(mut self) -> Vec<MemTrieNodePtrMut<'a>> {
-        let arena_mut = self.ptr.arena_mut() as *mut ArenaMemory;
+    fn split_children_mut(mut self) -> Vec<MemTrieNodePtrMut<'a, Memory>> {
+        let arena_mut = self.ptr.arena_mut() as *mut Memory;
         let mut result = Vec::new();
         let view = self.as_const().view();
         for child in view.iter_children() {
@@ -37,8 +35,8 @@ impl<'a> MemTrieNodePtrMut<'a> {
     /// This is possible because of the returned references can only be used
     /// while this reference is being mutably held, but it does result in a
     /// different lifetime.
-    fn children_mut<'b>(&'b mut self) -> Vec<MemTrieNodePtrMut<'b>> {
-        let arena_mut = self.ptr.arena_mut() as *mut ArenaMemory;
+    fn children_mut<'b>(&'b mut self) -> Vec<MemTrieNodePtrMut<'b, Memory>> {
+        let arena_mut = self.ptr.arena_mut() as *mut Memory;
         let mut result = Vec::new();
         let view = self.as_const().view();
         for child in view.iter_children() {
@@ -92,7 +90,7 @@ impl<'a> MemTrieNodePtrMut<'a> {
     pub(crate) fn take_small_subtrees(
         self,
         threshold_memory_usage: u64,
-        trees: &mut Vec<MemTrieNodePtrMut<'a>>,
+        trees: &mut Vec<MemTrieNodePtrMut<'a, Memory>>,
     ) {
         if self.as_const().view().memory_usage() < threshold_memory_usage {
             trees.push(self);

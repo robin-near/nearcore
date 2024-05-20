@@ -87,7 +87,7 @@ impl UpdatedMemTrieNode {
     pub fn from_existing_node_view(view: MemTrieNodeView<'_>) -> Self {
         match view {
             MemTrieNodeView::Leaf { extension, value } => Self::Leaf {
-                extension: extension.raw_slice().to_vec().into_boxed_slice(),
+                extension: extension.to_vec().into_boxed_slice(),
                 value: value.to_flat_value(),
             },
             MemTrieNodeView::Branch { children, .. } => Self::Branch {
@@ -99,13 +99,15 @@ impl UpdatedMemTrieNode {
                 value: Some(value.to_flat_value()),
             },
             MemTrieNodeView::Extension { extension, child, .. } => Self::Extension {
-                extension: extension.raw_slice().to_vec().into_boxed_slice(),
+                extension: extension.to_vec().into_boxed_slice(),
                 child: OldOrUpdatedNodeId::Old(child.id()),
             },
         }
     }
 
-    fn convert_children_to_updated(view: ChildrenView) -> [Option<OldOrUpdatedNodeId>; 16] {
+    fn convert_children_to_updated(
+        view: ChildrenView<ArenaMemory>,
+    ) -> [Option<OldOrUpdatedNodeId>; 16] {
         let mut children = [None; 16];
         for i in 0..16 {
             if let Some(child) = view.get(i) {

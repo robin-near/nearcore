@@ -1,15 +1,15 @@
-use super::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtr, MemTrieNodeView};
-use crate::trie::mem::arena::{Arena, ArenaPos};
+use super::{InputMemTrieNode, MemTrieNodeId, MemTrieNodePtrGeneric, MemTrieNodeViewGeneric};
+use crate::trie::mem::arena::{ArenaPos, IArena, IArenaMemory, IArenaWithDealloc};
 use crate::trie::mem::flexible_data::children::EncodedChildrenHeader;
 use crate::trie::mem::flexible_data::encoding::{BorshFixedSize, RawDecoder, RawEncoder};
 use crate::trie::mem::flexible_data::extension::EncodedExtensionHeader;
 use crate::trie::mem::flexible_data::value::EncodedValueHeader;
 use crate::trie::mem::flexible_data::FlexibleDataHeader;
-use crate::trie::TRIE_COSTS;
 use borsh::{BorshDeserialize, BorshSerialize};
 use elastic_array::ElasticArray16;
 use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
+use crate::trie::TRIE_COSTS;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, BorshSerialize, BorshDeserialize)]
 pub(crate) enum NodeKind {
@@ -104,7 +104,7 @@ impl BorshFixedSize for BranchWithValueHeader {
 impl MemTrieNodeId {
     /// Encodes the data.
     pub(crate) fn new_impl(
-        arena: &mut Arena,
+        arena: &mut impl IArena,
         node: InputMemTrieNode,
         node_hash: Option<CryptoHash>,
     ) -> Self {
@@ -115,13 +115,13 @@ impl MemTrieNodeId {
         // and the refcount will be incremented by `MemTries`.
         match &node {
             InputMemTrieNode::Extension { child, .. } => {
-                child.add_ref(arena);
+                child.add_ref(arena.memory_mut());
             }
             InputMemTrieNode::Branch { children }
             | InputMemTrieNode::BranchWithValue { children, .. } => {
                 for child in children {
                     if let Some(child) = child {
-                        child.add_ref(arena);
+                        child.add_ref(arena.memory_mut());
                     }
                 }
             }
@@ -166,7 +166,7 @@ impl MemTrieNodeId {
         // will be computed later in parallel.
         let data = match node {
             InputMemTrieNode::Leaf { value, extension } => {
-                let extension_header = EncodedExtensionHeader::from_input(&extension);
+                let extension_header = EncodedExtensionHeader::from_input(extension);
                 let value_header = EncodedValueHeader::from_input(&value);
                 let mut data = RawEncoder::new(
                     arena,
@@ -236,8 +236,8 @@ impl MemTrieNodeId {
     }
 
     /// Increments the refcount, returning the new refcount.
-    pub(crate) fn add_ref(&self, arena: &mut Arena) -> u32 {
-        let mut ptr = self.as_ptr_mut(arena.memory_mut());
+    pub(crate) fn add_ref(&self, arena: &mut impl IArenaMemory) -> u32 {
+        let mut ptr = self.as_ptr_mut(arena);
         let mut decoder = ptr.decoder_mut();
         let mut header = decoder.peek::<CommonHeader>();
         let new_refcount = header.refcount + 1;
@@ -248,7 +248,7 @@ impl MemTrieNodeId {
 
     /// Decrements the refcount, deallocating the node if it reaches zero.
     /// Returns the new refcount.
-    pub(crate) fn remove_ref(&self, arena: &mut Arena) -> u32 {
+    pub(crate) fn remove_ref(&self, arena: &mut impl IArenaWithDealloc) -> u32 {
         let mut ptr = self.as_ptr_mut(arena.memory_mut());
         let mut decoder = ptr.decoder_mut();
         let mut header = decoder.peek::<CommonHeader>();
@@ -271,13 +271,13 @@ impl MemTrieNodeId {
     }
 }
 
-impl<'a> MemTrieNodePtr<'a> {
-    pub(crate) fn decoder(&self) -> RawDecoder<'a> {
+impl<'a, Memory: IArenaMemory> MemTrieNodePtrGeneric<'a, Memory> {
+    pub(crate) fn decoder(&self) -> RawDecoder<'a, Memory> {
         RawDecoder::new(self.ptr)
     }
 
     /// Decodes the data.
-    pub(crate) fn view_impl(&self) -> MemTrieNodeView<'a> {
+    pub(crate) fn view_impl(&self) -> MemTrieNodeViewGeneric<'a, Memory> {
         let mut decoder = self.decoder();
         let kind = decoder.peek::<CommonHeader>().kind;
         match kind {
@@ -285,22 +285,22 @@ impl<'a> MemTrieNodePtr<'a> {
                 let header = decoder.decode::<LeafHeader>();
                 let extension = decoder.decode_flexible(&header.extension);
                 let value = decoder.decode_flexible(&header.value);
-                MemTrieNodeView::Leaf { extension, value }
+                MemTrieNodeViewGeneric::Leaf { extension, value }
             }
             NodeKind::Extension => {
                 let header = decoder.decode::<ExtensionHeader>();
                 let extension = decoder.decode_flexible(&header.extension);
-                MemTrieNodeView::Extension {
+                MemTrieNodeViewGeneric::Extension {
                     hash: header.nonleaf.hash,
                     memory_usage: header.nonleaf.memory_usage,
                     extension,
-                    child: MemTrieNodePtr::from(self.ptr.arena().ptr(header.child)),
+                    child: MemTrieNodePtrGeneric::from(self.ptr.arena().ptr(header.child)),
                 }
             }
             NodeKind::Branch => {
                 let header = decoder.decode::<BranchHeader>();
                 let children = decoder.decode_flexible(&header.children);
-                MemTrieNodeView::Branch {
+                MemTrieNodeViewGeneric::Branch {
                     hash: header.nonleaf.hash,
                     memory_usage: header.nonleaf.memory_usage,
                     children,
@@ -310,7 +310,7 @@ impl<'a> MemTrieNodePtr<'a> {
                 let header = decoder.decode::<BranchWithValueHeader>();
                 let children = decoder.decode_flexible(&header.children);
                 let value = decoder.decode_flexible(&header.value);
-                MemTrieNodeView::BranchWithValue {
+                MemTrieNodeViewGeneric::BranchWithValue {
                     hash: header.nonleaf.hash,
                     memory_usage: header.nonleaf.memory_usage,
                     children,

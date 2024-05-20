@@ -128,7 +128,7 @@ impl<'a> MemTrieIterator<'a> {
             match &node {
                 None => break,
                 Some(MemTrieNodeView::Leaf { extension, .. }) => {
-                    let existing_key = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                    let existing_key = NibbleSlice::from_encoded(extension).0;
                     if !check_ext_key(&key, &existing_key) {
                         self.key_nibbles.extend(existing_key.iter());
                         *status = CrumbStatus::Exiting;
@@ -152,7 +152,7 @@ impl<'a> MemTrieIterator<'a> {
                     }
                 }
                 Some(MemTrieNodeView::Extension { extension, child, .. }) => {
-                    let existing_key = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                    let existing_key = NibbleSlice::from_encoded(extension).0;
                     if key.starts_with(&existing_key) {
                         key = key.mid(existing_key.len());
                         ptr = Some(*child);
@@ -196,7 +196,7 @@ impl<'a> MemTrieIterator<'a> {
                 match n {
                     Some(MemTrieNodeView::Leaf { extension, .. })
                     | Some(MemTrieNodeView::Extension { extension, .. }) => {
-                        let existing_key = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                        let existing_key = NibbleSlice::from_encoded(extension).0;
                         let l = self.key_nibbles.len();
                         self.key_nibbles.truncate(l - existing_key.len());
                     }
@@ -213,12 +213,12 @@ impl<'a> MemTrieIterator<'a> {
             }
             (CrumbStatus::At, Some(MemTrieNodeView::Branch { .. })) => IterStep::Continue,
             (CrumbStatus::At, Some(MemTrieNodeView::Leaf { extension, value })) => {
-                let key = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                let key = NibbleSlice::from_encoded(extension).0;
                 self.key_nibbles.extend(key.iter());
                 IterStep::Value(value.to_optimized_value_ref())
             }
             (CrumbStatus::At, Some(MemTrieNodeView::Extension { extension, child, .. })) => {
-                let key = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                let key = NibbleSlice::from_encoded(extension).0;
                 self.key_nibbles.extend(key.iter());
                 IterStep::Descend(*child)
             }

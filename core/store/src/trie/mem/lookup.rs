@@ -30,14 +30,14 @@ pub fn memtrie_lookup<'a>(
         }
         match view {
             MemTrieNodeView::Leaf { extension, value } => {
-                if nibbles == NibbleSlice::from_encoded(extension.raw_slice()).0 {
+                if nibbles == NibbleSlice::from_encoded(extension).0 {
                     return Some(value);
                 } else {
                     return None;
                 }
             }
             MemTrieNodeView::Extension { extension, child, .. } => {
-                let extension_nibbles = NibbleSlice::from_encoded(extension.raw_slice()).0;
+                let extension_nibbles = NibbleSlice::from_encoded(extension).0;
                 if nibbles.starts_with(&extension_nibbles) {
                     nibbles = nibbles.mid(extension_nibbles.len());
                     node = child;

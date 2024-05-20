@@ -1,4 +1,4 @@
-use crate::trie::mem::arena::Arena;
+use crate::trie::mem::arena::{Arena, IArena};
 use crate::trie::mem::node::{InputMemTrieNode, MemTrieNodeId, MemTrieNodeView};
 use crate::trie::Children;
 use crate::{RawTrieNode, RawTrieNodeWithSize};
@@ -30,7 +30,7 @@ fn test_basic_leaf_node_inlined() {
     assert_eq!(view.node_hash(), hash(&borsh::to_vec(&view.to_raw_trie_node_with_size()).unwrap()));
     match view {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert_eq!(extension.raw_slice(), &[0, 1, 2, 3, 4]);
+            assert_eq!(extension, &[0, 1, 2, 3, 4]);
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![5, 6, 7, 8, 9]));
         }
         _ => panic!("Unexpected view type: {:?}", view),
@@ -60,7 +60,7 @@ fn test_basic_leaf_node_ref() {
     assert_eq!(view.node_hash(), hash(&borsh::to_vec(&view.to_raw_trie_node_with_size()).unwrap()));
     match view {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert_eq!(extension.raw_slice(), &[0, 1, 2, 3, 4]);
+            assert_eq!(extension, &[0, 1, 2, 3, 4]);
             assert_eq!(
                 value.to_flat_value(),
                 FlatStateValue::Ref(ValueRef { hash: test_hash, length: 5 })
@@ -89,7 +89,7 @@ fn test_basic_leaf_node_empty_extension_empty_value() {
     assert_eq!(view.node_hash(), hash(&borsh::to_vec(&view.to_raw_trie_node_with_size()).unwrap()));
     match view {
         MemTrieNodeView::Leaf { extension, value } => {
-            assert!(extension.raw_slice().is_empty());
+            assert!(extension.is_empty());
             assert_eq!(value.to_flat_value(), FlatStateValue::Inlined(vec![]));
         }
         _ => panic!("Unexpected view type: {:?}", view),
@@ -129,7 +129,7 @@ fn test_basic_extension_node() {
         MemTrieNodeView::Extension { hash, memory_usage, extension, child: actual_child } => {
             assert_eq!(hash, node_ptr.view().node_hash());
             assert_eq!(memory_usage, node_ptr.view().memory_usage());
-            assert_eq!(extension.raw_slice(), &[5, 6, 7, 8, 9]);
+            assert_eq!(extension, &[5, 6, 7, 8, 9]);
             assert_eq!(actual_child, child_ptr);
         }
         _ => panic!("Unexpected view type: {:?}", node_ptr.view()),

@@ -1,4 +1,4 @@
-use self::arena::Arena;
+use self::arena::{Arena, IArena};
 use self::metrics::MEM_TRIE_NUM_ROOTS;
 use self::node::{MemTrieNodeId, MemTrieNodePtr};
 use self::updating::MemTrieUpdate;
@@ -83,7 +83,7 @@ impl MemTries {
         assert_ne!(state_root, CryptoHash::default());
         let heights = self.heights.entry(block_height).or_default();
         heights.push(state_root);
-        let new_ref = mem_root.add_ref(&mut self.arena);
+        let new_ref = mem_root.add_ref(self.arena.memory_mut());
         if new_ref == 1 {
             self.roots.entry(state_root).or_default().push(mem_root);
         }
@@ -93,7 +93,7 @@ impl MemTries {
     }
 
     /// Returns a root node corresponding to the given state root.
-    pub fn get_root<'a>(&'a self, state_root: &CryptoHash) -> Option<MemTrieNodePtr<'a>> {
+    pub fn get_root(&self, state_root: &CryptoHash) -> Option<MemTrieNodePtr> {
         assert_ne!(state_root, &CryptoHash::default());
         self.roots.get(state_root).map(|ids| ids[0].as_ptr(self.arena.memory()))
     }
@@ -174,6 +174,7 @@ impl MemTries {
 mod tests {
     use super::node::{InputMemTrieNode, MemTrieNodeId};
     use super::MemTries;
+    use crate::trie::mem::arena::IArena;
     use crate::NibbleSlice;
     use near_primitives::hash::CryptoHash;
     use near_primitives::shard_layout::ShardUId;

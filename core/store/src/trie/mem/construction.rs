@@ -1,4 +1,4 @@
-use super::arena::Arena;
+use super::arena::IArena;
 use super::freelist::{ReusableVecU8, VecU8Freelist};
 use super::node::MemTrieNodeId;
 use crate::trie::mem::node::InputMemTrieNode;
@@ -63,7 +63,7 @@ use near_primitives::state::FlatStateValue;
 //
 // As the bottom two segments are no longer part of the right-most path, they
 // are converted to concrete TrieMemNodeId's.
-pub struct TrieConstructor<'a> {
+pub struct TrieConstructor<'a, Arena: IArena> {
     arena: &'a mut Arena,
     segments: Vec<TrieConstructionSegment>,
     trail_freelist: VecU8Freelist,
@@ -127,7 +127,7 @@ impl TrieConstructionSegment {
         self.value.is_some() && !self.is_branch
     }
 
-    fn to_node(&self, arena: &mut Arena) -> MemTrieNodeId {
+    fn to_node(&self, arena: &mut impl IArena) -> MemTrieNodeId {
         let input_node = if self.is_branch {
             assert!(!self.children.is_empty());
             assert!(self.child.is_none());
@@ -186,7 +186,7 @@ impl NibblesHelper for NibbleSlice<'_> {
     }
 }
 
-impl<'a> TrieConstructor<'a> {
+impl<'a, Arena: IArena> TrieConstructor<'a, Arena> {
     pub fn new(arena: &'a mut Arena) -> Self {
         // We should only have as many allocations as the number of segments
         // alive, which is at most the length of keys. We give a generous
@@ -403,7 +403,7 @@ impl<'a> TrieConstructor<'a> {
     }
 }
 
-impl<'a> Drop for TrieConstructor<'a> {
+impl<'a, Arena: IArena> Drop for TrieConstructor<'a, Arena> {
     fn drop(&mut self) {
         for segment in std::mem::take(&mut self.segments) {
             self.recycle_segment(segment);
