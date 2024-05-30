@@ -4238,6 +4238,7 @@ dependencies = [
  "near-chain",
  "near-chain-configs",
  "near-crypto",
+ "near-database-tool",
  "near-epoch-manager",
  "near-mirror",
  "near-o11y",

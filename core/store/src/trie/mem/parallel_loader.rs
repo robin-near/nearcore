@@ -15,18 +15,28 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use std::fmt::Debug;
 use std::sync::Mutex;
 
+const NUM_PARALLEL_SUBTREES_DESIRED: usize = 256;
+
 /// Top-level entry function to load a memtrie in parallel.
 pub fn load_memtrie_in_parallel(
     store: Store,
     shard_uid: ShardUId,
     root: StateRoot,
-    num_subtrees_desired: usize,
     name: String,
 ) -> Result<(STArena, MemTrieNodeId), StorageError> {
-    let reader = ParallelMemTrieLoader::new(store, shard_uid, root, num_subtrees_desired);
+    let reader = ParallelMemTrieLoader::new(store, shard_uid, root, NUM_PARALLEL_SUBTREES_DESIRED);
     let plan = reader.make_loading_plan()?;
     tracing::info!("Loading {} subtrees in parallel", plan.subtrees_to_load.len());
     reader.load_in_parallel(plan, name)
+}
+
+pub fn make_memtrie_parallel_loading_plan(
+    store: Store,
+    shard_uid: ShardUId,
+    root: StateRoot,
+) -> Result<MemtrieParallelLoadingPlan, StorageError> {
+    let reader = ParallelMemTrieLoader::new(store, shard_uid, root, NUM_PARALLEL_SUBTREES_DESIRED);
+    reader.make_loading_plan()
 }
 
 /// Logic to load a memtrie in parallel. It consists of three stages:
@@ -61,7 +71,7 @@ impl ParallelMemTrieLoader {
     }
 
     /// Implements stage 1; recursively expanding the trie until all subtrees are small enough.
-    fn make_loading_plan(&self) -> Result<PartialTrieLoadingPlan, StorageError> {
+    fn make_loading_plan(&self) -> Result<MemtrieParallelLoadingPlan, StorageError> {
         let subtrees_to_load = Mutex::new(Vec::new());
         let root = self.make_loading_plan_recursive(
             self.root,
@@ -69,7 +79,7 @@ impl ParallelMemTrieLoader {
             &subtrees_to_load,
             None,
         )?;
-        Ok(PartialTrieLoadingPlan {
+        Ok(MemtrieParallelLoadingPlan {
             root,
             subtrees_to_load: subtrees_to_load.into_inner().unwrap(),
         })
@@ -107,7 +117,10 @@ impl ParallelMemTrieLoader {
             let mut lock = subtrees_to_load.lock().unwrap();
             let subtree_id = lock.len();
             lock.push(prefix);
-            return Ok(TrieLoadingPlanNode::Load { subtree_id });
+            return Ok(TrieLoadingPlanNode {
+                hash,
+                kind: TrieLoadingPlanNodeKind::Load { subtree_id },
+            });
         }
 
         match node.node {
@@ -126,9 +139,12 @@ impl ParallelMemTrieLoader {
                         hash,
                     ))?;
                 let flat_value = FlatStateValue::on_disk(&value);
-                Ok(TrieLoadingPlanNode::Leaf {
-                    extension: extension.into_boxed_slice(),
-                    value: flat_value,
+                Ok(TrieLoadingPlanNode {
+                    hash,
+                    kind: TrieLoadingPlanNodeKind::Leaf {
+                        extension: extension.into_boxed_slice(),
+                        value: flat_value,
+                    },
                 })
             }
             RawTrieNode::BranchNoValue(children_hashes) => {
@@ -140,7 +156,10 @@ impl ParallelMemTrieLoader {
                     max_subtree_size,
                 )?;
 
-                Ok(TrieLoadingPlanNode::Branch { children, value: None })
+                Ok(TrieLoadingPlanNode {
+                    hash,
+                    kind: TrieLoadingPlanNodeKind::Branch { children, value: None },
+                })
             }
             RawTrieNode::BranchWithValue(value_ref, children_hashes) => {
                 // Similar here, except we have to also look up the value.
@@ -162,7 +181,10 @@ impl ParallelMemTrieLoader {
                     max_subtree_size,
                 )?;
 
-                Ok(TrieLoadingPlanNode::Branch { children, value: Some(flat_value) })
+                Ok(TrieLoadingPlanNode {
+                    hash,
+                    kind: TrieLoadingPlanNodeKind::Branch { children, value: Some(flat_value) },
+                })
             }
             RawTrieNode::Extension(extension, child) => {
                 let nibbles = NibbleSlice::from_encoded(&extension).0;
@@ -173,9 +195,12 @@ impl ParallelMemTrieLoader {
                     subtrees_to_load,
                     Some(max_subtree_size),
                 )?;
-                Ok(TrieLoadingPlanNode::Extension {
-                    extension: extension.into_boxed_slice(),
-                    child: Box::new(child),
+                Ok(TrieLoadingPlanNode {
+                    hash,
+                    kind: TrieLoadingPlanNodeKind::Extension {
+                        extension: extension.into_boxed_slice(),
+                        child: Box::new(child),
+                    },
                 })
             }
         }
@@ -238,7 +263,7 @@ impl ParallelMemTrieLoader {
     /// final trie.
     fn load_in_parallel(
         &self,
-        plan: PartialTrieLoadingPlan,
+        plan: MemtrieParallelLoadingPlan,
         name: String,
     ) -> Result<(STArena, MemTrieNodeId), StorageError> {
         let arena = ConcurrentArena::new();
@@ -273,7 +298,7 @@ impl ParallelMemTrieLoader {
 
 /// Specifies exactly what to do to create a node in the final trie.
 #[derive(Debug)]
-enum TrieLoadingPlanNode {
+pub enum TrieLoadingPlanNodeKind {
     // The first three cases correspond exactly to the trie structure.
     Branch { children: Vec<(u8, Box<TrieLoadingPlanNode>)>, value: Option<FlatStateValue> },
     Extension { extension: Box<[u8]>, child: Box<TrieLoadingPlanNode> },
@@ -282,12 +307,18 @@ enum TrieLoadingPlanNode {
     Load { subtree_id: usize },
 }
 
+#[derive(Debug)]
+pub struct TrieLoadingPlanNode {
+    pub kind: TrieLoadingPlanNodeKind,
+    pub hash: CryptoHash,
+}
+
 impl TrieLoadingPlanNode {
     /// This implements the construction part of stage 3, where we convert a plan node to
     /// a memtrie node. The `subtree_roots` is the parallel loading results.
     fn to_node(self, arena: &mut impl Arena, subtree_roots: &[MemTrieNodeId]) -> MemTrieNodeId {
-        match self {
-            TrieLoadingPlanNode::Branch { children, value } => {
+        let node_id = match self.kind {
+            TrieLoadingPlanNodeKind::Branch { children, value } => {
                 let mut res_children = [None; 16];
                 for (nibble, child) in children {
                     res_children[nibble as usize] = Some(child.to_node(arena, subtree_roots));
@@ -300,24 +331,30 @@ impl TrieLoadingPlanNode {
                 };
                 MemTrieNodeId::new(arena, input)
             }
-            TrieLoadingPlanNode::Extension { extension, child } => {
+            TrieLoadingPlanNodeKind::Extension { extension, child } => {
                 let child = child.to_node(arena, subtree_roots);
                 let input = InputMemTrieNode::Extension { extension: &extension, child };
                 MemTrieNodeId::new(arena, input)
             }
-            TrieLoadingPlanNode::Leaf { extension, value } => {
+            TrieLoadingPlanNodeKind::Leaf { extension, value } => {
                 let input = InputMemTrieNode::Leaf { extension: &extension, value: &value };
                 MemTrieNodeId::new(arena, input)
             }
-            TrieLoadingPlanNode::Load { subtree_id } => subtree_roots[subtree_id],
-        }
+            TrieLoadingPlanNodeKind::Load { subtree_id } => subtree_roots[subtree_id],
+        };
+        assert_eq!(
+            node_id.as_ptr(arena.memory()).view().node_hash(),
+            self.hash,
+            "Loaded memtrie node hash does not match the expected hash"
+        );
+        node_id
     }
 }
 
 #[derive(Debug)]
-struct PartialTrieLoadingPlan {
-    root: TrieLoadingPlanNode,
-    subtrees_to_load: Vec<NibblePrefix>,
+pub struct MemtrieParallelLoadingPlan {
+    pub root: TrieLoadingPlanNode,
+    pub subtrees_to_load: Vec<NibblePrefix>,
 }
 
 /// Represents a prefix of nibbles. Allows appending to the prefix, and implements logic of
@@ -325,7 +362,7 @@ struct PartialTrieLoadingPlan {
 ///
 /// A nibble just means a 4 bit number.
 #[derive(Clone)]
-struct NibblePrefix {
+pub struct NibblePrefix {
     /// Big endian encoding of the nibbles. If there are an odd number of nibbles, this is
     /// the encoding of the nibbles as if there were one more nibble at the end being zero.
     prefix: Vec<u8>,
@@ -394,7 +431,7 @@ impl NibblePrefix {
 /// Calculates the end key of a lexically ordered key range where all the keys start with `start_key`
 /// except that the i-th byte may be within [b, b + last_byte_increment), where i == start_key.len() - 1,
 /// and b == start_key[i]. Returns None is the end key is unbounded.
-fn calculate_end_key(start_key: &Vec<u8>, last_byte_increment: u8) -> Option<Vec<u8>> {
+pub fn calculate_end_key(start_key: &Vec<u8>, last_byte_increment: u8) -> Option<Vec<u8>> {
     let mut v = start_key.clone();
     let mut carry = last_byte_increment;
     for i in (0..v.len()).rev() {

@@ -49,7 +49,6 @@ pub mod metadata;
 pub mod metrics;
 pub mod migrations;
 mod opener;
-pub mod parallel_iter;
 mod rocksdb_metrics;
 mod sync_utils;
 pub mod test_utils;

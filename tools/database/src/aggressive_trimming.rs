@@ -1,3 +1,4 @@
+use crate::utils::read_all_state_needed_to_load_memtrie;
 use borsh::BorshDeserialize;
 use clap::Parser;
 use indicatif::HumanBytes;
@@ -8,9 +9,11 @@ use near_primitives::state::FlatStateValue;
 use near_store::flat::delta::KeyForFlatStateDelta;
 use near_store::flat::store_helper::{decode_flat_state_db_key, encode_flat_state_db_key};
 use near_store::flat::FlatStateChanges;
-use near_store::parallel_iter::StoreParallelIterator;
+use near_store::trie::mem::loading::get_state_root;
+use near_store::trie::mem::parallel_loader::make_memtrie_parallel_loading_plan;
 use near_store::{DBCol, Store};
 use nearcore::{load_config, open_storage};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -37,116 +40,9 @@ impl AggressiveTrimmingCommand {
     /// This is used to TEST that we are able to rely on memtries only to run a node.
     /// It is NOT safe for production. Do not trim your nodes like this. It will break your node.
     fn obliterate_disk_trie(store: Store, genesis_config: &GenesisConfig) -> anyhow::Result<()> {
-        let sharding_version = {
-            let epoch_manager = EpochManager::new_arc_handle(store.clone(), genesis_config);
-            let chain = ChainStore::new(store.clone(), genesis_config.genesis_height, false);
-            let final_head = chain.final_head()?;
-            let epoch_id = final_head.epoch_id;
-            let shard_layout = epoch_manager.get_shard_layout(&epoch_id)?;
-            shard_layout.version()
-        };
-
-        // Find all keys that are not inlined by flat storage. This includes both the
-        // FlatState column and FlatStateChanges column.
-        let non_inlined_keys = Arc::new(Mutex::new(Vec::<(usize, Vec<u8>)>::new()));
-        {
-            let non_inlined_keys = non_inlined_keys.clone();
-            StoreParallelIterator::for_each_in_range(
-                store.clone(),
-                DBCol::FlatState,
-                sharding_version.to_le_bytes().to_vec(),
-                (sharding_version + 1).to_le_bytes().to_vec(),
-                6,
-                move |key, value| {
-                    let value = FlatStateValue::try_from_slice(value).unwrap();
-                    match value {
-                        FlatStateValue::Ref(r) => {
-                            let (shard_uid, _) = decode_flat_state_db_key(key).unwrap();
-                            let mut keys = non_inlined_keys.lock().unwrap();
-                            keys.push((
-                                r.length as usize,
-                                encode_flat_state_db_key(shard_uid, &r.hash.0),
-                            ));
-                            if keys.len() % 10000 == 0 {
-                                println!("Found {} keys to read", keys.len());
-                            }
-                        }
-                        FlatStateValue::Inlined(_) => {}
-                    }
-                },
-                true,
-            );
-        }
-
-        {
-            let non_inlined_keys = non_inlined_keys.lock().unwrap();
-            println!(
-                "Found {} non-inlined keys from FlatState, total size {}",
-                non_inlined_keys.len(),
-                non_inlined_keys.iter().map(|(size, _)| size).sum::<usize>()
-            );
-        }
-
-        {
-            let non_inlined_keys = non_inlined_keys.clone();
-            StoreParallelIterator::for_each_in_range(
-                store.clone(),
-                DBCol::FlatStateChanges,
-                Vec::new(),
-                Vec::new(),
-                6,
-                move |key: &[u8], value| {
-                    let key = KeyForFlatStateDelta::try_from_slice(key).unwrap();
-                    if key.shard_uid.version != sharding_version {
-                        return;
-                    }
-                    let changes = FlatStateChanges::try_from_slice(value).unwrap();
-                    for (_, value) in changes.0 {
-                        if let Some(FlatStateValue::Ref(r)) = value {
-                            let mut keys = non_inlined_keys.lock().unwrap();
-                            keys.push((
-                                r.length as usize,
-                                encode_flat_state_db_key(key.shard_uid, &r.hash.0),
-                            ));
-                            if keys.len() % 10000 == 0 {
-                                println!("Found {} keys to read", keys.len());
-                            }
-                        }
-                    }
-                },
-                true,
-            );
-        }
-
-        {
-            let non_inlined_keys = non_inlined_keys.lock().unwrap();
-            println!(
-                "Found {} non-inlined keys from FlatState and FlatStateChanges, total size {}",
-                non_inlined_keys.len(),
-                non_inlined_keys.iter().map(|(size, _)| size).sum::<usize>()
-            );
-        }
-
-        // Now read the non-inlined keys from the State column.
-        let non_inlined_entries = Arc::new(Mutex::new(BTreeMap::<Vec<u8>, Vec<u8>>::new()));
-        {
-            let keys =
-                non_inlined_keys.lock().unwrap().drain(..).map(|(_, key)| key).collect::<Vec<_>>();
-            let values_read = non_inlined_entries.clone();
-            StoreParallelIterator::lookup_keys(
-                store.clone(),
-                DBCol::State,
-                keys,
-                6,
-                move |key, value| {
-                    assert!(value.is_some(), "Key not found: {}", hex::encode(&key));
-                    let value = value.unwrap().to_vec();
-                    let mut values = values_read.lock().unwrap();
-                    values.insert(key.to_vec(), value);
-                },
-                true,
-            )
-        }
+        let state_needed =
+            read_all_state_needed_to_load_memtrie(store.clone(), genesis_config, true)?
+                .state_entries;
 
         // Now that we've read all the non-inlined keys into memory, delete the State column, and
         // write back these values.
@@ -158,11 +54,10 @@ impl AggressiveTrimmingCommand {
         let mut total_bytes_written = 0;
         let mut total_bytes_written_this_batch = 0;
         let mut total_keys_written = 0;
-        let values_read = non_inlined_entries.lock().unwrap();
         let total_bytes_to_write =
-            values_read.iter().map(|(key, value)| key.len() + value.len()).sum::<usize>();
-        let total_keys_to_write = values_read.len();
-        for (key, value) in values_read.iter() {
+            state_needed.iter().map(|(key, value)| key.len() + value.len()).sum::<usize>();
+        let total_keys_to_write = state_needed.len();
+        for (key, value) in state_needed.iter() {
             update.set_raw_bytes(DBCol::State, key, value);
             total_bytes_written += key.len() + value.len();
             total_bytes_written_this_batch += key.len() + value.len();
