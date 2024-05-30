@@ -28,7 +28,7 @@ use near_async::time::{Duration, Instant};
 use near_async::{MultiSend, MultiSendMessage, MultiSenderFrom};
 use near_chain::chain::{
     ApplyChunksDoneMessage, ApplyStatePartsRequest, ApplyStatePartsResponse, BlockCatchUpRequest,
-    BlockCatchUpResponse, LoadMemtrieRequest, LoadMemtrieResponse, ProcessChunkStateWitnessMessage,
+    BlockCatchUpResponse, ChunkStateWitnessMessage, LoadMemtrieRequest, LoadMemtrieResponse,
 };
 use near_chain::rayon_spawner::RayonAsyncComputationSpawner;
 use near_chain::resharding::{ReshardingRequest, ReshardingResponse};
@@ -53,9 +53,8 @@ use near_client_primitives::types::{
 use near_epoch_manager::shard_tracker::ShardTracker;
 use near_epoch_manager::{EpochManagerAdapter, RngSeed};
 use near_network::client::{
-    BlockApproval, BlockHeadersResponse, BlockResponse, ChunkEndorsementMessage,
-    ChunkStateWitnessMessage, ProcessTxRequest, ProcessTxResponse, RecvChallenge, SetNetworkInfo,
-    StateResponse,
+    BlockApproval, BlockHeadersResponse, BlockResponse, ChunkEndorsementMessage, ProcessTxRequest,
+    ProcessTxResponse, RecvChallenge, SetNetworkInfo, StateResponse,
 };
 use near_network::types::ReasonForBan;
 use near_network::types::{
@@ -220,7 +219,7 @@ pub struct SyncJobsSenderForClient {
 #[derive(Clone, MultiSend, MultiSenderFrom, MultiSendMessage)]
 #[multi_send_message_derive(Debug)]
 pub struct ClientSenderForPartialWitness {
-    pub receive_chunk_state_witness: Sender<ProcessChunkStateWitnessMessage>,
+    pub chunk_state_witness: Sender<ChunkStateWitnessMessage>,
 }
 
 // A small helper macro to unwrap a result of some state sync operation. If the
@@ -1106,8 +1105,10 @@ impl ClientActorInner {
                 self.client.epoch_manager.get_block_producer(&epoch_id, height)?;
 
             if me == next_block_producer_account {
-                self.client
-                    .prepare_chunk_headers_ready_for_inclusion(&head.last_block_hash, height)?;
+                self.client.chunk_inclusion_tracker.prepare_chunk_headers_ready_for_inclusion(
+                    &head.last_block_hash,
+                    self.client.chunk_endorsement_tracker.as_ref(),
+                )?;
                 let num_chunks = self
                     .client
                     .chunk_inclusion_tracker
@@ -1440,7 +1441,8 @@ impl ClientActorInner {
         };
 
         let peer_id = peer_info.peer_info.id.clone();
-        let highest_height = peer_info.highest_block_height;
+        let shutdown_height = self.client.config.expected_shutdown.get().unwrap_or(u64::MAX);
+        let highest_height = peer_info.highest_block_height.min(shutdown_height);
 
         if is_syncing {
             if highest_height <= head.height {
@@ -2117,15 +2119,6 @@ impl Handler<SyncMessage> for ClientActorInner {
 impl Handler<ChunkStateWitnessMessage> for ClientActorInner {
     #[perf]
     fn handle(&mut self, msg: ChunkStateWitnessMessage) {
-        if let Err(err) = self.client.process_signed_chunk_state_witness(msg.0, None) {
-            tracing::error!(target: "client", ?err, "Error processing signed chunk state witness");
-        }
-    }
-}
-
-impl Handler<ProcessChunkStateWitnessMessage> for ClientActorInner {
-    #[perf]
-    fn handle(&mut self, msg: ProcessChunkStateWitnessMessage) {
         if let Err(err) = self.client.process_chunk_state_witness(msg.0, None) {
             tracing::error!(target: "client", ?err, "Error processing chunk state witness");
         }

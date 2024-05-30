@@ -66,8 +66,6 @@ pub enum RuntimeError {
     ReceiptValidationError(ReceiptValidationError),
     /// Error when accessing validator information. Happens inside epoch manager.
     ValidatorError(EpochError),
-    /// The context provided  to the runtime is inconsistent.
-    ContextError(ContextError),
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -629,17 +627,7 @@ impl Display for InvalidAccessKeyError {
 impl std::error::Error for InvalidAccessKeyError {}
 
 /// Happens when the input balance doesn't match the output balance in Runtime apply.
-#[derive(
-    BorshSerialize,
-    BorshDeserialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    RpcError,
-    serde::Deserialize,
-    serde::Serialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, RpcError, serde::Deserialize, serde::Serialize)]
 pub struct BalanceMismatchError {
     // Input balances
     #[serde(with = "dec_format")]
@@ -652,6 +640,10 @@ pub struct BalanceMismatchError {
     pub processed_delayed_receipts_balance: Balance,
     #[serde(with = "dec_format")]
     pub initial_postponed_receipts_balance: Balance,
+    // TODO(congestion_control): remove cfg on stabilization
+    #[cfg(feature = "nightly")]
+    #[serde(with = "dec_format")]
+    pub forwarded_buffered_receipts_balance: Balance,
     // Output balances
     #[serde(with = "dec_format")]
     pub final_accounts_balance: Balance,
@@ -665,6 +657,10 @@ pub struct BalanceMismatchError {
     pub tx_burnt_amount: Balance,
     #[serde(with = "dec_format")]
     pub slashed_burnt_amount: Balance,
+    // TODO(congestion_control): remove cfg on stabilization
+    #[cfg(feature = "nightly")]
+    #[serde(with = "dec_format")]
+    pub new_buffered_receipts_balance: Balance,
     #[serde(with = "dec_format")]
     pub other_burnt_amount: Balance,
 }
@@ -678,6 +674,10 @@ impl Display for BalanceMismatchError {
             .saturating_add(self.incoming_receipts_balance)
             .saturating_add(self.processed_delayed_receipts_balance)
             .saturating_add(self.initial_postponed_receipts_balance);
+        // TODO(congestion_control): remove cfg on stabilization
+        #[cfg(feature = "nightly")]
+        let initial_balance =
+            initial_balance.saturating_add(self.forwarded_buffered_receipts_balance);
         let final_balance = self
             .final_accounts_balance
             .saturating_add(self.outgoing_receipts_balance)
@@ -686,7 +686,13 @@ impl Display for BalanceMismatchError {
             .saturating_add(self.tx_burnt_amount)
             .saturating_add(self.slashed_burnt_amount)
             .saturating_add(self.other_burnt_amount);
-        write!(
+        // TODO(congestion_control): remove cfg on stabilization
+        #[cfg(feature = "nightly")]
+        let final_balance = final_balance.saturating_add(self.new_buffered_receipts_balance);
+
+        // TODO(congestion_control): remove cfg on stabilization
+        #[cfg(not(feature = "nightly"))]
+        return write!(
             f,
             "Balance Mismatch Error. The input balance {} doesn't match output balance {}\n\
              Inputs:\n\
@@ -716,6 +722,43 @@ impl Display for BalanceMismatchError {
             self.final_postponed_receipts_balance,
             self.tx_burnt_amount,
             self.slashed_burnt_amount,
+            self.other_burnt_amount,
+        );
+        #[cfg(feature = "nightly")]
+        write!(
+            f,
+            "Balance Mismatch Error. The input balance {} doesn't match output balance {}\n\
+             Inputs:\n\
+             \tIncoming validator rewards sum: {}\n\
+             \tInitial accounts balance sum: {}\n\
+             \tIncoming receipts balance sum: {}\n\
+             \tProcessed delayed receipts balance sum: {}\n\
+             \tInitial postponed receipts balance sum: {}\n\
+             \tForwarded buffered receipts sum: {}\n\
+             Outputs:\n\
+             \tFinal accounts balance sum: {}\n\
+             \tOutgoing receipts balance sum: {}\n\
+             \tNew delayed receipts balance sum: {}\n\
+             \tFinal postponed receipts balance sum: {}\n\
+             \tTx fees burnt amount: {}\n\
+             \tSlashed amount: {}\n\
+             \tNew buffered receipts balance sum: {}\n\
+             \tOther burnt amount: {}",
+            initial_balance,
+            final_balance,
+            self.incoming_validator_rewards,
+            self.initial_accounts_balance,
+            self.incoming_receipts_balance,
+            self.processed_delayed_receipts_balance,
+            self.initial_postponed_receipts_balance,
+            self.forwarded_buffered_receipts_balance,
+            self.final_accounts_balance,
+            self.outgoing_receipts_balance,
+            self.new_delayed_receipts_balance,
+            self.final_postponed_receipts_balance,
+            self.tx_burnt_amount,
+            self.slashed_burnt_amount,
+            self.new_buffered_receipts_balance,
             self.other_burnt_amount,
         )
     }
@@ -937,19 +980,6 @@ impl Debug for EpochError {
 impl From<std::io::Error> for EpochError {
     fn from(error: std::io::Error) -> Self {
         EpochError::IOErr(error.to_string())
-    }
-}
-
-#[derive(Eq, PartialEq, Clone, thiserror::Error, Debug)]
-
-pub enum ContextError {
-    #[error("No congestion info for shard {shard_id} in the runtime context")]
-    MissingCongestionInfo { shard_id: u64 },
-}
-
-impl From<ContextError> for RuntimeError {
-    fn from(other: ContextError) -> Self {
-        RuntimeError::ContextError(other)
     }
 }
 

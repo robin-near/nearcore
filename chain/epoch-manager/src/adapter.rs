@@ -16,7 +16,6 @@ use near_primitives::shard_layout::{account_id_to_shard_id, ShardLayout, ShardLa
 use near_primitives::sharding::{ChunkHash, ShardChunkHeader};
 use near_primitives::stateless_validation::{
     ChunkEndorsement, ChunkValidatorAssignments, PartialEncodedStateWitness,
-    SignedEncodedChunkStateWitness,
 };
 use near_primitives::types::validator_stake::ValidatorStake;
 use near_primitives::types::{
@@ -189,12 +188,6 @@ pub trait EpochManagerAdapter: Send + Sync {
     fn get_epoch_chunk_producers(
         &self,
         epoch_id: &EpochId,
-    ) -> Result<Vec<ValidatorStake>, EpochError>;
-
-    fn get_epoch_chunk_producers_for_shard(
-        &self,
-        epoch_id: &EpochId,
-        shard_id: ShardId,
     ) -> Result<Vec<ValidatorStake>, EpochError>;
 
     /// Block producers for given height for the main block. Return EpochError if outside of known boundaries.
@@ -416,14 +409,6 @@ pub trait EpochManagerAdapter: Send + Sync {
         &self,
         chunk_header: &ShardChunkHeader,
         endorsement: &ChunkEndorsement,
-    ) -> Result<bool, Error>;
-
-    // TODO(stateless_validation): Deprecate this function after partial witness
-    fn verify_chunk_state_witness_signature(
-        &self,
-        signed_witness: &SignedEncodedChunkStateWitness,
-        chunk_producer: &AccountId,
-        epoch_id: &EpochId,
     ) -> Result<bool, Error>;
 
     fn verify_partial_witness_signature(
@@ -718,15 +703,6 @@ impl EpochManagerAdapter for EpochManagerHandle {
     ) -> Result<Vec<ValidatorStake>, EpochError> {
         let epoch_manager = self.read();
         Ok(epoch_manager.get_all_chunk_producers(epoch_id)?.to_vec())
-    }
-
-    fn get_epoch_chunk_producers_for_shard(
-        &self,
-        epoch_id: &EpochId,
-        shard_id: ShardId,
-    ) -> Result<Vec<ValidatorStake>, EpochError> {
-        let epoch_manager = self.read();
-        Ok(epoch_manager.get_chunk_producers_for_shard(epoch_id, shard_id)?)
     }
 
     fn get_block_producer(
@@ -1077,20 +1053,6 @@ impl EpochManagerAdapter for EpochManagerHandle {
         let validator =
             epoch_manager.get_validator_by_account_id(&epoch_id, &endorsement.account_id)?;
         Ok(endorsement.verify(validator.public_key()))
-    }
-
-    // TODO(stateless_validation): Deprecate this function after partial witness
-    fn verify_chunk_state_witness_signature(
-        &self,
-        signed_witness: &SignedEncodedChunkStateWitness,
-        chunk_producer: &AccountId,
-        epoch_id: &EpochId,
-    ) -> Result<bool, Error> {
-        let epoch_manager = self.read();
-        let validator = epoch_manager.get_validator_by_account_id(epoch_id, chunk_producer)?;
-        Ok(signed_witness
-            .signature
-            .verify(signed_witness.witness_bytes.as_slice(), validator.public_key()))
     }
 
     fn verify_partial_witness_signature(

@@ -31,7 +31,6 @@ use near_primitives::sharding::{ChunkHash, ShardChunkHeader};
 use near_primitives::state_part::PartId;
 use near_primitives::stateless_validation::{
     ChunkEndorsement, ChunkValidatorAssignments, PartialEncodedStateWitness,
-    SignedEncodedChunkStateWitness,
 };
 use near_primitives::transaction::{
     Action, ExecutionMetadata, ExecutionOutcome, ExecutionOutcomeWithId, ExecutionStatus,
@@ -530,9 +529,6 @@ impl EpochManagerAdapter for MockEpochManager {
             validator_to_index,
             bp_settlement,
             cp_settlement,
-            vec![],
-            vec![],
-            HashMap::new(),
             BTreeMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -740,15 +736,6 @@ impl EpochManagerAdapter for MockEpochManager {
         let chunk_producers = self.get_chunk_producers(valset, shard_id);
         let index = (shard_id + height + 1) as usize % chunk_producers.len();
         Ok(chunk_producers[index].account_id().clone())
-    }
-
-    fn get_epoch_chunk_producers_for_shard(
-        &self,
-        epoch_id: &EpochId,
-        shard_id: ShardId,
-    ) -> Result<Vec<ValidatorStake>, EpochError> {
-        let valset = self.get_valset_for_epoch(epoch_id)?;
-        Ok(self.get_chunk_producers(valset, shard_id))
     }
 
     fn get_chunk_validator_assignments(
@@ -965,15 +952,6 @@ impl EpochManagerAdapter for MockEpochManager {
         &self,
         _chunk_header: &ShardChunkHeader,
         _endorsement: &ChunkEndorsement,
-    ) -> Result<bool, Error> {
-        Ok(true)
-    }
-
-    fn verify_chunk_state_witness_signature(
-        &self,
-        _signed_witness: &SignedEncodedChunkStateWitness,
-        _chunk_producer: &AccountId,
-        _epoch_id: &EpochId,
     ) -> Result<bool, Error> {
         Ok(true)
     }

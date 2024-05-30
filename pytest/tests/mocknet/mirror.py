@@ -21,10 +21,17 @@ import node_config
 import remote_node
 
 
-def prompt_setup_flags(args):
+def prompt_setup_flags(args, dumper_node_names):
     if not args.yes:
         print(
             'this will reset all nodes\' home dirs and initialize them with new state. continue? [yes/no]'
+        )
+        if sys.stdin.readline().strip() != 'yes':
+            sys.exit()
+
+    if not args.gcs_state_sync and len(dumper_node_names) > 0:
+        print(
+            f'--gcs-state-sync not provided, but there are state dumper nodes: {dumper_node_names}. continue with dumper nodes as normal RPC nodes? [yes/no]'
         )
         if sys.stdin.readline().strip() != 'yes':
             sys.exit()
@@ -216,17 +223,17 @@ def _apply_config_changes(node, state_sync_location):
                 }
             }
         }
-    if node.want_state_dump:
-        changes['state_sync.dump.location'] = state_sync_location
-        changes[
-            'store.state_snapshot_config.state_snapshot_type'] = 'EveryEpoch'
-        changes['store.state_snapshot_enabled'] = True
+        if node.want_state_dump:
+            changes['state_sync.dump.location'] = state_sync_location
+            changes[
+                'store.state_snapshot_config.state_snapshot_type'] = 'EveryEpoch'
+            changes['store.state_snapshot_enabled'] = True
     for key, change in changes.items():
         do_update_config(node, f'{key}={json.dumps(change)}')
 
 
 def new_test_cmd(args, traffic_generator, nodes):
-    prompt_setup_flags(args)
+    prompt_setup_flags(args, [n.name() for n in nodes if n.want_state_dump])
 
     if args.epoch_length <= 0:
         sys.exit(f'--epoch-length should be positive')
@@ -437,6 +444,14 @@ def run_remote_cmd(args, traffic_generator, nodes):
          on_exception="")
 
 
+def run_env_cmd(args, traffic_generator, nodes):
+    if args.clear_all:
+        func = lambda node: node.neard_clear_env()
+    else:
+        func = lambda node: node.neard_update_env(args.key_value)
+    pmap(func, nodes + [traffic_generator])
+
+
 if __name__ == '__main__':
     parser = ArgumentParser(description='Control a mocknet instance')
     parser.add_argument('--chain-id', type=str)
@@ -522,7 +537,7 @@ if __name__ == '__main__':
         help=
         '''Interval in millis between sending each mainnet block\'s worth of transactions.
         Without this flag, the traffic generator will try to match the per-block load on mainnet.
-        So, transactions from consecutive mainnet blocks will be be sent with delays
+        So, transactions from consecutive mainnet blocks will be sent with delays
         between them such that they will probably appear in consecutive mocknet blocks.
         ''')
     start_traffic_parser.set_defaults(func=start_traffic_cmd)
@@ -588,6 +603,12 @@ if __name__ == '__main__':
         type=str,
         help='Filter through the selected nodes using regex.')
     run_cmd_parser.set_defaults(func=run_remote_cmd)
+
+    env_cmd_parser = subparsers.add_parser(
+        'env', help='''Update the environment variable on the hosts.''')
+    env_cmd_parser.add_argument('--clear-all', action='store_true')
+    env_cmd_parser.add_argument('--key-value', type=str, nargs='+')
+    env_cmd_parser.set_defaults(func=run_env_cmd)
 
     args = parser.parse_args()
 

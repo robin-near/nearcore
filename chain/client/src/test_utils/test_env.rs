@@ -42,6 +42,7 @@ use near_vm_runner::logic::ProtocolVersion;
 use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use time::ext::InstantExt as _;
 
 use super::mock_partial_witness_adapter::MockPartialWitnessAdapter;
 use super::setup::setup_client_with_runtime;
@@ -351,7 +352,7 @@ impl TestEnv {
         // clients. Ideally the route should have been the following:
         // [client] ----(DistributeStateWitnessRequest)----> [partial_witness_actor]
         // [partial_witness_actor] ----(PartialEncodedStateWitness + Forward)----> [partial_witness_actor]
-        // [partial_witness_actor] ----(ProcessChunkStateWitnessMessage)----> [client]
+        // [partial_witness_actor] ----(ChunkStateWitnessMessage)----> [client]
         // But we go directly from processing DistributeStateWitnessRequest to sending it to all the chunk validators.
         // Validation of state witness is done in the partial_witness_actor which should be tested by test_loop.
         let partial_witness_adapters = self.partial_witness_adapters.clone();
@@ -455,7 +456,7 @@ impl TestEnv {
                 return Ok(endorsement);
             }
 
-            let elapsed_since_start = start_time.elapsed();
+            let elapsed_since_start = Instant::now().signed_duration_since(start_time);
             if elapsed_since_start > CHUNK_ENDORSEMENTS_TIMEOUT {
                 return Err(TimeoutError(elapsed_since_start));
             }
