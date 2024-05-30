@@ -3,10 +3,10 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use borsh::BorshDeserialize;
+use indicatif::ParallelProgressIterator;
 use near_chain::{ChainStore, ChainStoreAccess};
 use near_chain_configs::GenesisConfig;
 use near_epoch_manager::{EpochManager, EpochManagerAdapter};
-use near_primitives::hash::CryptoHash;
 use near_primitives::state::FlatStateValue;
 use near_store::flat::delta::KeyForFlatStateDelta;
 use near_store::flat::store_helper::{
@@ -15,12 +15,10 @@ use near_store::flat::store_helper::{
 use near_store::flat::FlatStateChanges;
 use near_store::trie::mem::loading::get_state_root;
 use near_store::trie::mem::parallel_loader::{
-    calculate_end_key, make_memtrie_parallel_loading_plan, MemtrieParallelLoadingPlan,
-    TrieLoadingPlanNode, TrieLoadingPlanNodeKind,
+    calculate_end_key, make_memtrie_parallel_loading_plan,
 };
 use near_store::{DBCol, NodeStorage, Store};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use std::collections::HashSet;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use strum::IntoEnumIterator;
 
 pub(crate) fn open_rocksdb(
@@ -68,14 +66,21 @@ pub(crate) fn resolve_column(col_name: &str) -> anyhow::Result<DBCol> {
         .ok_or_else(|| anyhow!("column {col_name} does not exist"))
 }
 
+/// See read_all_state_needed_to_load_memtrie for more details.
 pub struct StateNeededToLoadMemTrie {
+    /// State column entries that we need to keep in order to load memtries.
     pub state_entries: Vec<(Vec<u8>, Vec<u8>)>,
+    /// A reasonable partitioning of the FlatState column keys. It is guaranteed
+    /// that these are non-overlapping, and cover the entire range of keys corresponding
+    /// to all the current shards.
     pub flat_state_ranges: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 /// Reads all data from the State column that is necessary to load memtrie based on flat storage,
 /// for all shards of the current sharding version. These include the values that are not inlined,
 /// as well as some top trie nodes that are used during parallel memtrie loading.
+///
+/// Also return a reasonable partitioning of the FlatState column keys.
 pub fn read_all_state_needed_to_load_memtrie(
     store: Store,
     genesis_config: &GenesisConfig,
@@ -90,16 +95,17 @@ pub fn read_all_state_needed_to_load_memtrie(
 
     let mut flat_state_ranges = Vec::new();
 
-    let (non_inlined_keys_tx, non_inlined_keys_rx) =
-        std::sync::mpsc::sync_channel::<Vec<u8>>(10000);
-    let non_inlined_keys_collect_thread = std::thread::spawn(move || {
-        let mut non_inlined_keys = Vec::new();
-        while let Ok(key) = non_inlined_keys_rx.recv() {
-            non_inlined_keys.push(key);
+    // Spawn a thread to collect all the important keys that we'll discover.
+    let (important_keys_tx, important_keys_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1000000);
+    let important_keys_collect_thread = std::thread::spawn(move || {
+        let mut important_keys = Vec::new();
+        while let Ok(key) = important_keys_rx.recv() {
+            important_keys.push(key);
         }
-        non_inlined_keys
+        important_keys
     });
     for shard_uid in shard_uids {
+        tracing::info!("Reading shard {shard_uid}...");
         let flat_status = get_flat_storage_status(&store, shard_uid)?;
         let flat_head = match flat_status {
             near_store::flat::FlatStorageStatus::Ready(ready) => ready.flat_head.hash,
@@ -108,14 +114,16 @@ pub fn read_all_state_needed_to_load_memtrie(
         let root = get_state_root(&store, flat_head, shard_uid)?;
         let plan = make_memtrie_parallel_loading_plan(store.clone(), shard_uid, root)?;
 
-        for hash in extract_hashes_needed_for_memtrie_loading_plan(&plan) {
+        // The nodes that are needed to load the memtrie must be kept in the State column.
+        for hash in plan.node_hashes() {
             let key = encode_flat_state_db_key(shard_uid, &hash.0);
-            non_inlined_keys_tx.send(key).unwrap();
+            important_keys_tx.send(key).unwrap();
         }
 
-        // We'll tweak the loading ranges a bit, by making sure there are no gaps. This is because the
-        // plan itself may be encoding some values, and we don't want to miss those when iterating flat
-        // storage.
+        // Memtrie returns us a list of prefixes that can be used to load the memtrie in parallel.
+        // However, since these ranges exclude the nodes that are in the plan, we need to tweak the
+        // ranges a bit to make sure they cover all the FlatState keys. We'll do that by simply
+        // taking into account only the start key of each prefix.
         let mut start_points = plan
             .subtrees_to_load
             .into_iter()
@@ -124,22 +132,30 @@ pub fn read_all_state_needed_to_load_memtrie(
                 start
             })
             .collect::<Vec<_>>();
+        start_points.sort();
 
-        let shard_uid_end_key = calculate_end_key(&shard_uid.to_bytes().to_vec(), 1).unwrap();
-        let mut ranges = start_points
+        // Make a list of ranges, [shard start, key1), [key1, key2), ..., [key_n, shard end).
+        let shard_uid_start_key = shard_uid.to_bytes().to_vec();
+        start_points[0] = shard_uid_start_key.clone();
+        let shard_uid_end_key = calculate_end_key(&shard_uid_start_key, 1).unwrap();
+        let ranges = start_points
             .clone()
             .into_iter()
             .zip(start_points.into_iter().skip(1).chain(std::iter::once(shard_uid_end_key)))
             .collect::<Vec<_>>();
         flat_state_ranges.extend(ranges.clone());
-        ranges.into_par_iter().for_each(|(start, end)| {
-            for item in store.iter_range(DBCol::FlatState, Some(&start), Some(&end)) {
+
+        // Iterate through FlatState in parallel, and collect all the non-inlined keys.
+        ranges.par_iter().progress_count(ranges.len() as u64).for_each(|(start, end)| {
+            for item in store.iter_range(DBCol::FlatState, Some(start), Some(end)) {
                 let (key, value) = item.unwrap();
                 let value = FlatStateValue::try_from_slice(&value).unwrap();
                 match value {
                     FlatStateValue::Ref(r) => {
                         let (shard_uid, _) = decode_flat_state_db_key(&key).unwrap();
-                        non_inlined_keys_tx.send(encode_flat_state_db_key(shard_uid, &r.hash.0));
+                        important_keys_tx
+                            .send(encode_flat_state_db_key(shard_uid, &r.hash.0))
+                            .unwrap();
                     }
                     FlatStateValue::Inlined(_) => {}
                 }
@@ -147,6 +163,7 @@ pub fn read_all_state_needed_to_load_memtrie(
         });
     }
 
+    // If flat delta is desired, also read all the non-inlined keys from FlatStateChanges.
     if include_flat_delta {
         let shard_version_start_key = shard_layout.version().to_le_bytes().to_vec();
         let shard_version_end_key = calculate_end_key(&shard_version_start_key, 1).unwrap();
@@ -160,21 +177,28 @@ pub fn read_all_state_needed_to_load_memtrie(
             let key = KeyForFlatStateDelta::try_from_slice(&key).unwrap();
             for (_, value) in changes.0 {
                 if let Some(FlatStateValue::Ref(r)) = value {
-                    non_inlined_keys_tx.send(encode_flat_state_db_key(key.shard_uid, &r.hash.0));
+                    important_keys_tx
+                        .send(encode_flat_state_db_key(key.shard_uid, &r.hash.0))
+                        .unwrap();
                 }
             }
         }
     }
 
-    drop(non_inlined_keys_tx);
-    let non_inlined_keys = non_inlined_keys_collect_thread.join().unwrap();
-    println!(
-        "Found {} non-inlined keys from FlatState and FlatStateChanges to read from State column",
-        non_inlined_keys.len(),
+    drop(important_keys_tx);
+    let mut important_keys = important_keys_collect_thread.join().unwrap();
+    important_keys.sort();
+    important_keys.dedup();
+    tracing::info!(
+        "Found {} important keys from FlatState and FlatStateChanges to read from State column",
+        important_keys.len(),
     );
 
-    let non_inlined_entries = non_inlined_keys
+    // Read the important values from the State column.
+    let num_important_keys = important_keys.len();
+    let important_entries = important_keys
         .into_par_iter()
+        .progress_count(num_important_keys as u64)
         .map(|key| {
             let value = store
                 .get_raw_bytes(DBCol::State, &key)
@@ -184,33 +208,25 @@ pub fn read_all_state_needed_to_load_memtrie(
         })
         .collect::<Vec<_>>();
 
-    Ok(StateNeededToLoadMemTrie { state_entries: non_inlined_entries, flat_state_ranges })
+    Ok(StateNeededToLoadMemTrie { state_entries: important_entries, flat_state_ranges })
 }
 
-fn extract_hashes_needed_for_memtrie_loading_plan_node(
-    plan: &TrieLoadingPlanNode,
-    hashes: &mut HashSet<CryptoHash>,
-) {
-    hashes.insert(plan.hash);
-    match &plan.kind {
-        TrieLoadingPlanNodeKind::Branch { children, .. } => {
-            for (_, child) in children {
-                extract_hashes_needed_for_memtrie_loading_plan_node(&child, hashes);
-            }
-        }
-        TrieLoadingPlanNodeKind::Extension { child, .. } => {
-            extract_hashes_needed_for_memtrie_loading_plan_node(&child, hashes);
-        }
-        _ => {}
-    }
-}
-
-fn extract_hashes_needed_for_memtrie_loading_plan(
-    plan: &MemtrieParallelLoadingPlan,
-) -> Vec<CryptoHash> {
-    let mut hashes = HashSet::new();
-    extract_hashes_needed_for_memtrie_loading_plan_node(&plan.root, &mut hashes);
-    let mut hashes = hashes.into_iter().collect::<Vec<_>>();
-    hashes.sort();
-    hashes
+/// Write the given entries to the State column, in parallel, while reporting progress.
+pub fn write_state_column(store: &Store, data: Vec<(Vec<u8>, Vec<u8>)>) -> anyhow::Result<()> {
+    data.par_iter()
+        .progress_count(data.len() as u64)
+        .try_fold(
+            || (0usize, store.store_update()),
+            |(mut bytes_written, mut update), (key, value)| -> anyhow::Result<_> {
+                update.set_raw_bytes(DBCol::State, key, value);
+                bytes_written += key.len() + value.len();
+                if bytes_written > 100 * 1024 * 1024 {
+                    update.commit()?;
+                    Ok((0, store.store_update()))
+                } else {
+                    Ok((bytes_written, update))
+                }
+            },
+        )
+        .try_for_each(|update| -> anyhow::Result<()> { Ok(update?.1.commit()?) })
 }

@@ -1,22 +1,9 @@
-use crate::utils::read_all_state_needed_to_load_memtrie;
-use borsh::BorshDeserialize;
+use crate::utils::{read_all_state_needed_to_load_memtrie, write_state_column};
 use clap::Parser;
-use indicatif::HumanBytes;
-use near_chain::{ChainStore, ChainStoreAccess};
 use near_chain_configs::{GenesisConfig, GenesisValidationMode};
-use near_epoch_manager::{EpochManager, EpochManagerAdapter};
-use near_primitives::state::FlatStateValue;
-use near_store::flat::delta::KeyForFlatStateDelta;
-use near_store::flat::store_helper::{decode_flat_state_db_key, encode_flat_state_db_key};
-use near_store::flat::FlatStateChanges;
-use near_store::trie::mem::loading::get_state_root;
-use near_store::trie::mem::parallel_loader::make_memtrie_parallel_loading_plan;
 use near_store::{DBCol, Store};
 use nearcore::{load_config, open_storage};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 /// For developers only. Aggressively trims the database for testing purposes.
 #[derive(Parser)]
@@ -36,7 +23,7 @@ impl AggressiveTrimmingCommand {
         Ok(())
     }
 
-    /// Delete the entire State column except those that are not inlined by flat storage.
+    /// Delete the entire State column except those that are needed to load memtrie.
     /// This is used to TEST that we are able to rely on memtries only to run a node.
     /// It is NOT safe for production. Do not trim your nodes like this. It will break your node.
     fn obliterate_disk_trie(store: Store, genesis_config: &GenesisConfig) -> anyhow::Result<()> {
@@ -50,39 +37,9 @@ impl AggressiveTrimmingCommand {
         update.delete_all(DBCol::State);
         update.commit()?;
 
-        let mut update = store.store_update();
-        let mut total_bytes_written = 0;
-        let mut total_bytes_written_this_batch = 0;
-        let mut total_keys_written = 0;
-        let total_bytes_to_write =
-            state_needed.iter().map(|(key, value)| key.len() + value.len()).sum::<usize>();
-        let total_keys_to_write = state_needed.len();
-        for (key, value) in state_needed.iter() {
-            update.set_raw_bytes(DBCol::State, key, value);
-            total_bytes_written += key.len() + value.len();
-            total_bytes_written_this_batch += key.len() + value.len();
-            total_keys_written += 1;
-            if total_bytes_written_this_batch > 100_000_000 {
-                update.commit()?;
-                update = store.store_update();
-                total_bytes_written_this_batch = 0;
-                println!(
-                    "Written {} / {} keys ({} / {})",
-                    total_keys_written,
-                    total_keys_to_write,
-                    HumanBytes(total_bytes_written as u64),
-                    HumanBytes(total_bytes_to_write as u64)
-                );
-            }
-        }
-        update.commit()?;
-        println!(
-            "Done. Written {} / {} keys ({} / {})",
-            total_keys_written,
-            total_keys_to_write,
-            HumanBytes(total_bytes_written as u64),
-            HumanBytes(total_bytes_to_write as u64)
-        );
+        tracing::info!("Overwriting State column with only important keys...");
+        write_state_column(&store, state_needed)?;
+        tracing::info!("Done writing State column.");
 
         Ok(())
     }

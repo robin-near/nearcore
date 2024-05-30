@@ -30,6 +30,7 @@ pub fn load_memtrie_in_parallel(
     reader.load_in_parallel(plan, name)
 }
 
+/// Make the loading plan only, without loading. This is used for development only.
 pub fn make_memtrie_parallel_loading_plan(
     store: Store,
     shard_uid: ShardUId,
@@ -349,12 +350,38 @@ impl TrieLoadingPlanNode {
         );
         node_id
     }
+
+    fn append_all_hashes_to(&self, hashes: &mut Vec<CryptoHash>) {
+        hashes.push(self.hash);
+        match &self.kind {
+            TrieLoadingPlanNodeKind::Branch { children, .. } => {
+                for (_, child) in children {
+                    child.append_all_hashes_to(hashes);
+                }
+            }
+            TrieLoadingPlanNodeKind::Extension { child, .. } => {
+                child.append_all_hashes_to(hashes);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct MemtrieParallelLoadingPlan {
     pub root: TrieLoadingPlanNode,
     pub subtrees_to_load: Vec<NibblePrefix>,
+}
+
+impl MemtrieParallelLoadingPlan {
+    /// Returns all the hashes of the nodes in the plan, removing duplicates.
+    pub fn node_hashes(&self) -> Vec<CryptoHash> {
+        let mut hashes = Vec::new();
+        self.root.append_all_hashes_to(&mut hashes);
+        hashes.sort();
+        hashes.dedup();
+        hashes
+    }
 }
 
 /// Represents a prefix of nibbles. Allows appending to the prefix, and implements logic of

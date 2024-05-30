@@ -420,13 +420,14 @@ impl ForkNetworkCommand {
             .join(near_config.config.store.path.clone().unwrap_or_else(|| PathBuf::from("data")));
         let temp_store_home = store_path.join("temp-trimmed-db");
         if std::fs::metadata(&temp_store_home).is_ok() {
-            panic!("Temp trimmed DB already exists; please delete temp-trimmed-db in the data directory first");
+            anyhow::bail!("Temp trimmed DB already exists; please delete temp-trimmed-db in the data directory first");
         }
         let temp_storage = open_storage(&temp_store_home, near_config).unwrap();
         let temp_store = temp_storage.get_hot_store();
         let temp_store_path = temp_store_home.join("data");
 
         trim_database::trim_database(store, &near_config.genesis.config, temp_store)?;
+        drop((storage, temp_storage));
 
         tracing::info!("Removing all current data");
         for entry in std::fs::read_dir(&store_path)? {
