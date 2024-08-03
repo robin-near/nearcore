@@ -94,6 +94,7 @@ use tracing::{debug, debug_span, error, info, instrument, trace, warn};
 
 #[cfg(feature = "test_features")]
 use crate::client_actor::AdvProduceChunksMode;
+use crate::sync::light_epoch::LightEpochSync;
 
 const NUM_REBROADCAST_BLOCKS: usize = 30;
 
@@ -160,6 +161,8 @@ pub struct Client {
         HashMap<CryptoHash, (StateSync, HashMap<u64, ShardSyncDownload>, BlocksCatchUpState)>,
     /// Keeps track of information needed to perform the initial Epoch Sync
     pub epoch_sync: EpochSync,
+    /// Keeps track of information needed to perform the initial Epoch Sync
+    pub light_epoch_sync: LightEpochSync,
     /// Keeps track of syncing headers.
     pub header_sync: HeaderSync,
     /// Keeps track of syncing block.
@@ -303,6 +306,13 @@ impl Client {
             EPOCH_SYNC_REQUEST_TIMEOUT,
             EPOCH_SYNC_PEER_TIMEOUT,
         );
+        let light_epoch_sync = LightEpochSync::new(
+            clock.clone(),
+            network_adapter.clone(),
+            chain.genesis().clone(),
+            async_computation_spawner.clone(),
+            config.epoch_sync.clone(),
+        );
         let header_sync = HeaderSync::new(
             clock.clone(),
             network_adapter.clone(),
@@ -399,6 +409,7 @@ impl Client {
             ),
             catchup_state_syncs: HashMap::new(),
             epoch_sync,
+            light_epoch_sync,
             header_sync,
             block_sync,
             state_sync,

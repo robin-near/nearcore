@@ -9,7 +9,7 @@ use near_chain_configs::test_utils::{
     TESTING_INIT_BALANCE, TESTING_INIT_STAKE,
 };
 use near_chain_configs::{
-    default_enable_multiline_logging, default_epoch_sync_enabled,
+    default_enable_multiline_logging, default_epoch_sync, default_epoch_sync_enabled,
     default_header_sync_expected_height_per_second, default_header_sync_initial_timeout,
     default_header_sync_progress_timeout, default_header_sync_stall_ban_timeout,
     default_log_summary_period, default_orphan_state_witness_max_size,
@@ -20,8 +20,8 @@ use near_chain_configs::{
     default_trie_viewer_state_size_limit, default_tx_routing_height_horizon,
     default_view_client_threads, default_view_client_throttle_period, get_initial_supply,
     ChunkDistributionNetworkConfig, ClientConfig, GCConfig, Genesis, GenesisConfig,
-    GenesisValidationMode, LogSummaryStyle, MutableConfigValue, MutableValidatorSigner,
-    ReshardingConfig, StateSyncConfig, BLOCK_PRODUCER_KICKOUT_THRESHOLD,
+    GenesisValidationMode, LightEpochSyncConfig, LogSummaryStyle, MutableConfigValue,
+    MutableValidatorSigner, ReshardingConfig, StateSyncConfig, BLOCK_PRODUCER_KICKOUT_THRESHOLD,
     CHUNK_PRODUCER_KICKOUT_THRESHOLD, CHUNK_VALIDATOR_ONLY_KICKOUT_THRESHOLD,
     EXPECTED_EPOCH_LENGTH, FISHERMEN_THRESHOLD, GAS_PRICE_ADJUSTMENT_RATE, GENESIS_CONFIG_FILENAME,
     INITIAL_GAS_LIMIT, MAX_INFLATION_RATE, MIN_BLOCK_PRODUCTION_DELAY, MIN_GAS_PRICE, NEAR_BASE,
@@ -274,6 +274,8 @@ pub struct Config {
     /// Options for syncing state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_sync: Option<StateSyncConfig>,
+    /// Options for epoch sync
+    pub epoch_sync: Option<LightEpochSyncConfig>,
     /// Limit of the size of per-shard transaction pool measured in bytes. If not set, the size
     /// will be unbounded.
     ///
@@ -360,6 +362,7 @@ impl Default for Config {
             split_storage: None,
             expected_shutdown: None,
             state_sync: default_state_sync(),
+            epoch_sync: default_epoch_sync(),
             state_sync_enabled: default_state_sync_enabled(),
             transaction_pool_size_limit: default_transaction_pool_size_limit(),
             enable_multiline_logging: default_enable_multiline_logging(),
@@ -581,6 +584,7 @@ impl NearConfig {
                 flat_storage_creation_period: Duration::seconds(1),
                 state_sync_enabled: config.state_sync_enabled,
                 state_sync: config.state_sync.unwrap_or_default(),
+                epoch_sync: config.epoch_sync.unwrap_or_default(),
                 transaction_pool_size_limit: config.transaction_pool_size_limit,
                 enable_multiline_logging: config.enable_multiline_logging.unwrap_or(true),
                 resharding_config: MutableConfigValue::new(

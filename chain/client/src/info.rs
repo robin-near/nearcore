@@ -671,6 +671,10 @@ pub fn display_sync_status(
         SyncStatus::EpochSync { epoch_ord } => {
             format!("[EPOCH: {:>5}] Getting to a recent epoch", epoch_ord)
         }
+        SyncStatus::LightEpochSync(status) => {
+            format!("[LIGHT EPOCH] {:?}", status)
+        }
+        SyncStatus::LightEpochSyncDone => "[LIGHT EPOCH] Done".to_string(),
         SyncStatus::HeaderSync { start_height, current_height, highest_height } => {
             let percent = if highest_height <= start_height {
                 0.0

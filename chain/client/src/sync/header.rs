@@ -122,6 +122,7 @@ impl HeaderSync {
         let enable_header_sync = match sync_status {
             SyncStatus::HeaderSync { .. }
             | SyncStatus::BlockSync { .. }
+            | SyncStatus::LightEpochSyncDone
             | SyncStatus::StateSyncDone => {
                 // TODO: Transitioning from BlockSync to HeaderSync is fine if the highest height of peers gets too far from our header_head_height. However it's currently unconditional.
                 true
@@ -133,7 +134,7 @@ impl HeaderSync {
                 );
                 true
             }
-            SyncStatus::StateSync { .. } => false,
+            SyncStatus::LightEpochSync { .. } | SyncStatus::StateSync { .. } => false,
         };
 
         if !enable_header_sync {

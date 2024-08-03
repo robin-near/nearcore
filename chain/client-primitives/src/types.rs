@@ -271,6 +271,13 @@ impl std::fmt::Debug for StateSyncStatus {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct LightEpochSyncStatus {
+    pub source_peer_height: BlockHeight,
+    pub source_peer_id: PeerId,
+    pub attempt_time: near_time::Utc,
+}
+
 /// Various status sync can be in, whether it's fast sync or archival.
 #[derive(Clone, Debug, strum::AsRefStr)]
 pub enum SyncStatus {
@@ -281,7 +288,12 @@ pub enum SyncStatus {
     /// Syncing using light-client headers to a recent epoch
     // TODO #3488
     // Bowen: why do we use epoch ordinal instead of epoch id?
-    EpochSync { epoch_ord: u64 },
+    EpochSync {
+        epoch_ord: u64,
+    },
+    /// Syncing using light-client headers to a recent epoch
+    LightEpochSync(LightEpochSyncStatus),
+    LightEpochSyncDone,
     /// Downloading block headers for fast sync.
     HeaderSync {
         /// Head height at the beginning. Not the header head height!
@@ -328,10 +340,12 @@ impl SyncStatus {
             SyncStatus::NoSync => 0,
             SyncStatus::AwaitingPeers => 1,
             SyncStatus::EpochSync { .. } => 2,
-            SyncStatus::HeaderSync { .. } => 3,
-            SyncStatus::StateSync(_) => 4,
-            SyncStatus::StateSyncDone => 5,
-            SyncStatus::BlockSync { .. } => 6,
+            SyncStatus::LightEpochSync { .. } => 3,
+            SyncStatus::LightEpochSyncDone { .. } => 4,
+            SyncStatus::HeaderSync { .. } => 5,
+            SyncStatus::StateSync(_) => 6,
+            SyncStatus::StateSyncDone => 7,
+            SyncStatus::BlockSync { .. } => 8,
         }
     }
 
@@ -357,6 +371,12 @@ impl From<SyncStatus> for SyncStatusView {
             SyncStatus::AwaitingPeers => SyncStatusView::AwaitingPeers,
             SyncStatus::NoSync => SyncStatusView::NoSync,
             SyncStatus::EpochSync { epoch_ord } => SyncStatusView::EpochSync { epoch_ord },
+            SyncStatus::LightEpochSync(status) => SyncStatusView::LightEpochSync {
+                source_peer_height: status.source_peer_height,
+                source_peer_id: status.source_peer_id.to_string(),
+                attempt_time: status.attempt_time.to_string(),
+            },
+            SyncStatus::LightEpochSyncDone => SyncStatusView::LightEpochSyncDone,
             SyncStatus::HeaderSync { start_height, current_height, highest_height } => {
                 SyncStatusView::HeaderSync { start_height, current_height, highest_height }
             }

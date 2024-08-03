@@ -17,6 +17,7 @@ pub mod congestion_info;
 pub mod epoch_manager;
 pub mod epoch_sync;
 pub mod errors;
+pub mod light_epoch_sync;
 pub mod merkle;
 pub mod network;
 pub mod profile_data_v2;
