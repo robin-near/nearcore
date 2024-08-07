@@ -35,6 +35,7 @@ use near_o11y::OpenTelemetrySpanExt;
 use near_primitives::block::{Approval, Block, BlockHeader, GenesisId};
 use near_primitives::challenge::Challenge;
 use near_primitives::hash::CryptoHash;
+use near_primitives::light_epoch_sync::EpochSyncProof;
 use near_primitives::merkle::combine_hash;
 use near_primitives::network::{AnnounceAccount, PeerId};
 use near_primitives::sharding::{
@@ -539,6 +540,8 @@ pub enum RoutedMessageBody {
     ChunkStateWitnessAck(ChunkStateWitnessAck),
     PartialEncodedStateWitness(PartialEncodedStateWitness),
     PartialEncodedStateWitnessForward(PartialEncodedStateWitness),
+    EpochSyncRequest,
+    EpochSyncResponse(EpochSyncProof),
 }
 
 impl RoutedMessageBody {
@@ -612,6 +615,10 @@ impl fmt::Debug for RoutedMessageBody {
             }
             RoutedMessageBody::PartialEncodedStateWitnessForward(_) => {
                 write!(f, "PartialEncodedStateWitnessForward")
+            }
+            RoutedMessageBody::EpochSyncRequest => write!(f, "EpochSyncRequest"),
+            RoutedMessageBody::EpochSyncResponse(proof) => {
+                write!(f, "EpochSyncResponse(epoch: {:?})", proof.epoch_id)
             }
         }
     }
@@ -696,6 +703,7 @@ impl RoutedMessage {
             RoutedMessageBody::Ping(_)
                 | RoutedMessageBody::TxStatusRequest(_, _)
                 | RoutedMessageBody::PartialEncodedChunkRequest(_)
+                | RoutedMessageBody::EpochSyncRequest
         )
     }
 

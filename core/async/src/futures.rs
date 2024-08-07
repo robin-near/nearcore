@@ -13,7 +13,7 @@ use std::ops::DerefMut;
 /// The reason why we need an abstraction is (1) we can intercept the future
 /// spawning to add additional instrumentation (2) we can support driving the
 /// future with TestLoop for testing.
-pub trait FutureSpawner {
+pub trait FutureSpawner: Send + Sync {
     fn spawn_boxed(&self, description: &'static str, f: BoxFuture<'static, ()>);
 }
 

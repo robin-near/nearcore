@@ -94,6 +94,7 @@ use tracing::{debug, debug_span, error, info, instrument, trace, warn};
 
 #[cfg(feature = "test_features")]
 use crate::client_actor::AdvProduceChunksMode;
+use crate::sync::light_epoch::LightEpochSync;
 
 const NUM_REBROADCAST_BLOCKS: usize = 30;
 
@@ -160,6 +161,8 @@ pub struct Client {
         HashMap<CryptoHash, (StateSync, HashMap<u64, ShardSyncDownload>, BlocksCatchUpState)>,
     /// Keeps track of information needed to perform the initial Epoch Sync
     pub epoch_sync: EpochSync,
+    /// Keeps track of information needed to perform the initial Epoch Sync
+    pub light_epoch_sync: LightEpochSync,
     /// Keeps track of syncing headers.
     pub header_sync: HeaderSync,
     /// Keeps track of syncing block.
@@ -303,6 +306,13 @@ impl Client {
             EPOCH_SYNC_REQUEST_TIMEOUT,
             EPOCH_SYNC_PEER_TIMEOUT,
         );
+        let light_epoch_sync = LightEpochSync::new(
+            clock.clone(),
+            network_adapter.clone(),
+            chain.genesis().clone(),
+            async_computation_spawner.clone(),
+            config.epoch_sync.clone(),
+        );
         let header_sync = HeaderSync::new(
             clock.clone(),
             network_adapter.clone(),
@@ -399,6 +409,7 @@ impl Client {
             ),
             catchup_state_syncs: HashMap::new(),
             epoch_sync,
+            light_epoch_sync,
             header_sync,
             block_sync,
             state_sync,
@@ -1499,7 +1510,10 @@ impl Client {
         signer: &Option<Arc<ValidatorSigner>>,
     ) -> Result<(), near_chain::Error> {
         let mut challenges = vec![];
-        self.chain.sync_block_headers(headers, &mut challenges)?;
+        if let Err(e) = self.chain.sync_block_headers(headers, &mut challenges) {
+            tracing::warn!(target: "client", ?e, "Error syncing block headers");
+            return Err(e);
+        }
         self.send_challenges(challenges, signer);
         self.shards_manager_adapter.send(ShardsManagerRequestFromClient::UpdateChainHeads {
             head: self.chain.head().unwrap(),
@@ -2476,7 +2490,7 @@ impl Client {
         state_parts_future_spawner: &dyn FutureSpawner,
         signer: &Option<Arc<ValidatorSigner>>,
     ) -> Result<(), Error> {
-        let _span = debug_span!(target: "sync", "run_catchup").entered();
+        // let _span = debug_span!(target: "sync", "run_catchup").entered();
         let mut notify_state_sync = false;
         let me = signer.as_ref().map(|x| x.validator_id().clone());
 

@@ -2102,6 +2102,7 @@ impl Chain {
             // overflow-related problems
             let block_height = header.height();
             if block_height > head.height + self.epoch_length * 20 {
+                tracing::warn!(target: "chain", "Received block height {} is too far ahead of the current head height {}", block_height, head.height);
                 return Err(Error::InvalidBlockHeight(block_height));
             }
         }
@@ -2140,6 +2141,7 @@ impl Chain {
 
         // Do not accept old forks
         if prev_height < self.runtime_adapter.get_gc_stop_height(&head.last_block_hash) {
+            tracing::warn!(target: "chain", "Received block height {} is lower than GC stop height {}", prev_height, self.runtime_adapter.get_gc_stop_height(&head.last_block_hash));
             return Err(Error::InvalidBlockHeight(prev_height));
         }
 
@@ -3493,6 +3495,11 @@ impl Chain {
         loop {
             let header = self.get_block_header(&last_block_hash)?;
             if header.height() < first_block_height {
+                tracing::warn!(
+                    "Block height {} is less than first_block_height {}",
+                    header.height(),
+                    first_block_height
+                );
                 return Err(Error::InvalidBlockHeight(first_block_height));
             }
 

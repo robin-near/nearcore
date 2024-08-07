@@ -1052,8 +1052,13 @@ impl EpochManagerAdapter for MockEpochManager {
         Ok(vec![])
     }
 
-    #[cfg(feature = "new_epoch_sync")]
-    fn force_update_aggregator(&self, _epoch_id: &EpochId, _hash: &CryptoHash) {}
+    fn force_update_aggregator(
+        &self,
+        _epoch_id: &EpochId,
+        _hash: &CryptoHash,
+    ) -> Result<(), EpochError> {
+        Ok(())
+    }
 
     fn get_epoch_all_validators(
         &self,

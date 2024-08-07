@@ -105,13 +105,14 @@ impl HeaderSync {
         highest_height: BlockHeight,
         highest_height_peers: &[HighestHeightPeerInfo],
     ) -> Result<(), near_chain::Error> {
-        let _span =
-            tracing::debug_span!(target: "sync", "run_sync", sync_type = "HeaderSync").entered();
+        // let _span =
+        //     tracing::debug_span!(target: "sync", "run_sync", sync_type = "HeaderSync").entered();
         let head = chain.head()?;
         let header_head = chain.header_head()?;
 
         // Check if we need to start a new request for a batch of header.
         if !self.header_sync_due(sync_status, &header_head, highest_height) {
+            // tracing::info!("Sync: header sync not due");
             // Either
             // * header sync is not needed, or
             // * a request is already in-flight and more progress is expected.
@@ -122,6 +123,7 @@ impl HeaderSync {
         let enable_header_sync = match sync_status {
             SyncStatus::HeaderSync { .. }
             | SyncStatus::BlockSync { .. }
+            | SyncStatus::LightEpochSyncDone
             | SyncStatus::StateSyncDone => {
                 // TODO: Transitioning from BlockSync to HeaderSync is fine if the highest height of peers gets too far from our header_head_height. However it's currently unconditional.
                 true
@@ -133,13 +135,16 @@ impl HeaderSync {
                 );
                 true
             }
-            SyncStatus::StateSync { .. } => false,
+            SyncStatus::LightEpochSync { .. } | SyncStatus::StateSync { .. } => false,
         };
 
         if !enable_header_sync {
+            // tracing::info!("Sync: header sync not enabled");
             // Header sync is blocked for whatever reason.
             return Ok(());
         }
+
+        tracing::info!("Sync: header sync enabled");
 
         // start_height is used to report the progress of header sync, e.g. to say that it's 50% complete.
         // This number has no other functional value.
@@ -152,6 +157,13 @@ impl HeaderSync {
         });
 
         self.syncing_peer = None;
+
+        tracing::info!(
+            "Sync: header sync: highest_height: {}, own height {}",
+            highest_height,
+            header_head.height
+        );
+
         // Pick a new random peer to request the next batch of headers.
         if let Some(peer) = highest_height_peers.choose(&mut thread_rng()).cloned() {
             let shutdown_height = self.shutdown_height.get().unwrap_or(u64::MAX);
@@ -320,7 +332,7 @@ impl HeaderSync {
         peer: HighestHeightPeerInfo,
     ) -> Option<HighestHeightPeerInfo> {
         if let Ok(locator) = self.get_locator(chain) {
-            debug!(target: "sync", "Sync: request headers: asking {} for headers, {:?}", peer.peer_info.id, locator);
+            tracing::info!(target: "sync", "Sync: request headers: asking {} for headers, {:?}", peer.peer_info.id, locator);
             self.network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
                 NetworkRequests::BlockHeadersRequest {
                     hashes: locator,
@@ -352,8 +364,18 @@ impl HeaderSync {
         let ordinals = get_locator_ordinals(final_head_ordinal, tip_ordinal);
         let mut locator: Vec<CryptoHash> = vec![];
         for ordinal in &ordinals {
-            let block_hash = store.get_block_hash_from_ordinal(*ordinal)?;
-            locator.push(block_hash);
+            match store.get_block_hash_from_ordinal(*ordinal) {
+                Ok(block_hash) => {
+                    locator.push(block_hash);
+                }
+                Err(e) => {
+                    warn!(target: "sync", "Sync: failed to get block hash from ordinal {}: {:?}", ordinal, e);
+                }
+            }
+        }
+        if locator.is_empty() {
+            warn!(target: "sync", "Sync: locator is empty, using a single tip.");
+            locator.push(tip.last_block_hash);
         }
         debug!(target: "sync", "Sync: locator: {:?} ordinals: {:?}", locator, ordinals);
         Ok(locator)

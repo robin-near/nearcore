@@ -22,7 +22,7 @@ const NUM_CLIENTS: usize = 4;
 // Test that a new node that only has genesis can use whatever method available
 // to sync up to the current state of the network.
 #[test]
-fn test_sync_from_genesis() {
+fn test_epoch_sync_from_genesis() {
     init_test_logger();
     let builder = TestLoopBuilder::new();
 
@@ -107,6 +107,10 @@ fn test_sync_from_genesis() {
         .clients(clients)
         .stores_override(stores)
         .tempdir_override(tempdir)
+        .config_modifier(|config, _| {
+            config.epoch_sync.epoch_sync_horizon = 30;
+            config.epoch_sync.epoch_sync_accept_proof_max_horizon = 20;
+        })
         .skip_warmup()
         .build();
 

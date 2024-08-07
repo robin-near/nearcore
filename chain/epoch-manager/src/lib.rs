@@ -2,7 +2,7 @@ use crate::metrics::{PROTOCOL_VERSION_NEXT, PROTOCOL_VERSION_VOTES};
 use crate::types::EpochInfoAggregator;
 use near_cache::SyncLruCache;
 use near_chain_configs::GenesisConfig;
-use near_primitives::block::Tip;
+use near_primitives::block::{BlockHeader, Tip};
 use near_primitives::checked_feature;
 use near_primitives::epoch_manager::block_info::BlockInfo;
 use near_primitives::epoch_manager::epoch_info::{EpochInfo, EpochSummary};
@@ -24,7 +24,7 @@ use near_primitives::version::{ProtocolVersion, UPGRADABILITY_FIX_PROTOCOL_VERSI
 use near_primitives::views::{
     CurrentEpochValidatorInfo, EpochValidatorInfo, NextEpochValidatorInfo, ValidatorKickoutView,
 };
-use near_store::{DBCol, Store, StoreUpdate};
+use near_store::{DBCol, Store, StoreUpdate, HEADER_HEAD_KEY};
 use num_rational::Rational64;
 use primitive_types::U256;
 use std::cmp::Ordering;
@@ -38,6 +38,7 @@ pub use crate::proposals::proposals_to_epoch_info;
 pub use crate::reward_calculator::RewardCalculator;
 pub use crate::reward_calculator::NUM_SECONDS_IN_A_YEAR;
 pub use crate::types::RngSeed;
+use std::backtrace::Backtrace;
 
 mod adapter;
 mod metrics;
@@ -1979,9 +1980,32 @@ impl EpochManager {
             }
 
             let prev_hash = *block_info.prev_hash();
-            let prev_info = self.get_block_info(&prev_hash)?;
-            let prev_height = prev_info.height();
-            let prev_epoch = *prev_info.epoch_id();
+            let (prev_height, prev_epoch) = match self.get_block_info(&prev_hash) {
+                Ok(info) => (info.height(), *info.epoch_id()),
+                Err(EpochError::MissingBlock(_)) => {
+                    // In the case of epoch sync, we may not have the BlockInfo for the last final block
+                    // of the epoch. In this case, check for this special case.
+                    // TODO: think of a better way to do this.
+                    let tip = self
+                        .store
+                        .get_ser::<Tip>(DBCol::BlockMisc, HEADER_HEAD_KEY)?
+                        .ok_or_else(|| EpochError::IOErr("Tip not found in store".to_string()))?;
+                    let block_header = self
+                        .store
+                        .get_ser::<BlockHeader>(DBCol::BlockHeader, tip.prev_block_hash.as_bytes())?
+                        .ok_or_else(|| {
+                            EpochError::IOErr(
+                                "BlockHeader for prev block of tip not found in store".to_string(),
+                            )
+                        })?;
+                    if block_header.prev_hash() == block_info.hash() {
+                        (block_info.height() - 1, *block_info.epoch_id())
+                    } else {
+                        return Err(EpochError::MissingBlock(prev_hash));
+                    }
+                }
+                Err(e) => return Err(e),
+            };
 
             let block_info = self.get_block_info(&cur_hash)?;
             aggregator.update_tail(&block_info, &epoch_info, prev_height);

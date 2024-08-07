@@ -1355,14 +1355,12 @@ impl ChainStoreAccess for ChainStore {
         &self,
         block_hash: &CryptoHash,
     ) -> Result<Arc<PartialMerkleTree>, Error> {
-        option_to_not_found(
-            self.read_with_cache(
-                DBCol::BlockMerkleTree,
-                &self.block_merkle_tree,
-                block_hash.as_ref(),
-            ),
-            format_args!("BLOCK MERKLE TREE: {}", block_hash),
-        )
+        Ok(self
+            .read_with_cache(DBCol::BlockMerkleTree, &self.block_merkle_tree, block_hash.as_ref())
+            .unwrap()
+            .unwrap_or_else(|| {
+                panic!("BLOCK MERKLE TREE: {}", block_hash);
+            }))
     }
 
     fn get_block_hash_from_ordinal(&self, block_ordinal: NumBlocks) -> Result<CryptoHash, Error> {

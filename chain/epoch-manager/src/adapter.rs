@@ -1,4 +1,4 @@
-use crate::types::BlockHeaderInfo;
+use crate::types::{BlockHeaderInfo, EpochInfoAggregator};
 #[cfg(feature = "new_epoch_sync")]
 use crate::EpochInfoAggregator;
 use crate::EpochManagerHandle;
@@ -8,7 +8,7 @@ use near_primitives::block::Tip;
 use near_primitives::block_header::{Approval, ApprovalInner, BlockHeader};
 use near_primitives::epoch_manager::block_info::BlockInfo;
 use near_primitives::epoch_manager::epoch_info::EpochInfo;
-use near_primitives::epoch_manager::{EpochConfig, ShardConfig};
+use near_primitives::epoch_manager::{EpochConfig, ShardConfig, AGGREGATOR_KEY};
 use near_primitives::errors::EpochError;
 use near_primitives::hash::CryptoHash;
 use near_primitives::shard_layout::{account_id_to_shard_id, ShardLayout, ShardLayoutError};
@@ -23,7 +23,7 @@ use near_primitives::types::{
 };
 use near_primitives::version::ProtocolVersion;
 use near_primitives::views::EpochValidatorInfo;
-use near_store::{ShardUId, StoreUpdate};
+use near_store::{DBCol, ShardUId, StoreUpdate};
 use std::cmp::Ordering;
 #[cfg(feature = "new_epoch_sync")]
 use std::collections::HashMap;
@@ -473,8 +473,11 @@ pub trait EpochManagerAdapter: Send + Sync {
         hash_to_prev_hash: Option<&HashMap<CryptoHash, CryptoHash>>,
     ) -> Result<Vec<CryptoHash>, EpochError>;
 
-    #[cfg(feature = "new_epoch_sync")]
-    fn force_update_aggregator(&self, epoch_id: &EpochId, hash: &CryptoHash);
+    fn force_update_aggregator(
+        &self,
+        epoch_id: &EpochId,
+        hash: &CryptoHash,
+    ) -> Result<(), EpochError>;
 }
 
 impl EpochManagerAdapter for EpochManagerHandle {
@@ -1139,10 +1142,17 @@ impl EpochManagerAdapter for EpochManagerHandle {
         }
     }
 
-    #[cfg(feature = "new_epoch_sync")]
-    fn force_update_aggregator(&self, epoch_id: &EpochId, hash: &CryptoHash) {
+    fn force_update_aggregator(
+        &self,
+        epoch_id: &EpochId,
+        hash: &CryptoHash,
+    ) -> Result<(), EpochError> {
         let mut epoch_manager = self.write();
         epoch_manager.epoch_info_aggregator = EpochInfoAggregator::new(*epoch_id, *hash);
+        let mut update = epoch_manager.store.store_update();
+        update.set_ser(DBCol::EpochInfo, AGGREGATOR_KEY, &epoch_manager.epoch_info_aggregator)?;
+        update.commit()?;
+        Ok(())
     }
 
     /// Returns the set of chunk validators for a given epoch

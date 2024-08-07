@@ -1488,7 +1488,7 @@ impl ClientActorInner {
                     error!(target: "client", ?err, "Error processing sync blocks");
                     false
                 } else {
-                    debug!(target: "client", ?err, "Block headers refused by chain");
+                    info!(target: "client", ?err, "Block headers refused by chain");
                     true
                 }
             }
@@ -1497,6 +1497,7 @@ impl ClientActorInner {
 
     /// Check whether need to (continue) sync.
     /// Also return higher height with known peers at that height.
+    // #[tracing::instrument(level = "info", skip(self), ret)]
     fn syncing_info(&self) -> Result<SyncRequirement, near_chain::Error> {
         if self.adv.disable_header_sync() {
             return Ok(SyncRequirement::AdvHeaderSyncDisabled);
@@ -1505,13 +1506,19 @@ impl ClientActorInner {
         let head = self.client.chain.head()?;
         let is_syncing = self.client.sync_status.is_syncing();
 
+        // tracing::info!(target: "client", "Checking sync status");
         // Only consider peers whose latest block is not invalid blocks
         let eligible_peers: Vec<_> = self
             .network_info
             .highest_height_peers
             .iter()
-            .filter(|p| !self.client.chain.is_block_invalid(&p.highest_block_hash))
+            // .filter(|p| !self.client.chain.is_block_invalid(&p.highest_block_hash))
             .collect();
+        // tracing::info!(
+        //     "Had {} eligible peers, after filtering, have {}",
+        //     self.network_info.highest_height_peers.len(),
+        //     eligible_peers.len()
+        // );
         metrics::PEERS_WITH_INVALID_HASH
             .set(self.network_info.highest_height_peers.len() as i64 - eligible_peers.len() as i64);
         let peer_info = if let Some(peer_info) = eligible_peers.choose(&mut thread_rng()) {
@@ -1714,6 +1721,15 @@ impl ClientActorInner {
     ///
     /// This method runs the header sync, the block sync
     fn handle_sync_needed(&mut self, highest_height: u64, signer: &Option<Arc<ValidatorSigner>>) {
+        // tracing::info!(target: "sync", "Syncing needed to height {}", highest_height);
+        let light_epoch_sync_result = self.client.light_epoch_sync.run(
+            &mut self.client.sync_status,
+            &self.client.chain,
+            highest_height,
+            &self.network_info.highest_height_peers,
+        );
+        unwrap_and_report_state_sync_result!(light_epoch_sync_result);
+
         // Run each step of syncing separately.
         let header_sync_result = self.client.header_sync.run(
             &mut self.client.sync_status,
