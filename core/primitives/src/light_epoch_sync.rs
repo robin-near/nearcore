@@ -38,7 +38,7 @@ pub struct EpochSyncProofLastEpochData {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EpochSyncProofCurrentEpochData {
     pub first_block_header_in_epoch: BlockHeader,
-    pub first_block_info_in_epoch: BlockInfo,
+    pub first_block_info_in_epoch: BlockInfo, // todo: derive
     pub last_block_header_in_prev_epoch: BlockHeader,
     pub second_last_block_header_in_prev_epoch: BlockHeader,
     // TODO: I'm not sure if this can be used to prove the block against the merkle root

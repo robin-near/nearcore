@@ -144,8 +144,6 @@ impl HeaderSync {
             return Ok(());
         }
 
-        tracing::info!("Sync: header sync enabled");
-
         // start_height is used to report the progress of header sync, e.g. to say that it's 50% complete.
         // This number has no other functional value.
         let start_height = sync_status.start_height().unwrap_or(head.height);
@@ -157,12 +155,6 @@ impl HeaderSync {
         });
 
         self.syncing_peer = None;
-
-        tracing::info!(
-            "Sync: header sync: highest_height: {}, own height {}",
-            highest_height,
-            header_head.height
-        );
 
         // Pick a new random peer to request the next batch of headers.
         if let Some(peer) = highest_height_peers.choose(&mut thread_rng()).cloned() {
