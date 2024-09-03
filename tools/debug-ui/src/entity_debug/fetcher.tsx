@@ -11,10 +11,11 @@ import { fieldSemantics } from './fields';
 
 /// A simple class to fetch entity data for a query.
 export class Fetcher {
-    constructor(private addr: string) {}
+    constructor(private addr: string) { }
 
-    async fetch(query: EntityQuery): Promise<EntityDataValueNode> {
-        const result = await fetchEntity(this.addr, query);
+    async fetch(query: EntityQuery, useColdStorage: boolean): Promise<EntityDataValueNode> {
+        const queryWithParams = { ...query, use_cold_storage: useColdStorage };
+        const result = await fetchEntity(this.addr, queryWithParams);
         const queryType: keyof EntityQuery = Object.keys(query)[0] as keyof EntityQuery;
         const entityType = entityQueryOutputType[queryType];
         const rootEntry = this._parseApiEntityDataValue(fieldSemantics[entityType], {

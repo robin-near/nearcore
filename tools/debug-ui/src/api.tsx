@@ -1,4 +1,4 @@
-import { EntityQuery } from './entity_debug/types';
+import { EntityQuery, EntityQueryWithParams } from './entity_debug/types';
 
 export interface StatusResponse {
     chain_id: string;
@@ -112,26 +112,26 @@ export type SyncStatusView =
     | 'AwaitingPeers'
     | 'NoSync'
     | {
-          EpochSync: { epoch_ord: number };
-      }
+        EpochSync: { epoch_ord: number };
+    }
     | {
-          HeaderSync: {
-              start_height: number;
-              current_height: number;
-              highest_height: number;
-          };
-      }
+        HeaderSync: {
+            start_height: number;
+            current_height: number;
+            highest_height: number;
+        };
+    }
     | {
-          StateSync: [string, { [shard_id: number]: ShardSyncDownloadView }];
-      }
+        StateSync: [string, { [shard_id: number]: ShardSyncDownloadView }];
+    }
     | 'StateSyncDone'
     | {
-          BlockSync: {
-              start_height: number;
-              current_height: number;
-              highest_height: number;
-          };
-      };
+        BlockSync: {
+            start_height: number;
+            current_height: number;
+            highest_height: number;
+        };
+    };
 
 export interface ShardSyncDownloadView {
     downloads: { error: boolean; done: boolean }[];
@@ -477,7 +477,7 @@ export type ApiEntityDataEntry = { name: string; value: ApiEntityDataEntryValue 
 
 export async function fetchEntity(
     addr: string,
-    request: EntityQuery
+    request: EntityQueryWithParams
 ): Promise<ApiEntityDataEntryValue> {
     const response = await fetch(`http://${addr}/debug/api/entity`, {
         body: JSON.stringify(request),

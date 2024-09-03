@@ -11,17 +11,17 @@ export type ComposingQuery = {
 
 export type ComposingQueryAction =
     | {
-          type: 'set-type';
-          queryType: EntityQueryType;
-      }
+        type: 'set-type';
+        queryType: EntityQueryType;
+    }
     | {
-          type: 'set-key';
-          key: EntityKey;
-      }
+        type: 'set-key';
+        key: EntityKey;
+    }
     | {
-          type: 'remove-key';
-          keyType: EntityKeyType;
-      };
+        type: 'remove-key';
+        keyType: EntityKeyType;
+    };
 
 export function composingQueryReducer(
     state: ComposingQuery,
@@ -56,5 +56,5 @@ export const ComposingQueryContext = createContext<{
         queryType: entityQueryTypes[0],
         keys: [],
     },
-    dispatch: () => {},
+    dispatch: () => { },
 });
