@@ -6,9 +6,9 @@ import { EntityKey, EntityKeyType } from './types';
 
 export type PinnedKeysAction =
     | {
-          type: 'add-key';
-          key: EntityKey;
-      }
+        type: 'add-key';
+        key: EntityKey;
+    }
     | { type: 'remove-key'; keyType: EntityKeyType };
 
 export function pinnedKeysReducer(keys: EntityKey[], action: PinnedKeysAction): EntityKey[] {
@@ -28,5 +28,13 @@ export const PinnedKeysContext = createContext<{
     dispatch: React.Dispatch<PinnedKeysAction>;
 }>({
     keys: [],
-    dispatch: () => {},
+    dispatch: () => { },
+});
+
+export const ColdStorageChoiceContext = createContext<{
+    coldStorage: boolean,
+    dispatch: React.Dispatch<boolean>
+}>({
+    coldStorage: false,
+    dispatch: () => { },
 });

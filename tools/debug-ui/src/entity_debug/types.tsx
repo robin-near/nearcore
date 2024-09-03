@@ -60,6 +60,8 @@ export class EntityDataRootNode {
     constructor(
         /// The query that produces the data in this node.
         public query: EntityQuery,
+        /// Whether the query uses cold storage.
+        public useColdStorage: boolean,
         /// A promise that resolves to the result data.
         public entry: Promise<EntityDataValueNode>
     ) { }
@@ -159,6 +161,10 @@ export type EntityQuery = {
     TrieRootByChunkHash?: { chunk_hash: string };
     TrieRootByStateRoot?: { state_root: string; shard_uid: string };
     ValidatorAssignmentsAtHeight?: { block_height: number; epoch_id: string };
+};
+
+export type EntityQueryWithParams = EntityQuery & {
+    use_cold_storage: boolean;
 };
 
 export type EntityQueryType = keyof EntityQuery;
