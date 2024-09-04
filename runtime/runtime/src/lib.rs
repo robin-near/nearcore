@@ -65,6 +65,7 @@ use near_vm_runner::ContractRuntimeCache;
 use near_vm_runner::ProfileDataV3;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
@@ -1574,6 +1575,15 @@ impl Runtime {
             compute_usage = tracing::field::Empty,
         )
         .entered();
+
+        if receipt.receipt_id()
+            == &CryptoHash::from_str("AVVuh5SiY41GsxqRfjrsYmkGNwAfSmnf6jfiRTqQ3cXG").unwrap()
+            || receipt.receipt_id()
+                == &CryptoHash::from_str("BsnWR3UNAtjTAZSHgXmJqGaEkXuBU78gFHWnWc7vX3Jq").unwrap()
+        {
+            tracing::error!("Processing receipt: {:?}!", receipt);
+        }
+
         let total = &mut processing_state.total;
         let state_update = &mut processing_state.state_update;
         let node_counter_before = state_update.trie().get_trie_nodes_count();

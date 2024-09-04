@@ -379,10 +379,18 @@ impl<'a> Contract for RuntimeContractExt<'a> {
         let code_hash = self.hash();
         let version = self.current_protocol_version;
         let chain_id = self.chain_id;
+
+        if checked_feature!("stable", EthImplicitAccounts, version)
+            && account_id.get_account_type() == AccountType::EthImplicitAccount
+        {
+            tracing::error!("Trying to get code for code hash: {:?}", code_hash);
+        }
+
         if checked_feature!("stable", EthImplicitAccounts, version)
             && account_id.get_account_type() == AccountType::EthImplicitAccount
             && code_hash_matches_wallet_contract(chain_id, &code_hash, version)
         {
+            tracing::error!("Matched wallet contract: {:?}", code_hash);
             return Some(wallet_contract(&chain_id, version));
         }
         let mode = match checked_feature!("stable", ChunkNodesCache, version) {
@@ -390,6 +398,17 @@ impl<'a> Contract for RuntimeContractExt<'a> {
             false => None,
         };
         let _guard = self.trie_update.with_trie_cache_mode(mode);
-        self.trie_update.get_code(self.account_id.clone(), code_hash).map(Arc::new)
+        let result = self.trie_update.get_code(self.account_id.clone(), code_hash).map(Arc::new);
+
+        if checked_feature!("stable", EthImplicitAccounts, version)
+            && account_id.get_account_type() == AccountType::EthImplicitAccount
+        {
+            tracing::error!(
+                "Did not match wallet contract; fetched code hash {:?}, got code of size {:?}",
+                code_hash,
+                result.as_ref().map(|c| c.code().len())
+            );
+        }
+        result
     }
 }
