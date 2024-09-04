@@ -58,6 +58,12 @@ pub fn wallet_contract_magic_bytes(
     }
 }
 
+#[test]
+fn print_magic_bytes() {
+    println!("testnet 70: {}", wallet_contract_magic_bytes(chains::TESTNET, 70).hash());
+    println!("testnet 71: {}", wallet_contract_magic_bytes(chains::TESTNET, 71).hash());
+}
+
 /// Checks if the given code hash corresponds to the wallet contract (signalling
 /// the runtime should treat the wallet contract as the code for the account).
 pub fn code_hash_matches_wallet_contract(
