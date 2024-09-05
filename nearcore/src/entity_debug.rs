@@ -14,7 +14,7 @@ use near_jsonrpc_primitives::types::entity_debug::{
 use near_primitives::block::Tip;
 use near_primitives::challenge::{PartialState, TrieValue};
 use near_primitives::congestion_info::CongestionInfo;
-use near_primitives::epoch_block_info::BlockInfo;
+use near_primitives::epoch_manager::block_info::BlockInfo;
 use near_primitives::epoch_manager::AGGREGATOR_KEY;
 use near_primitives::hash::{hash, CryptoHash};
 use near_primitives::merkle::PartialMerkleTree;

@@ -17,6 +17,7 @@ use crate::{prepare, NoContractRuntimeCache};
 use memoffset::offset_of;
 use near_parameters::vm::VMKind;
 use near_parameters::RuntimeFeesConfig;
+use near_primitives_core::hash::CryptoHash;
 use near_vm_compiler_singlepass::Singlepass;
 use near_vm_engine::universal::{
     MemoryPool, Universal, UniversalArtifact, UniversalEngine, UniversalExecutable,
@@ -28,6 +29,7 @@ use near_vm_vm::{
     MemoryStyle, Resolver, TrapCode, VMFunction, VMFunctionKind, VMMemory,
 };
 use std::mem::size_of;
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 type VMArtifact = Arc<UniversalArtifact>;
@@ -185,6 +187,7 @@ impl NearVM {
         &self,
         code: &ContractCode,
         cache: &dyn ContractRuntimeCache,
+        print: bool,
     ) -> Result<Result<UniversalExecutable, CompilationError>, CacheError> {
         let executable_or_error = self.compile_uncached(code);
         let key = get_contract_cache_key(*code.hash(), &self.config);
@@ -200,6 +203,9 @@ impl NearVM {
                 Err(err) => CompiledContract::CompileModuleError(err.clone()),
             },
         };
+        if print {
+            tracing::error!("We're persisting the compiled contract with key {:?}", key);
+        }
         cache.put(&key, record).map_err(CacheError::WriteError)?;
         Ok(executable_or_error)
     }
@@ -225,9 +231,17 @@ impl NearVM {
         // and then we set it to false when we fail to find any entry and decide to compile (by calling compile_and_cache below).
         let mut is_cache_hit = true;
         let code_hash = contract.hash();
+        let is_eth_implicit = code_hash
+            == CryptoHash::from_str("4reLvkAWfqk5fsqio1KLudk46cqRz9erQdaHkWZKMJDZ").unwrap();
+        if is_eth_implicit {
+            tracing::error!("The memory cache key we're looking up with is {}", code_hash);
+        }
         let (wasm_bytes, artifact_result) = cache.memory_cache().try_lookup(
             code_hash,
             || {
+                if is_eth_implicit {
+                    tracing::error!("Memory cache lookup missed for {}", code_hash);
+                }
                 // `cache` stores compiled machine code in the database
                 //
                 // Caches also cache _compilation_ errors, so that we don't have to
@@ -236,7 +250,13 @@ impl NearVM {
                 let _span =
                     tracing::debug_span!(target: "vm", "NearVM::fetch_from_cache").entered();
                 let key = get_contract_cache_key(code_hash, &self.config);
+                if is_eth_implicit {
+                    tracing::error!("The on-disk cache key we're looking up with is {}, with code hash {} and config {:?}", key, code_hash, self.config);
+                }
                 let cache_record = cache.get(&key).map_err(CacheError::ReadError)?;
+                if is_eth_implicit {
+                    tracing::error!("The on-disk cache record exists? {:?}", cache_record.is_some());
+                }
                 let Some(compiled_contract_info) = cache_record else {
                     let Some(code) = contract.get_code() else {
                         return Err(VMRunnerError::ContractCodeNotPresent);
@@ -246,7 +266,7 @@ impl NearVM {
                     is_cache_hit = false;
                     return Ok(to_any((
                         code.code().len() as u64,
-                        match self.compile_and_cache(&code, cache)? {
+                        match self.compile_and_cache(&code, cache, is_eth_implicit)? {
                             Ok(executable) => Ok(self
                                 .engine
                                 .load_universal_executable(&executable)
@@ -291,6 +311,9 @@ impl NearVM {
                 }
             },
             move |value| {
+                if is_eth_implicit {
+                    tracing::error!("Memory cache lookup hit for {}", code_hash);
+                }
                 let _span =
                     tracing::debug_span!(target: "vm", "NearVM::load_from_mem_cache").entered();
                 let &(wasm_bytes, ref downcast) = value
@@ -625,7 +648,7 @@ impl crate::runner::VM for NearVM {
         crate::logic::errors::CacheError,
     > {
         Ok(self
-            .compile_and_cache(code, cache)?
+            .compile_and_cache(code, cache, false)?
             .map(|_| ContractPrecompilatonResult::ContractCompiled))
     }
 }

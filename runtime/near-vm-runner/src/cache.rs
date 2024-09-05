@@ -291,6 +291,7 @@ impl ContractRuntimeCache for FilesystemContractRuntimeCache {
         fields(key = key.to_string(), value.len = value.compiled.debug_len()),
     )]
     fn put(&self, key: &CryptoHash, value: CompiledContractInfo) -> std::io::Result<()> {
+        tracing::error!("putting contract into cache");
         use rustix::fs::{Mode, OFlags};
         let final_filename = key.to_string();
         let mut temp_file = tempfile::Builder::new().make_in("", |filename| {
@@ -315,8 +316,10 @@ impl ContractRuntimeCache for FilesystemContractRuntimeCache {
         }
         temp_file.write_all(&value.wasm_bytes.to_le_bytes())?;
         let temp_filename = temp_file.into_temp_path();
+        tracing::error!("Renaming {:?} to {}", temp_filename, final_filename);
         // This is atomic, so there wouldn't be instances where getters see an intermediate state.
         rustix::fs::renameat(&self.state.dir, &*temp_filename, &self.state.dir, final_filename)?;
+        tracing::error!("Renaming done");
         // Don't attempt deleting the temporary file now that it has been moved.
         std::mem::forget(temp_filename);
         Ok(())
