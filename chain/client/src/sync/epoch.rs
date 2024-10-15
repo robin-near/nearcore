@@ -411,14 +411,21 @@ impl EpochSync {
         highest_height_peers: &[HighestHeightPeerInfo],
     ) -> Result<(), Error> {
         if !self.config.enabled {
+            tracing::info!("Not entering epoch sync: disabled in config");
             return Ok(());
         }
         let tip_height = chain.chain_store().header_head()?.height;
         if tip_height + self.config.epoch_sync_horizon >= highest_height {
+            tracing::info!(
+                "Not entering epoch sync: tip height {} is close to highest height {}",
+                tip_height,
+                highest_height
+            );
             return Ok(());
         }
         match status {
-            SyncStatus::AwaitingPeers | SyncStatus::StateSync(_) => {
+            SyncStatus::StateSync(_) => {
+                tracing::info!("Not entering epoch sync: in state sync");
                 return Ok(());
             }
             SyncStatus::EpochSync(status) => {
@@ -435,6 +442,8 @@ impl EpochSync {
         let peer = highest_height_peers
             .choose(&mut rand::thread_rng())
             .ok_or_else(|| Error::Other("No peers to request epoch sync from".to_string()))?;
+
+        tracing::info!(peer_id=?peer.peer_info.id, "Bootstrapping node via epoch sync");
 
         *status = SyncStatus::EpochSync(EpochSyncStatus {
             source_peer_id: peer.peer_info.id.clone(),
@@ -494,10 +503,6 @@ impl EpochSync {
         update.save_block_header_no_update_tree(
             proof.current_epoch.second_last_block_header_in_prev_epoch.clone(),
         )?;
-        tracing::info!(
-            "last final block of last past epoch: {:?}",
-            proof.past_epochs.last().unwrap().last_final_block_header.hash()
-        );
         update.save_block_header_no_update_tree(
             proof.past_epochs.last().unwrap().last_final_block_header.clone(),
         )?;
@@ -545,6 +550,7 @@ impl EpochSync {
         update.commit()?;
 
         *status = SyncStatus::EpochSyncDone;
+        tracing::info!(epoch_id=?last_header.epoch_id(), "Bootstrapped from epoch sync");
 
         Ok(())
     }
@@ -560,7 +566,7 @@ impl Handler<EpochSyncRequestMessage> for ClientActorInner {
         }
         let store = self.client.chain.chain_store.store().clone();
         let network_adapter = self.client.network_adapter.clone();
-        let route_back = msg.route_back;
+        let requester_peer_id = msg.from_peer;
         let cache = self.client.epoch_sync.last_epoch_sync_response_cache.clone();
         self.client.epoch_sync.async_computation_spawner.spawn(
             "respond to epoch sync request",
@@ -573,7 +579,7 @@ impl Handler<EpochSyncRequestMessage> for ClientActorInner {
                     }
                 };
                 network_adapter.send(PeerManagerMessageRequest::NetworkRequests(
-                    NetworkRequests::EpochSyncResponse { route_back, proof },
+                    NetworkRequests::EpochSyncResponse { peer_id: requester_peer_id, proof },
                 ));
             },
         )

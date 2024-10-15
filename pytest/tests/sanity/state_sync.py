@@ -33,6 +33,8 @@ TIMEOUT = 150 + START_AT_BLOCK * 10
 config = load_config()
 
 node_config = state_sync_lib.get_state_sync_config_combined()
+node_config["consensus.block_fetch_horizon"] = 3
+node_config["consensus.block_header_fetch_horizon"] = 10
 
 near_root, node_dirs = init_cluster(
     2, 1, 1, config,
@@ -72,12 +74,14 @@ node2 = spin_up_node(config, near_root, node_dirs[2], 2, boot_node=boot_node)
 tracker = utils.LogTracker(node2)
 time.sleep(3)
 
+utils.wait_for_blocks(node2, target=200)
+
 catch_up_height = 0
 for height, block_hash in utils.poll_blocks(boot_node,
                                             timeout=TIMEOUT,
                                             poll_interval=0.1):
     catch_up_height = height
-    if height >= observed_height:
+    if height >= observed_height + 100:
         break
     if mode == 'manytx' and ctx.get_balances() == ctx.expected_balances:
         boot_height = boot_node.get_latest_block().height
