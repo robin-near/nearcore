@@ -1,0 +1,39 @@
+body {
+    background-color: #eee;
+}
+
+.merkle-tree {
+    padding: 10px;
+    --height-scale: 40px;
+    --width-scale: 40px;
+
+    .level {
+        display: flex;
+        height: var(--height-scale);
+
+        .cell-container {
+            background-color: #eee;
+
+            &:hover .cell.level-0 {
+                outline: 1px solid gray;
+            }
+        }
+
+        .cell {
+            background-color: white;
+            box-sizing: border-box;
+            height: calc(var(--height-scale) - 2px);
+            width: calc(var(--width-scale) * var(--colspan) - 2px);
+            margin: 1px;
+            border: 1px solid gray;
+
+            &.out-of-tree {
+                border: 1px dashed gray;
+            }
+
+            &.level-0 {
+                cursor: pointer;
+            }
+        }
+    }
+}

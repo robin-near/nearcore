@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
 import { LogVisualizer } from './log_visualizer/LogVisualizer';
 import { LandingPage } from './LandingPage';
+import { MerkleTreeApp } from './merkle_tree/MerkleTreeApp';
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
 
@@ -21,6 +22,10 @@ const router = createBrowserRouter([
     {
         path: '/logviz',
         element: <LogVisualizer />,
+    },
+    {
+        path: '/merkle_tree/*',
+        element: <MerkleTreeApp />,
     },
     {
         path: '/:addr/*',
