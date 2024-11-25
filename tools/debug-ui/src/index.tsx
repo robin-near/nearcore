@@ -9,6 +9,7 @@ import { App } from './App';
 import { LogVisualizer } from './log_visualizer/LogVisualizer';
 import { LandingPage } from './LandingPage';
 import { MerkleTreeApp } from './merkle_tree/MerkleTreeApp';
+import { MpcVisualizer } from './mpc/Visualizer';
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
 
@@ -26,6 +27,10 @@ const router = createBrowserRouter([
     {
         path: '/merkle_tree/*',
         element: <MerkleTreeApp />,
+    },
+    {
+        path: '/mpc',
+        element: <MpcVisualizer />,
     },
     {
         path: '/:addr/*',

@@ -1,0 +1,108 @@
+.mpc-network-visualizer {
+    position: relative;
+    box-sizing: border-box;
+
+    .participant-headings {
+        position: absolute;
+        display: flex;
+        align-items: stretch;
+        height: var(--heading-height);
+        top: var(--top-margin);
+        left: var(--left-margin);
+
+        .participant-heading {
+            text-align: center;
+            width: var(--column-width);
+            border-right: 1px solid lightgray;
+        }
+    }
+
+    .main-diagram {
+        position: absolute;
+        top: calc(var(--top-margin) + var(--heading-height));
+        left: var(--left-margin);
+        display: flex;
+        flex-direction: column;
+
+        .step {
+            display: flex;
+            align-items: stretch;
+            height: var(--step-height);
+
+            .participant-step {
+                position: relative;
+                width: var(--column-width);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-right: 1px solid lightgray;
+
+                .incoming-dot {
+                    --dot-size: 8px;
+                    position: absolute;
+                    top: calc(var(--step-height) / 2 - var(--dot-size) / 2 - var(--stats-height) / 2);
+                    left: calc(var(--column-width) / 2 - var(--dot-size) / 2);
+                    width: var(--dot-size);
+                    height: var(--dot-size);
+                    border-radius: 50%;
+                    background-color: black;
+                    z-index: 10;
+                }
+
+                .p2p-stats {
+                    position: relative;
+                    width: var(--stats-width);
+                    height: var(--stats-height);
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 10px;
+
+                    .little {
+                        color: green;
+                    }
+
+                    .some {
+                        color: blue;
+                    }
+
+                    .lots {
+                        color: red;
+                    }
+
+                    .outgoing-dot {
+                        --dot-size: 8px;
+                        position: absolute;
+                        top: calc(var(--stats-height) - var(--dot-size) / 2);
+                        left: calc(var(--stats-width) / 2 - var(--dot-size) / 2);
+                        width: var(--dot-size);
+                        height: var(--dot-size);
+                        border-radius: 50%;
+                        background-color: black;
+                        z-index: 10;
+                    }
+                }
+            }
+        }
+    }
+
+    .arrows {
+        .arrow {
+            position: absolute;
+
+            .little {
+                stroke: green;
+            }
+
+            .some {
+                stroke: blue;
+            }
+
+            .lots {
+                stroke: red;
+            }
+
+        }
+    }
+}
